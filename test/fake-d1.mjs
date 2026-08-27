@@ -1,11 +1,15 @@
 // テスト用の偽 D1。better-sqlite3 を使って src/lib/sql.js と同じ形を提供する。
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
+import path from 'node:path';
 
-export function createFakeD1(schemaPath) {
+/** migrations/ の .sql を番号順にすべて流し込んで、本番と同じテーブルを作る。 */
+export function createFakeD1(migrationsDir) {
   const sqlite = new Database(':memory:');
   sqlite.pragma('foreign_keys = ON');
-  sqlite.exec(fs.readFileSync(schemaPath, 'utf8'));
+  const files = fs.readdirSync(migrationsDir).filter((name) => name.endsWith('.sql')).sort();
+  if (files.length === 0) throw new Error(`マイグレーションが見つかりません: ${migrationsDir}`);
+  for (const file of files) sqlite.exec(fs.readFileSync(path.join(migrationsDir, file), 'utf8'));
 
   const statement = (sql) => sqlite.prepare(sql);
   const toMeta = (info) => ({ changes: info.changes, lastRowId: Number(info.lastInsertRowid) });
