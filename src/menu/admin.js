@@ -1,4 +1,12 @@
 import { PRESET_ACTIVITIES, getActivity, listActivities, removeActivity, upsertActivity } from '../lib/activities.js';
+import {
+  CONDITION_TYPES,
+  createAchievement,
+  describeCondition,
+  listAchievements,
+  removeAchievement,
+} from '../lib/achievements.js';
+import { listStreakRewards, removeStreakReward, upsertStreakReward } from '../lib/streak.js';
 import { adjust, getBalance, ledgerFor, setBalance, updateSettings } from '../lib/economy.js';
 import { coins, duration, truncate } from '../lib/format.js';
 import { modal, stringSelect, textInput, userSelect } from '../discord/builders.js';
@@ -52,12 +60,238 @@ export async function open(ix, _args, ctx, notice = null) {
     components: [
       row(
         button(id('admin', 'acts'), 'アクション管理', { emoji: '📋', style: ButtonStyle.PRIMARY }),
-        button(id('admin', 'bal'), '残高を調整', { emoji: '💰', style: ButtonStyle.PRIMARY }),
+        button(id('admin', 'streak'), '連日ボーナス', { emoji: '🔥', style: ButtonStyle.PRIMARY }),
+        button(id('admin', 'ach'), '称号', { emoji: '🏅', style: ButtonStyle.PRIMARY }),
+      ),
+      row(
+        button(id('admin', 'bal'), '残高を調整', { emoji: '💰' }),
         button(id('admin', 'cfg'), '通貨の設定', { emoji: '⚙️' }),
       ),
       row(backButton()),
     ],
   });
+}
+
+/* ------------------------------------------------------------------ 連日ボーナス */
+
+export async function streak(ix, _args, ctx, notice = null) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const settings = await ctx.settings(ix.guildId);
+  const rewards = await listStreakRewards(ctx.db, ix.guildId);
+
+  const components = [];
+  if (rewards.length > 0) {
+    components.push(
+      stringSelect(
+        id('admin', 'streakdel'),
+        '削除するものを選ぶ',
+        rewards.map((reward) => ({
+          label: `${reward.days}日連続 → ${reward.reward}`,
+          value: String(reward.days),
+          description: '選ぶと削除されます',
+        })),
+      ),
+    );
+  }
+  components.push(
+    row(button(id('admin', 'streaknew'), '追加・変更', { emoji: '➕', style: ButtonStyle.SUCCESS })),
+    row(backButton('admin'), homeButton()),
+  );
+
+  return show(ix, {
+    embeds: [
+      withNotice(
+        embed({
+          color: 0xe67e22,
+          title: '🔥 連日ボーナス',
+          description:
+            rewards.length === 0
+              ? '毎日続けて報告した人へのボーナスを設定できます。\n例:「3日連続で50コイン」「7日連続で200コイン」\n\nまだ何も設定されていません。'
+              : '報告の連続日数が**ちょうどその日数に達したとき**に支払われます。\n\n' +
+                rewards.map((reward) => `🔥 **${reward.days}日連続** → ${coins(reward.reward, settings)}`).join('\n'),
+          footer: { text: '連続が途切れると1日目からやり直しになります' },
+        }),
+        notice,
+      ),
+    ],
+    components,
+  });
+}
+
+export async function streaknew(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  return openModal(
+    modal(id('admin', 'streaksave'), '連日ボーナスを追加', [
+      textInput('days', '何日連続で', { placeholder: '例: 7', required: true, max: 6 }),
+      textInput('reward', 'もらえるコイン', { placeholder: '例: 200', required: true, max: 12 }),
+    ]),
+  );
+}
+
+export async function streaksave(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const days = readInt(ix, 'days', { min: 1, max: 3650 });
+  const reward = readInt(ix, 'reward', { min: 1 });
+  if (isError(days)) return streak(ix, [], ctx, days.error);
+  if (isError(reward)) return streak(ix, [], ctx, reward.error);
+  if (days === null || reward === null) return streak(ix, [], ctx, '日数とコインの両方を入力してください。');
+
+  await upsertStreakReward(ctx.db, ix.guildId, days, reward);
+  return streak(ix, [], ctx, `${days}日連続のボーナスを ${reward} に設定しました`);
+}
+
+export async function streakdel(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const days = Number(ix.values[0]);
+  await removeStreakReward(ctx.db, ix.guildId, days);
+  return streak(ix, [], ctx, `${days}日連続のボーナスを削除しました`);
+}
+
+/* ------------------------------------------------------------------ 称号 */
+
+export async function ach(ix, _args, ctx, notice = null) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const settings = await ctx.settings(ix.guildId);
+  const achievements = await listAchievements(ctx.db, ix.guildId);
+
+  const components = [];
+  if (achievements.length > 0) {
+    components.push(
+      stringSelect(
+        id('admin', 'achdel'),
+        '削除する称号を選ぶ',
+        achievements.map((achievement) => ({
+          label: truncate(achievement.name, 100),
+          value: String(achievement.id),
+          emoji: achievement.emoji ?? undefined,
+          description: truncate(describeCondition(achievement, settings), 100),
+        })),
+      ),
+    );
+  }
+  components.push(
+    row(button(id('admin', 'achnew'), '新しく作る', { emoji: '➕', style: ButtonStyle.SUCCESS })),
+    row(backButton('admin'), homeButton()),
+  );
+
+  return show(ix, {
+    embeds: [
+      withNotice(
+        embed({
+          color: 0xf39c12,
+          title: '🏅 称号',
+          description:
+            achievements.length === 0
+              ? '条件を満たした人に自動で贈られる称号を作れます。\n例:「筋トレ王 = 筋トレ100回」「鉄の意志 = 30日連続」\n\nまだ何も作られていません。'
+              : achievements
+                  .map(
+                    (achievement) =>
+                      `${achievement.emoji ?? '🏅'} **${achievement.name}** — ${describeCondition(achievement, settings)}` +
+                      (achievement.reward > 0 ? `（+${achievement.reward}）` : ''),
+                  )
+                  .join('\n'),
+          footer: { text: '条件を満たすと自動で贈られ、チャンネルにも告知されます' },
+        }),
+        notice,
+      ),
+    ],
+    components,
+  });
+}
+
+export async function achnew(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  return show(ix, {
+    embeds: [
+      embed({
+        color: 0xf39c12,
+        title: '🏅 称号を作る',
+        description: 'まず、どんな条件で贈るかを選んでください。',
+        fields: Object.entries(CONDITION_TYPES).map(([key, type]) => ({
+          name: type.label,
+          value: EXAMPLES[key],
+          inline: true,
+        })),
+      }),
+    ],
+    components: [
+      stringSelect(
+        id('admin', 'achtype'),
+        '条件の種類を選ぶ',
+        Object.entries(CONDITION_TYPES).map(([key, type]) => ({
+          label: type.label,
+          value: key,
+          description: truncate(EXAMPLES[key], 100),
+        })),
+      ),
+      row(backButton('admin', '管理メニュー'), button(id('admin', 'ach'), '称号一覧', { emoji: '🏅' })),
+    ],
+  });
+}
+
+const EXAMPLES = {
+  total_reports: '例: 報告を合計100回で「継続の鬼」',
+  activity_reports: '例: 筋トレを50回で「筋トレ王」',
+  streak: '例: 30日連続で「鉄の意志」',
+  balance: '例: 所持金10000で「富豪」',
+};
+
+export async function achtype(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const type = ix.values[0];
+  const meta = CONDITION_TYPES[type];
+  if (!meta) return ach(ix, [], ctx, '不明な条件です。');
+
+  const inputs = [
+    textInput('name', '称号の名前', { placeholder: '例: 筋トレ王', required: true, max: 32 }),
+    textInput('emoji', '絵文字（任意）', { placeholder: '例: 💪', max: 8 }),
+    textInput('threshold', `条件の数（${meta.label}）`, { placeholder: '例: 100', required: true, max: 12 }),
+    textInput('reward', '獲得時のボーナス（任意）', { placeholder: '例: 500', max: 12 }),
+  ];
+  if (meta.needsActivity) {
+    inputs.push(textInput('activity', '対象のアクション名', { placeholder: '例: 筋トレ', required: true, max: 32 }));
+  }
+
+  return openModal(modal(id('admin', 'achsave', type), `称号を作る（${meta.label}）`, inputs));
+}
+
+export async function achsave(ix, [type], ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const meta = CONDITION_TYPES[type];
+  if (!meta) return ach(ix, [], ctx, '不明な条件です。');
+
+  const name = readText(ix, 'name');
+  const threshold = readInt(ix, 'threshold', { min: 1 });
+  const reward = readInt(ix, 'reward', { min: 0, fallback: 0 });
+  const activityName = meta.needsActivity ? readText(ix, 'activity') : null;
+
+  if (!name) return ach(ix, [], ctx, '称号の名前を入力してください。');
+  if (isError(threshold)) return ach(ix, [], ctx, threshold.error);
+  if (threshold === null) return ach(ix, [], ctx, '条件の数を入力してください。');
+  if (isError(reward)) return ach(ix, [], ctx, reward.error);
+  if (meta.needsActivity) {
+    if (!activityName) return ach(ix, [], ctx, '対象のアクション名を入力してください。');
+    if (!(await getActivity(ctx.db, ix.guildId, activityName))) {
+      return ach(ix, [], ctx, `「${activityName}」というアクションは登録されていません。先にアクション管理で追加してください。`);
+    }
+  }
+
+  await createAchievement(ctx.db, ix.guildId, {
+    name,
+    emoji: readText(ix, 'emoji'),
+    condition_type: type,
+    threshold,
+    activity_name: activityName,
+    reward: reward ?? 0,
+  });
+  return ach(ix, [], ctx, `称号「${name}」を作りました`);
+}
+
+export async function achdel(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const id2 = Number(ix.values[0]);
+  await removeAchievement(ctx.db, ix.guildId, id2);
+  return ach(ix, [], ctx, '称号を削除しました');
 }
 
 /* ------------------------------------------------------------------ アクション管理 */
@@ -398,6 +632,15 @@ export async function cfgsave(ix, _args, ctx) {
 
 export const actions = {
   open,
+  streak,
+  streaknew,
+  streaksave,
+  streakdel,
+  ach,
+  achnew,
+  achtype,
+  achsave,
+  achdel,
   acts,
   actpick,
   actview,

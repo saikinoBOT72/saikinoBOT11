@@ -145,6 +145,165 @@ await test('削除できる', async () => {
   assert.equal(await act.removeActivity(db, G, '自炊'), false);
 });
 
+section('[連日ボーナス]');
+
+const streak = await import(src('lib/streak.js'));
+
+/** 「最後に報告した日」を n 日前に書き換えて、日をまたいだことにする。 */
+async function pretendLastReportWas(daysAgo, userId = A) {
+  const key = streak.dateKey('Asia/Tokyo', new Date(Date.now() - daysAgo * 86400 * 1000));
+  await db.run('UPDATE streaks SET last_date = ?3 WHERE guild_id = ?1 AND user_id = ?2', G, userId, key);
+}
+
+await test('初めての報告で1日目になる', async () => {
+  const result = await streak.touchStreak(db, G, A, 'Asia/Tokyo');
+  assert.deepEqual(result, { current: 1, best: 1, isNewDay: true });
+});
+
+await test('同じ日に何度報告しても増えない', async () => {
+  const result = await streak.touchStreak(db, G, A, 'Asia/Tokyo');
+  assert.equal(result.current, 1);
+  assert.equal(result.isNewDay, false, '同日は新しい日として数えない');
+});
+
+await test('翌日に報告すると2日目になる', async () => {
+  await pretendLastReportWas(1);
+  const result = await streak.touchStreak(db, G, A, 'Asia/Tokyo');
+  assert.equal(result.current, 2);
+  assert.equal(result.isNewDay, true);
+});
+
+await test('1日空くと1日目に戻り、最高記録は残る', async () => {
+  await pretendLastReportWas(1);
+  await streak.touchStreak(db, G, A, 'Asia/Tokyo'); // 3日目
+  assert.equal((await streak.getStreak(db, G, A, 'Asia/Tokyo')).current, 3);
+
+  await pretendLastReportWas(3);
+  const result = await streak.touchStreak(db, G, A, 'Asia/Tokyo');
+  assert.equal(result.current, 1, '途切れたのでやり直し');
+  assert.equal(result.best, 3, '最高記録は残る');
+});
+
+await test('報告していない日が続くと連続は0と表示される', async () => {
+  await pretendLastReportWas(5);
+  const view = await streak.getStreak(db, G, A, 'Asia/Tokyo');
+  assert.equal(view.current, 0);
+  assert.equal(view.alive, false);
+  assert.equal(view.best, 3);
+});
+
+await test('ちょうどその日数のときだけボーナスが出る', async () => {
+  await streak.upsertStreakReward(db, G, 3, 300);
+  const before = await eco.getBalance(db, G, A);
+  assert.equal(await streak.payStreakBonus(db, G, A, 2), null, '2日目は対象外');
+  assert.equal(await eco.getBalance(db, G, A), before);
+
+  const paid = await streak.payStreakBonus(db, G, A, 3);
+  assert.deepEqual(paid, { days: 3, reward: 300 });
+  assert.equal(await eco.getBalance(db, G, A), before + 300);
+});
+
+await test('ボーナスの設定を変更・削除できる', async () => {
+  await streak.upsertStreakReward(db, G, 3, 500);
+  const rewards = await streak.listStreakRewards(db, G);
+  assert.equal(rewards.length, 1, '同じ日数は上書きされる');
+  assert.equal(rewards[0].reward, 500);
+  assert.equal(await streak.removeStreakReward(db, G, 3), true);
+  assert.equal((await streak.listStreakRewards(db, G)).length, 0);
+});
+
+section('[称号]');
+
+const ach = await import(src('lib/achievements.js'));
+const reporting = await import(src('lib/reporting.js'));
+
+const ACH_USER = 'userAch';
+
+await test('条件を満たすと自動で贈られ、ボーナスが入る', async () => {
+  await ach.createAchievement(db, G, {
+    name: '継続の鬼',
+    emoji: '🔥',
+    condition_type: 'total_reports',
+    threshold: 2,
+    reward: 1000,
+  });
+  const before = await eco.getBalance(db, G, ACH_USER);
+
+  await act.logReport(db, G, ACH_USER, '早起き', 10);
+  assert.deepEqual(await ach.evaluate(db, { guildId: G, userId: ACH_USER, timezone: 'Asia/Tokyo' }), [], '1回では足りない');
+
+  await act.logReport(db, G, ACH_USER, '早起き', 10);
+  const unlocked = await ach.evaluate(db, { guildId: G, userId: ACH_USER, timezone: 'Asia/Tokyo' });
+  assert.equal(unlocked.length, 1);
+  assert.equal(unlocked[0].name, '継続の鬼');
+  assert.equal(await eco.getBalance(db, G, ACH_USER), before + 1000);
+});
+
+await test('同じ称号は二度もらえない', async () => {
+  const before = await eco.getBalance(db, G, ACH_USER);
+  assert.deepEqual(await ach.evaluate(db, { guildId: G, userId: ACH_USER, timezone: 'Asia/Tokyo' }), []);
+  assert.equal(await eco.getBalance(db, G, ACH_USER), before);
+  assert.equal((await ach.earnedBy(db, G, ACH_USER)).length, 1);
+});
+
+await test('特定アクションの回数でも贈れる', async () => {
+  await ach.createAchievement(db, G, {
+    name: '筋トレ王',
+    condition_type: 'activity_reports',
+    threshold: 2,
+    activity_name: '筋トレ',
+    reward: 0,
+  });
+  await act.logReport(db, G, ACH_USER, '筋トレ', 80);
+  assert.deepEqual(await ach.evaluate(db, { guildId: G, userId: ACH_USER, timezone: 'Asia/Tokyo' }), []);
+  await act.logReport(db, G, ACH_USER, '筋トレ', 80);
+  const unlocked = await ach.evaluate(db, { guildId: G, userId: ACH_USER, timezone: 'Asia/Tokyo' });
+  assert.equal(unlocked[0].name, '筋トレ王');
+});
+
+await test('連続日数と所持金でも贈れる', async () => {
+  await ach.createAchievement(db, G, { name: '鉄の意志', condition_type: 'streak', threshold: 3, reward: 0 });
+  await ach.createAchievement(db, G, { name: '富豪', condition_type: 'balance', threshold: 100000, reward: 0 });
+
+  const unlocked = await ach.evaluate(db, { guildId: G, userId: A, timezone: 'Asia/Tokyo' });
+  const names = unlocked.map((a) => a.name);
+  assert.ok(names.includes('鉄の意志'), '最高3日連続を達成済み');
+  assert.ok(!names.includes('富豪'), '所持金は足りない');
+
+  await eco.setBalance(db, G, A, 100000, 'test');
+  const rich = await ach.evaluate(db, { guildId: G, userId: A, timezone: 'Asia/Tokyo' });
+  assert.deepEqual(rich.map((a) => a.name), ['富豪']);
+});
+
+await test('削除すると獲得記録も消える', async () => {
+  const all = await ach.listAchievements(db, G);
+  const target = all.find((a) => a.name === '富豪');
+  await ach.removeAchievement(db, G, target.id);
+  assert.equal((await ach.listAchievements(db, G)).some((a) => a.name === '富豪'), false);
+  assert.equal((await ach.earnedBy(db, G, A)).some((a) => a.name === '富豪'), false);
+});
+
+await test('報告すると連続日数・ボーナス・称号がまとめて処理される', async () => {
+  const C = 'userC';
+  await eco.setBalance(db, G, C, 0, 'test');
+  await streak.upsertStreakReward(db, G, 1, 77);
+  await ach.createAchievement(db, G, { name: '第一歩', condition_type: 'total_reports', threshold: 1, reward: 33 });
+
+  const activity = await act.getActivity(db, G, 'ランニング');
+  const result = await reporting.attemptReport(db, {
+    guildId: G,
+    userId: C,
+    activity,
+    timezone: 'Asia/Tokyo',
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.streak.current, 1);
+  assert.deepEqual(result.streakBonus, { days: 1, reward: 77 });
+  assert.deepEqual(result.unlocked.map((a) => a.name), ['第一歩']);
+  assert.equal(result.balance, activity.reward + 77 + 33, '報酬＋連日ボーナス＋称号ボーナス');
+});
+
 section('[ショップ]');
 
 let item;

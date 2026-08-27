@@ -6,10 +6,10 @@ import { createFakeD1 } from './fake-d1.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const src = (name) => pathToFileURL(path.join(here, '..', 'src', name)).href;
-export const schemaPath = path.join(here, '..', 'migrations', '0001_init.sql');
+export const migrationsDir = path.join(here, '..', 'migrations');
 
 export function createTestContext() {
-  const db = createFakeD1(schemaPath);
+  const db = createFakeD1(migrationsDir);
   const sent = [];
   const edited = [];
   const settingsCache = new Map();
