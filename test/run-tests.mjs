@@ -722,5 +722,80 @@ await test('埋め込みとボタンの JSON が Discord の形になる', () =>
   assert.equal(select.components[0].options[0].value, '1');
 });
 
+section('[マイグレーションの修復]');
+
+// 0002 の旧版が適用済みのデータベースでも、0003 で正しい形に直ることを確かめる。
+// （旧版は連続記録がアクション別ではなく、streaks / streak_rewards に activity 列が無い）
+const OLD_0002 = `
+CREATE TABLE IF NOT EXISTS streaks (
+  guild_id TEXT NOT NULL, user_id TEXT NOT NULL,
+  current INTEGER NOT NULL DEFAULT 0, best INTEGER NOT NULL DEFAULT 0, last_date TEXT,
+  PRIMARY KEY (guild_id, user_id));
+CREATE TABLE IF NOT EXISTS streak_rewards (
+  guild_id TEXT NOT NULL, days INTEGER NOT NULL, reward INTEGER NOT NULL,
+  PRIMARY KEY (guild_id, days));
+CREATE TABLE IF NOT EXISTS achievements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL, name TEXT NOT NULL, emoji TEXT,
+  description TEXT, condition_type TEXT NOT NULL, threshold INTEGER NOT NULL, activity_name TEXT,
+  reward INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_achievement_name ON achievements (guild_id, name);
+CREATE TABLE IF NOT EXISTS user_achievements (
+  guild_id TEXT NOT NULL, user_id TEXT NOT NULL, achievement_id INTEGER NOT NULL,
+  earned_at INTEGER NOT NULL, PRIMARY KEY (guild_id, user_id, achievement_id));
+`;
+
+await test('旧版が入ったデータベースでも 0003 で正しい形に直る', async () => {
+  const { default: Database } = await import('better-sqlite3');
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const dir = path.join(process.cwd(), 'migrations');
+
+  const broken = new Database(':memory:');
+  broken.exec(fs.readFileSync(path.join(dir, '0001_init.sql'), 'utf8'));
+  broken.exec(OLD_0002);
+  // 旧版で作られた称号（そのままでは新しいコードで扱えない条件名）
+  broken
+    .prepare('INSERT INTO achievements (guild_id, name, condition_type, threshold, activity_name, reward, created_at) VALUES (?,?,?,?,?,?,?)')
+    .run('g', '筋トレ王', 'activity_reports', 50, '筋トレ', 0, 1);
+  broken
+    .prepare('INSERT INTO achievements (guild_id, name, condition_type, threshold, activity_name, reward, created_at) VALUES (?,?,?,?,?,?,?)')
+    .run('g', '鉄の意志', 'streak', 30, null, 0, 1);
+  const oldStreakId = broken.prepare("SELECT id FROM achievements WHERE name = '鉄の意志'").get().id;
+  broken.prepare('INSERT INTO user_achievements VALUES (?,?,?,?)').run('g', 'u1', oldStreakId, 1);
+
+  // 実際のデプロイと同じ順で残りを流す
+  broken.exec(fs.readFileSync(path.join(dir, '0002_streaks_titles_announcements.sql'), 'utf8'));
+  broken.exec(fs.readFileSync(path.join(dir, '0003_repair_streak_tables.sql'), 'utf8'));
+
+  const streakColumns = broken.prepare('PRAGMA table_info(streaks)').all().map((column) => column.name);
+  assert.ok(streakColumns.includes('activity'), 'streaks にアクション列がある');
+  const rewardColumns = broken.prepare('PRAGMA table_info(streak_rewards)').all().map((column) => column.name);
+  assert.ok(rewardColumns.includes('activity'), 'streak_rewards にアクション列がある');
+
+  // アクションごとに記録できる
+  broken.prepare('INSERT INTO streaks VALUES (?,?,?,?,?,?)').run('g', 'u1', '筋トレ', 1, 1, '2026-08-27');
+  broken.prepare('INSERT INTO streaks VALUES (?,?,?,?,?,?)').run('g', 'u1', '勉強', 2, 2, '2026-08-27');
+  assert.equal(broken.prepare('SELECT COUNT(*) AS n FROM streaks').get().n, 2);
+
+  // 称号の条件名が新しくなり、対象を持たない旧「連続日数」は片付く
+  assert.equal(broken.prepare("SELECT condition_type FROM achievements WHERE name = '筋トレ王'").get().condition_type, 'activity_count');
+  assert.equal(broken.prepare("SELECT COUNT(*) AS n FROM achievements WHERE condition_type = 'streak'").get().n, 0);
+  assert.equal(broken.prepare('SELECT COUNT(*) AS n FROM user_achievements WHERE achievement_id = ?').get(oldStreakId).n, 0);
+
+  // 新しく足したテーブルも揃っている
+  for (const table of ['profiles', 'announcements']) {
+    assert.ok(
+      broken.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table),
+      `${table} がある`,
+    );
+  }
+  broken.close();
+});
+
+await test('新規のデータベースでも同じ形になる', async () => {
+  const columns = (await db.all('PRAGMA table_info(streaks)')).map((column) => column.name);
+  assert.deepEqual(columns.sort(), ['activity', 'best', 'current', 'guild_id', 'last_date', 'user_id']);
+});
+
 runner.done();
 db.close();
