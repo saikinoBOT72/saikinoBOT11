@@ -1,50 +1,52 @@
-import {
-  EmbedBuilder,
-  ButtonStyle,
-  UserSelectMenuBuilder,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle,
-  ActionRowBuilder,
-} from 'discord.js';
-import { getBalance, getSettings, rankOf, topBalances, transfer } from '../lib/economy.js';
-import { getDb } from '../lib/db.js';
+import { getBalance, ledgerFor, rankOf, topBalances, totals, transfer } from '../lib/economy.js';
 import { coins } from '../lib/format.js';
-import { announce, backButton, button, homeButton, id, isError, readInt, readText, row, show, toast } from './common.js';
+import { modal, textInput, userSelect } from '../discord/builders.js';
+import { ButtonStyle } from '../discord/constants.js';
+import {
+  backButton,
+  button,
+  embed,
+  homeButton,
+  id,
+  isError,
+  openModal,
+  readInt,
+  readText,
+  row,
+  show,
+  withNotice,
+} from './common.js';
 
 const MEDALS = ['🥇', '🥈', '🥉'];
 
-export async function open(interaction) {
-  const guildId = interaction.guildId;
-  const settings = getSettings(guildId);
-  const balance = getBalance(guildId, interaction.user.id);
-  const db = getDb();
-  const earned = db
-    .prepare('SELECT COALESCE(SUM(amount), 0) AS total FROM ledger WHERE guild_id = ? AND user_id = ? AND amount > 0')
-    .get(guildId, interaction.user.id).total;
-  const spent = db
-    .prepare('SELECT COALESCE(SUM(-amount), 0) AS total FROM ledger WHERE guild_id = ? AND user_id = ? AND amount < 0')
-    .get(guildId, interaction.user.id).total;
+export async function open(ix, _args, ctx, notice = null) {
+  const settings = await ctx.settings(ix.guildId);
+  const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
+  const [rank, sums] = await Promise.all([
+    rankOf(ctx.db, ix.guildId, ix.userId),
+    totals(ctx.db, ix.guildId, ix.userId),
+  ]);
 
-  const embed = new EmbedBuilder()
-    .setColor(0xf1c40f)
-    .setAuthor({
-      name: interaction.member?.displayName ?? interaction.user.username,
-      iconURL: interaction.user.displayAvatarURL(),
-    })
-    .setTitle('💰 お財布')
-    .setDescription(coins(balance, settings))
-    .addFields(
-      { name: 'サーバー順位', value: `**${rankOf(guildId, interaction.user.id)}** 位`, inline: true },
-      { name: '累計獲得', value: earned.toLocaleString('ja-JP'), inline: true },
-      { name: '累計使用', value: spent.toLocaleString('ja-JP'), inline: true },
-    );
-
-  return show(interaction, {
-    embeds: [embed],
+  return show(ix, {
+    embeds: [
+      withNotice(
+        embed({
+          color: 0xf1c40f,
+          author: { name: ix.displayName, icon_url: ix.avatar },
+          title: '💰 お財布',
+          description: coins(balance, settings),
+          fields: [
+            { name: 'サーバー順位', value: `**${rank}** 位`, inline: true },
+            { name: '累計獲得', value: sums.earned.toLocaleString('ja-JP'), inline: true },
+            { name: '累計使用', value: sums.spent.toLocaleString('ja-JP'), inline: true },
+          ],
+        }),
+        notice,
+      ),
+    ],
     components: [
       row(
-        button(id('wallet', 'pay'), '送金する', { emoji: '💸', style: ButtonStyle.Primary }),
+        button(id('wallet', 'pay'), '送金する', { emoji: '💸', style: ButtonStyle.PRIMARY }),
         button(id('wallet', 'history'), '履歴', { emoji: '📜' }),
         button(id('wallet', 'rank'), 'ランキング', { emoji: '🏆' }),
       ),
@@ -53,84 +55,57 @@ export async function open(interaction) {
   });
 }
 
-export async function pay(interaction) {
-  const embed = new EmbedBuilder()
-    .setColor(0xf1c40f)
-    .setTitle('💸 送金')
-    .setDescription('送りたい相手を選んでください。');
-  const select = new UserSelectMenuBuilder().setCustomId(id('wallet', 'payto')).setPlaceholder('送る相手を選ぶ').setMaxValues(1);
-  return show(interaction, { embeds: [embed], components: [row(select), row(backButton('wallet'), homeButton())] });
+export async function pay(ix, _args, _ctx, notice = null) {
+  return show(ix, {
+    embeds: [
+      withNotice(embed({ color: 0xf1c40f, title: '💸 送金', description: '送りたい相手を選んでください。' }), notice),
+    ],
+    components: [userSelect(id('wallet', 'payto'), '送る相手を選ぶ'), row(backButton('wallet'), homeButton())],
+  });
 }
 
-export async function payto(interaction) {
-  const targetId = interaction.values[0];
-  if (targetId === interaction.user.id) {
-    await toast(interaction, '自分自身には送金できません。');
-    return pay(interaction);
-  }
-  const target = await interaction.client.users.fetch(targetId).catch(() => null);
-  if (target?.bot) {
-    await toast(interaction, 'Botには送金できません。');
-    return pay(interaction);
-  }
+export async function payto(ix, _args, ctx) {
+  const targetId = ix.values[0];
+  if (targetId === ix.userId) return pay(ix, [], ctx, '自分自身には送金できません。');
+  const target = ix.raw.data?.resolved?.users?.[targetId];
+  if (target?.bot) return pay(ix, [], ctx, 'Botには送金できません。');
 
-  const modal = new ModalBuilder()
-    .setCustomId(id('wallet', 'paydo', targetId))
-    .setTitle(`${target?.username ?? 'メンバー'} に送金`)
-    .addComponents(
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder().setCustomId('amount').setLabel('金額').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(12),
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder().setCustomId('memo').setLabel('メモ（任意）').setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(100),
-      ),
-    );
-  return interaction.showModal(modal);
+  return openModal(
+    modal(id('wallet', 'paydo', targetId), `${target?.username ?? 'メンバー'} に送金`, [
+      textInput('amount', '金額', { required: true, max: 12, placeholder: '例: 100' }),
+      textInput('memo', 'メモ（任意）', { max: 100 }),
+    ]),
+  );
 }
 
-export async function paydo(interaction, [targetId]) {
-  const settings = getSettings(interaction.guildId);
-  const amount = readInt(interaction, 'amount', { min: 1 });
-  if (isError(amount)) return toast(interaction, amount.error);
-  const memo = readText(interaction, 'memo');
+export async function paydo(ix, [targetId], ctx) {
+  const settings = await ctx.settings(ix.guildId);
+  const amount = readInt(ix, 'amount', { min: 1 });
+  if (isError(amount)) return open(ix, [], ctx, amount.error);
+  const memo = readText(ix, 'memo');
 
-  const ok = transfer(interaction.guildId, interaction.user.id, targetId, amount, 'pay', memo);
+  const ok = await transfer(ctx.db, ix.guildId, ix.userId, targetId, amount, 'pay', memo);
   if (!ok) {
-    await toast(interaction, `残高が足りません。現在の所持金は ${coins(getBalance(interaction.guildId, interaction.user.id), settings)} です。`);
-    return open(interaction);
+    const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
+    return open(ix, [], ctx, `残高が足りません。現在の所持金は ${coins(balance, settings)} です。`);
   }
 
-  await announce(interaction, {
-    content: `💸 <@${interaction.user.id}> → <@${targetId}> に ${coins(amount, settings)} を送金しました。${memo ? `\n> ${memo}` : ''}`,
-    allowedMentions: { users: [targetId] },
+  ctx.announce(ix.channelId, {
+    content: `💸 <@${ix.userId}> → <@${targetId}> に ${coins(amount, settings)} を送金しました。${memo ? `\n> ${memo}` : ''}`,
+    allowed_mentions: { users: [targetId] },
   });
 
-  const embed = new EmbedBuilder()
-    .setColor(0x2ecc71)
-    .setTitle('✅ 送金しました')
-    .setDescription(`<@${targetId}> に ${coins(amount, settings)} を送りました。\n残りは ${coins(getBalance(interaction.guildId, interaction.user.id), settings)} です。`);
-  return show(interaction, { embeds: [embed], components: [row(backButton('wallet'), homeButton())] });
-}
-
-export async function history(interaction) {
-  const rows = getDb()
-    .prepare('SELECT * FROM ledger WHERE guild_id = ? AND user_id = ? ORDER BY id DESC LIMIT 15')
-    .all(interaction.guildId, interaction.user.id);
-
-  const embed = new EmbedBuilder()
-    .setColor(0xf1c40f)
-    .setTitle('📜 コインの履歴')
-    .setDescription(
-      rows.length === 0
-        ? 'まだ履歴がありません。'
-        : rows
-            .map((r) => {
-              const sign = r.amount >= 0 ? '+' : '';
-              return `<t:${Math.floor(r.created_at / 1000)}:R>　\`${sign}${r.amount}\`　${reasonLabel(r)}`;
-            })
-            .join('\n'),
-    );
-  return show(interaction, { embeds: [embed], components: [row(backButton('wallet'), homeButton())] });
+  const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
+  return show(ix, {
+    embeds: [
+      embed({
+        color: 0x2ecc71,
+        title: '✅ 送金しました',
+        description: `<@${targetId}> に ${coins(amount, settings)} を送りました。\n残りは ${coins(balance, settings)} です。`,
+      }),
+    ],
+    components: [row(backButton('wallet'), homeButton())],
+  });
 }
 
 const REASONS = {
@@ -144,31 +119,62 @@ const REASONS = {
   'rps:bet': 'じゃんけん',
   'rps:win': 'じゃんけん勝利',
   'rps:refund': 'じゃんけん返金',
-  'shop:buy': 'ショップ',
+  'shop:buy': 'ショップで購入',
+  'shop:sell': 'ショップで売れた',
   'admin:give': '管理者から',
   'admin:take': '管理者が回収',
   'admin:set': '管理者が調整',
 };
 
-function reasonLabel(row) {
-  const base = REASONS[row.reason] ?? row.reason;
-  return row.detail && row.reason === 'report' ? `${base}（${row.detail}）` : base;
+export function reasonLabel(entry) {
+  const base = REASONS[entry.reason] ?? entry.reason;
+  return entry.detail && entry.reason === 'report' ? `${base}（${entry.detail}）` : base;
 }
 
-export async function rank(interaction) {
-  const settings = getSettings(interaction.guildId);
-  const rows = topBalances(interaction.guildId, 15);
-  const embed = new EmbedBuilder()
-    .setColor(0xf1c40f)
-    .setTitle(`🏆 ${settings.currency_name}ランキング`)
-    .setDescription(
-      rows.length === 0
-        ? 'まだ誰も口座を持っていません。'
-        : rows
-            .map((r, i) => `${MEDALS[i] ?? `**${i + 1}.**`} <@${r.user_id}> — ${settings.currency_emoji} ${r.balance.toLocaleString('ja-JP')}`)
-            .join('\n'),
-    );
-  return show(interaction, { embeds: [embed], components: [row(backButton('wallet'), homeButton())] });
+export async function history(ix, _args, ctx) {
+  const entries = await ledgerFor(ctx.db, ix.guildId, ix.userId, 15);
+  return show(ix, {
+    embeds: [
+      embed({
+        color: 0xf1c40f,
+        title: '📜 コインの履歴',
+        description:
+          entries.length === 0
+            ? 'まだ履歴がありません。'
+            : entries
+                .map((entry) => {
+                  const sign = entry.amount >= 0 ? '+' : '';
+                  return `<t:${Math.floor(entry.created_at / 1000)}:R>　\`${sign}${entry.amount}\`　${reasonLabel(entry)}`;
+                })
+                .join('\n'),
+      }),
+    ],
+    components: [row(backButton('wallet'), homeButton())],
+  });
+}
+
+export async function rank(ix, _args, ctx) {
+  const settings = await ctx.settings(ix.guildId);
+  const rows = await topBalances(ctx.db, ix.guildId, 15);
+
+  return show(ix, {
+    embeds: [
+      embed({
+        color: 0xf1c40f,
+        title: `🏆 ${settings.currency_name}ランキング`,
+        description:
+          rows.length === 0
+            ? 'まだ誰も口座を持っていません。'
+            : rows
+                .map(
+                  (entry, index) =>
+                    `${MEDALS[index] ?? `**${index + 1}.**`} <@${entry.user_id}> — ${settings.currency_emoji} ${entry.balance.toLocaleString('ja-JP')}`,
+                )
+                .join('\n'),
+      }),
+    ],
+    components: [row(backButton('wallet'), homeButton())],
+  });
 }
 
 export const actions = { open, pay, payto, paydo, history, rank };

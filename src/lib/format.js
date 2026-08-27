@@ -1,41 +1,38 @@
-import { config } from '../config.js';
-
-/** 「🪙 1,234 コイン」の形式に整形する。 */
+/** 「🪙 1,234 コイン」の形に整える。 */
 export function coins(amount, settings) {
-  const n = Number(amount).toLocaleString('ja-JP');
-  return `${settings.currency_emoji} **${n}** ${settings.currency_name}`;
+  return `${settings.currency_emoji} **${Number(amount).toLocaleString('ja-JP')}** ${settings.currency_name}`;
 }
 
-/** 秒数を「1時間30分」のような日本語表記にする。 */
+/** 秒数を「1時間30分」のような日本語にする。 */
 export function duration(seconds) {
-  const s = Math.max(0, Math.ceil(seconds));
-  const d = Math.floor(s / 86400);
-  const h = Math.floor((s % 86400) / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
+  const total = Math.max(0, Math.ceil(seconds));
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const rest = total % 60;
   const parts = [];
-  if (d) parts.push(`${d}日`);
-  if (h) parts.push(`${h}時間`);
-  if (m) parts.push(`${m}分`);
-  if (sec && !d && !h) parts.push(`${sec}秒`);
+  if (days) parts.push(`${days}日`);
+  if (hours) parts.push(`${hours}時間`);
+  if (minutes) parts.push(`${minutes}分`);
+  if (rest && !days && !hours) parts.push(`${rest}秒`);
   return parts.length > 0 ? parts.join('') : '0秒';
 }
 
-/** 設定タイムゾーンでの「今日 0:00」を epoch ms で返す。 */
-export function startOfToday(now = new Date()) {
-  const fmt = new Intl.DateTimeFormat('en-CA', {
-    timeZone: config.timezone,
+/** 指定タイムゾーンでの「今日 0:00」を epoch ms で返す。 */
+export function startOfToday(timezone = 'Asia/Tokyo', now = new Date()) {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
     hour12: false,
   });
-  const parts = Object.fromEntries(fmt.formatToParts(now).map((p) => [p.type, p.value]));
+  const parts = Object.fromEntries(formatter.formatToParts(now).map((part) => [part.type, part.value]));
   const intoDay = (Number(parts.hour) % 24) * 3600 + Number(parts.minute) * 60 + Number(parts.second);
   return now.getTime() - intoDay * 1000 - now.getMilliseconds();
 }
 
-/** Discord の相対タイムスタンプ表記。 */
+/** Discord の相対時刻表記。 */
 export function relative(ms) {
   return `<t:${Math.floor(ms / 1000)}:R>`;
 }

@@ -1,107 +1,80 @@
-import { Client, Events, GatewayIntentBits, MessageFlags } from 'discord.js';
-import { assertConfig, config } from './config.js';
-import { closeDb, getDb } from './lib/db.js';
-import { loadCommands } from './lib/loader.js';
-import { refundStaleMatches } from './lib/rps.js';
-import { syncCommands } from './lib/deploy.js';
+import { InteractionType } from './discord/constants.js';
+import { verifyRequest } from './discord/verify.js';
+import { Ix } from './discord/interaction.js';
+import { json, pong, reply } from './discord/respond.js';
+import { createContext } from './context.js';
+import { handleComponent as handleMenu } from './menu/router.js';
+import { handleComponent as handleRps, cancelEmbed } from './menu/rps-challenge.js';
+import { findCommand } from './commands.js';
+import { cancelExpired } from './lib/rps.js';
 
-try {
-  assertConfig();
-} catch (error) {
-  console.error(`起動できません: ${error.message}`);
-  process.exit(1);
-}
-getDb();
+export default {
+  /** Discord からの Interaction を受け取る入口。 */
+  async fetch(request, env, executionCtx) {
+    if (request.method === 'GET') {
+      return new Response('saikinoBOT11 は動いています。', { headers: { 'content-type': 'text/plain; charset=utf-8' } });
+    }
+    if (request.method !== 'POST') return new Response('Method Not Allowed', { status: 405 });
 
-const { commands, components } = await loadCommands();
-// GuildMessages はメニューから画像を受け取るために必要（添付を読むだけ）。
-// MESSAGE_CONTENT_INTENT=true にすると、メンション無しの画像も拾えるようになる。
-const intents = [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages];
-if (config.messageContentIntent) intents.push(GatewayIntentBits.MessageContent);
+    const { valid, body } = await verifyRequest(request, env.DISCORD_PUBLIC_KEY);
+    if (!valid) return new Response('署名を確認できませんでした。', { status: 401 });
 
-const client = new Client({ intents });
+    let raw;
+    try {
+      raw = JSON.parse(body);
+    } catch {
+      return new Response('Bad Request', { status: 400 });
+    }
 
-if (config.autoDeployCommands) {
-  try {
-    const result = await syncCommands(commands);
-    console.log(
-      result.skipped
-        ? `スラッシュコマンドは登録済みです（${result.registered} 件）`
-        : `スラッシュコマンドを登録しました（${result.registered} 件）`,
-    );
-  } catch (error) {
-    console.error('スラッシュコマンドの登録に失敗しました:', error.message);
-    console.error('トークンと CLIENT_ID を確認してください。Bot は起動を続けます。');
+    // Discord からの疎通確認
+    if (raw.type === InteractionType.PING) return pong();
+
+    const ix = new Ix(raw);
+    const ctx = createContext(env, executionCtx);
+
+    try {
+      return await dispatch(ix, ctx);
+    } catch (error) {
+      console.error('処理中のエラー:', error);
+      return reply({ content: '処理中にエラーが発生しました。もう一度お試しください。' });
+    }
+  },
+
+  /** 1分ごとに走り、時間切れのじゃんけんを片付ける。 */
+  async scheduled(_event, env, executionCtx) {
+    const ctx = createContext(env, executionCtx);
+    const handled = await cancelExpired(ctx.db);
+    for (const { match, refunded } of handled) {
+      if (!match.message_id) continue;
+      await ctx.rest
+        .editMessage(match.channel_id, match.message_id, {
+          content: '',
+          embeds: [
+            cancelEmbed(refunded ? '時間切れのため中止しました。賭け金は返しました。' : '時間切れのため勝負は流れました。'),
+          ],
+          components: [],
+        })
+        .catch((error) => console.error('時間切れメッセージの更新に失敗:', error));
+    }
+    if (handled.length > 0) console.log(`時間切れのじゃんけんを ${handled.length} 件片付けました`);
+  },
+};
+
+async function dispatch(ix, ctx) {
+  if (!ix.guildId) return reply({ content: 'このBotはサーバー内でのみ使えます。' });
+
+  if (ix.type === InteractionType.APPLICATION_COMMAND) {
+    const command = findCommand(ix.commandName);
+    if (!command) return reply({ content: '知らないコマンドです。' });
+    return command(ix, ctx);
   }
-}
 
-client.once(Events.ClientReady, (ready) => {
-  const refunded = refundStaleMatches();
-  console.log(`ログインしました: ${ready.user.tag}（コマンド ${commands.size} 件）`);
-  if (refunded > 0) console.log(`未決着のじゃんけん ${refunded} 件を返金・中止しました`);
-});
-
-client.on(Events.InteractionCreate, async (interaction) => {
-  try {
-    if (interaction.isAutocomplete()) {
-      const command = commands.get(interaction.commandName);
-      if (command?.autocomplete) await command.autocomplete(interaction);
-      return;
-    }
-
-    if (!interaction.inGuild()) {
-      if (interaction.isRepliable()) {
-        await interaction.reply({ content: 'このBotはサーバー内でのみ使えます。', flags: MessageFlags.Ephemeral });
-      }
-      return;
-    }
-
-    if (interaction.isChatInputCommand()) {
-      const command = commands.get(interaction.commandName);
-      if (!command) return;
-      await command.execute(interaction);
-      return;
-    }
-
-    if (interaction.isButton() || interaction.isAnySelectMenu() || interaction.isModalSubmit()) {
-      const [namespace] = interaction.customId.split(':');
-      const handler = components.get(namespace);
-      if (handler) await handler.handleComponent(interaction);
-    }
-  } catch (error) {
-    // 期限切れのメニュー（15分以上前のもの）はどう応答しても届かないので記録だけする
-    if (EXPIRED_CODES.has(error?.code)) {
-      console.warn('期限切れのインタラクションを無視しました:', error.code);
-      return;
-    }
-    console.error('インタラクション処理でエラー:', error);
-    await replyError(interaction);
+  if (ix.type === InteractionType.MESSAGE_COMPONENT || ix.type === InteractionType.MODAL_SUBMIT) {
+    const [namespace] = ix.customId.split(':');
+    if (namespace === 'm') return handleMenu(ix, ctx);
+    if (namespace === 'rps') return handleRps(ix, ctx);
+    return reply({ content: 'この操作はもう使えません。`/menu` を開き直してください。' });
   }
-});
 
-// 10062: Unknown interaction / 40060: すでに応答済み
-const EXPIRED_CODES = new Set([10062, 40060]);
-
-async function replyError(interaction) {
-  if (!interaction.isRepliable()) return;
-  const payload = { content: '処理中にエラーが発生しました。しばらくしてからもう一度お試しください。', flags: MessageFlags.Ephemeral };
-  try {
-    if (interaction.deferred || interaction.replied) await interaction.followUp(payload);
-    else await interaction.reply(payload);
-  } catch (error) {
-    console.error('エラー通知に失敗:', error);
-  }
+  return json({ type: 1 });
 }
-
-client.on(Events.Error, (error) => console.error('クライアントエラー:', error));
-
-for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.on(signal, () => {
-    console.log(`${signal} を受け取りました。終了します。`);
-    client.destroy();
-    closeDb();
-    process.exit(0);
-  });
-}
-
-await client.login(config.token);

@@ -4,219 +4,151 @@
 
 - 筋トレなどの**アクション報告でコインを稼ぎ**、
 - **スロット / コイントス / じゃんけん対戦**で増やしたり溶かしたり、
-- **各自が画像と値段を設定して出品できるショップ**で売り買いする
+- **各自が値段を決めて出品できるショップ**で売り買いする
 
-までを一通り揃えています。特権インテント（Message Content など）は不要です。
+までを一通り。操作は `/menu` から**すべてボタン**でできます。
+
+**Cloudflare Workers + D1 で動くので、PCもサーバーも要りません。**クレジットカードの登録も不要で、無料枠だけで24時間動きます。導入もスマホのブラウザだけで完結します。
+
+---
 
 ## 使い方は `/menu` だけ
-
-コマンドを覚える必要はありません。**`/menu` と打つとボタン付きのメニューが開き、そこから全部の操作ができます。**
 
 ```
 🏠 メニュー
 所持金 🪙 1,250 コイン （3 位）
 
-[💪 報告してかせぐ] [🎮 あそぶ] [🛍️ ショップ]
+[💪 報告してかせぐ] [🎮 あそぶ]     [🛍️ ショップ]
 [💰 お財布]        [🏆 ランキング] [🎒 持ち物]
 [❓ 使い方]        [🔄 更新]      [⚙️ 管理]
 ```
 
-- 報告は**リストから選ぶだけ**。クールダウン中のものは「⏳休憩中」と表示されます
-- 賭け金は **10 / 50 / 100 / 500 / 1000 のボタン**か、「⌨️ 金額を入力」で自由入力
-- じゃんけんの相手、送金相手は**メンバー一覧から選択**
-- 出品・編集・通貨設定などの入力は**フォーム（モーダル）**で入力
-- メニューは押した本人にしか見えないので、チャンネルが荒れません（報告・購入・送金など、みんなに知らせたいものだけ自動でチャンネルに投稿されます）
+- 報告は**リストから選ぶだけ**。休憩中のものは「⏳休憩中」と表示されます
+- 賭け金は **10 / 50 / 100 / 500 / 1000 のボタン**か「⌨️ 金額を入力」で自由入力（全角数字もOK）
+- じゃんけんの相手・送金先は**メンバー一覧から選択**
+- 出品や通貨設定は**入力フォーム**に書くだけ
+- メニューは押した本人にしか見えません。報告・購入・送金・大当たり・じゃんけんだけ、みんなに見えるようチャンネルに投稿されます
 
-もちろん下記のスラッシュコマンドも今までどおり使えます。
+### できること
+
+| | 内容 |
+| --- | --- |
+| 💪 報告してかせぐ | 管理者が決めたアクション（筋トレ・勉強など）を報告してコイン獲得。アクションごとに報酬・クールダウン・1日の上限を設定できます |
+| 🎰 スロット | 3つ揃いで最大 x3000。還元率は約91%（残りはサーバーの取り分＝インフレ防止） |
+| 🪙 コイントス | 表か裏を当てれば2倍 |
+| ✊ じゃんけん | 相手を指名して勝負。賭け金は開始時に預かり、勝者が総取り。あいこは5回まで再戦、時間切れは自動返金 |
+| 🛍️ ショップ | 誰でも出品可。代金はそのまま出品者に入ります。在庫を決めれば売り切れで自動停止 |
+| 💰 お財布 | 所持金・送金・増減履歴・ランキング |
+| ⚙️ 管理 | アクションの追加/編集、残高の調整、通貨名や賭け金上限の設定（サーバー管理権限を持つ人のみ） |
 
 ---
 
-## できること
+## 導入手順（スマホだけでできます）
 
-### 💪 コインを稼ぐ
+やることは4つ。**Discord の設定 → Cloudflare の登録 → GitHub に情報を貼る → URLを繋ぐ**、それだけです。
 
-メニュー: **💪 報告してかせぐ** → アクションを選ぶだけ
+### 1. Discord 側の準備
 
-| コマンド | 説明 |
+[Discord Developer Portal](https://discord.com/developers/applications) をブラウザで開きます。
+
+1. **New Application** でアプリを作る
+2. **General Information** のページで次の2つを控える
+   - **Application ID**
+   - **Public Key**
+3. **Bot** のページで **Reset Token** を押してトークンを控える（一度しか表示されません）
+4. 下のURLの `ここにApplicationID` を差し替えてブラウザで開き、自分のサーバーに招待する
+
+```
+https://discord.com/oauth2/authorize?client_id=ここにApplicationID&scope=bot+applications.commands&permissions=19456
+```
+
+### 2. Cloudflare に登録する
+
+1. [Cloudflare](https://dash.cloudflare.com/sign-up) にメールアドレスだけで登録（**クレカ不要**）
+2. ダッシュボードのURL `dash.cloudflare.com/××××××××` の `××××××××` の部分が **Account ID**。控える
+3. 右上のアイコン → **My Profile** → **API Tokens** → **Create Token** → 一番下の **Create Custom Token**
+   - 名前: なんでもよい（例: `saikinobot`）
+   - Permissions に次の2つを追加する
+     - `Account` / `Workers Scripts` / `Edit`
+     - `Account` / `D1` / `Edit`
+   - 作成すると表示される **APIトークン**を控える（これも一度きり）
+
+### 3. GitHub にシークレットを登録する
+
+このリポジトリの **Settings → Secrets and variables → Actions → New repository secret** で、控えた値を登録します。
+
+| 名前 | 中身 |
 | --- | --- |
-| `/report do activity:筋トレ note:… proof:<画像>` | アクションを報告してコイン獲得 |
-| `/report list` | 報告できるアクションと報酬の一覧 |
-| `/report stats [user]` | これまでの報告回数と獲得額 |
+| `CLOUDFLARE_API_TOKEN` | 手順2で作ったAPIトークン |
+| `CLOUDFLARE_ACCOUNT_ID` | 手順2のAccount ID |
+| `DISCORD_TOKEN` | 手順1のBotトークン |
+| `DISCORD_PUBLIC_KEY` | 手順1のPublic Key |
+| `DISCORD_APPLICATION_ID` | 手順1のApplication ID |
+| `DISCORD_GUILD_ID` | （任意）自分のサーバーID。入れるとコマンドがすぐ反映されます |
 
-アクションは管理者が自由に定義できます（`/activity add`）。それぞれに
+登録できたら、**この変更を `main` ブランチにマージ**してください。プッシュされると GitHub Actions が自動で
 
-- 報酬額
-- クールダウン（例: 6時間に1回まで）
-- 1日の上限回数
-- 画像の添付を必須にするか
+- データベース（D1）の作成とテーブル準備
+- Bot本体のデプロイ
+- スラッシュコマンドの登録
 
-を設定でき、自己申告でも荒れにくいようになっています。`/activity preset` で「筋トレ・ランニング・勉強・早起き・自炊」を一括登録できます。
+まで済ませます。**Actions** タブで実行結果を開くと、一番上に Bot のURL（`https://saikinobot.〜.workers.dev`）が表示されます。
 
-### 🎮 遊ぶ
+> マージ前に試したい場合は、Actions タブの「デプロイ」から手動実行できます（この画面は workflow が `main` にある場合のみ出ます）。
 
-メニュー: **🎮 あそぶ** → スロット / コイントス / じゃんけん
+### 4. URLを Discord に繋ぐ
 
-| コマンド | 説明 |
-| --- | --- |
-| `/slot play bet:100` | スロット。3つ揃いで最大 x3000（`/slot table` で配当表） |
-| `/coinflip side:表 bet:100` | コイントス。当たれば賭け金が2倍 |
-| `/rps opponent:@誰か bet:100` | じゃんけん対戦。ボタンで手を選び、勝者が総取り |
+Developer Portal の **General Information** に戻り、**Interactions Endpoint URL** の欄に手順3で出たURLを貼って保存します。「All good!」のように保存が通れば接続完了です。
 
-じゃんけんは「挑戦 → 相手が承諾 → 双方がボタンで手を選ぶ」流れです。手は相手に見えず、あいこなら再戦、5回続けば引き分け返金。時間切れや Bot の再起動があっても賭け金は自動で返金されます。
+（保存できないときは、Actions のデプロイが成功しているか、`DISCORD_PUBLIC_KEY` が正しいかを確認してください。）
 
-スロットの還元率は約 91%（残りはサーバーの取り分＝インフレ防止）。コイントスは等倍で公平です。
+### 5. 遊びはじめる
 
-### 🛍️ 売り買いする
-
-メニュー: **🛍️ ショップ** → 一覧から選んで購入、「🆕 出品する」で出品
-
-| コマンド | 説明 |
-| --- | --- |
-| `/shop sell name:肩たたき券 price:500 image:<画像> stock:3` | 誰でも出品できる。画像はアップロードでもURLでも可 |
-| `/shop list [page] [seller]` | 出品一覧 |
-| `/shop show id:1` | 商品の詳細と画像 |
-| `/shop buy id:1` | 購入（確認ボタンつき）。代金は出品者に直接入る |
-| `/shop edit id:1 price:400` | 自分の出品の価格・説明・在庫・画像を変更 |
-| `/shop remove id:1` | 出品を取り下げ（管理者は他人の出品も可） |
-| `/inventory [user]` | 買ったもの・売れたものの一覧 |
-
-在庫は未指定なら無制限、指定すれば売り切れで自動的に販売停止になります。アップロードされた画像は Discord の添付URLが期限切れになるため、Bot 側（`data/images/`）に保存して表示のたびに貼り直します。
-
-#### メニューから画像を付けるとき
-
-メニューの「🖼️ 画像を付ける」や写真必須アクションの報告では、Bot が画像の到着を3分間待ちます。初期設定では **Bot をメンションして画像を送る**必要があります（Discord の仕様で、メンションされていないメッセージの添付ファイルは読めないため）。
-
-`.env` の `MESSAGE_CONTENT_INTENT=true` にして、Developer Portal の Bot ページで **Message Content Intent** を ON にすると、メンション無しで画像を送るだけで済むようになります。
-
-### 💰 お金まわり・管理
-
-メニュー: **💰 お財布**、管理は **⚙️ 管理**
-
-| コマンド | 説明 |
-| --- | --- |
-| `/menu` | ボタン操作のメニューを開く |
-| `/balance [user]` | 所持金・サーバー順位・累計収支 |
-| `/pay user:@誰か amount:100 memo:…` | 送金 |
-| `/leaderboard [count]` | 所持金ランキング |
-| `/help` | 使い方の一覧 |
-| `/economy give / take / set` | 管理者が残高を調整 |
-| `/economy config` | 通貨名・絵文字・初期残高・賭け金の下限/上限を設定 |
-| `/economy history user:@誰か` | コインの増減履歴（不具合調査用） |
-
-管理系コマンド（`/activity`・`/economy`）は「サーバー管理」権限を持つ人だけに表示されます。
+サーバーで **`/menu`** を実行してください。まず管理者が **⚙️ 管理 → 📋 アクション管理 → 📦 おすすめを一括登録** を押すと、筋トレ・ランニング・勉強・早起き・自炊がすぐ使えるようになります。
 
 ---
 
-## セットアップ
+## 知っておいてほしいこと
 
-### 1. Bot を作る
-
-1. [Discord Developer Portal](https://discord.com/developers/applications) で **New Application**。
-2. **Bot** タブでトークンを発行（`DISCORD_TOKEN`）。特権インテントは不要です。
-3. **OAuth2 → URL Generator** で以下を選び、生成されたURLからサーバーに招待します。
-   - スコープ: `bot`, `applications.commands`
-   - 権限: `View Channels` / `Send Messages` / `Embed Links` / `Attach Files` / `Read Message History` / `Add Reactions`
-
-### 2. 動かす
-
-```bash
-git clone <このリポジトリ>
-cd saikinoBOT11
-npm install
-
-cp .env.example .env
-# .env に DISCORD_TOKEN と CLIENT_ID（Application ID）を記入
-# 身内サーバーのIDを GUILD_ID に入れておくとコマンドが即反映されます
-
-npm run deploy   # スラッシュコマンドを登録（コマンドを増減したときだけ実行）
-npm start        # Bot 起動
-```
-
-起動したらサーバーで **`/menu`** を実行してみてください。まずは管理者がメニューの **⚙️ 管理 → 📋 アクション管理 → 📦 おすすめを一括登録**（または `/activity preset`）を実行すると、すぐに報告して稼げるようになります。
-
-`npm run deploy` は必須ではありません。**起動時にコマンドの内容が変わっていれば自動で登録し直します**（`data/commands.hash` で判定）。手動で登録し直したいときだけ使ってください。
-
-### 3. 常時稼働させる
-
-Bot はプロセスが動いている間だけ反応します。PCを閉じれば止まるので、置き場所を決める必要があります。
-
-#### Docker（VPS・自宅サーバー・ラズパイ共通、おすすめ）
-
-```bash
-cp .env.example .env    # トークンなどを記入
-docker compose up -d    # 起動
-docker compose logs -f  # ログを見る
-docker compose pull && docker compose up -d --build   # 更新するとき
-```
-
-`data/` をホスト側にマウントしているので、コンテナを作り直しても残高やアイテムは消えません。
-
-#### systemd（Docker を使わない場合）
-
-`deploy/saikinobot.service` を使います。ファイル冒頭のコメントに手順を書いてあります。
-
-```bash
-sudo cp deploy/saikinobot.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now saikinobot
-journalctl -u saikinobot -f
-```
-
-#### pm2（手軽に済ませたい場合）
-
-```bash
-npm install -g pm2
-pm2 start npm --name saikinobot -- start
-pm2 save && pm2 startup
-```
-
----
-
-## データについて
-
-- 残高・報告履歴・ショップ・購入履歴はすべて `data/economy.db`（SQLite）に入ります。
-- 出品画像は `data/images/` に保存されます。
-- **バックアップはこの `data/` ディレクトリを丸ごとコピーすれば OK**です（`.gitignore` 済み）。
-- コインの増減はすべて `ledger` テーブルに記録されるので、おかしくなったら `/economy history` で追跡できます。
-- データはサーバー（ギルド）ごとに完全に分かれています。
-
-Docker で動かす場合は `data/` がそのままホスト側に見えます。環境変数で保存先やタイムゾーンを変えられます（`.env.example` 参照）。「1日の上限回数」は `TZ`（初期値 `Asia/Tokyo`）の日付で判定します。
+- **Botはメンバー一覧で「オフライン」と表示されます。** 常時接続する作りではなく、コマンドが押されたときだけ Cloudflare 側が起きる方式のためです。動作には影響ありません
+- **画像のアップロードには対応していません。** ショップの画像は「画像URL」を貼る形になります（Discord外の画像URLでもOK）
+- 無料枠は1日10万リクエストまで、データベースは5GBまで。身内サーバーなら使い切ることはまずありません
+- データは Cloudflare の D1 に入ります。消えて困る場合は `npx wrangler d1 export saikinobot --remote --output backup.sql` でバックアップできます（PCがある場合）
+- コインの増減はすべて `ledger` テーブルに記録されるので、おかしくなったら管理メニューの「履歴を見る」で追えます
+- データはサーバー（ギルド）ごとに完全に分かれています
 
 ---
 
 ## 開発
 
 ```bash
-npm test    # Discord に接続せずに検証（69件）
+npm install
+npm test    # Cloudflare にも Discord にも繋がずに検証（80件）
+npm run check   # Worker がビルドできるか確認
 ```
 
-テストは2種類あります。
+テストは Discord から届く JSON を組み立てて画面遷移をなぞる方式です。
 
-- `test/run-tests.mjs` — 通貨・報告・ショップ・じゃんけん・スロットのロジック
-- `test/menu-tests.mjs` — 偽のインタラクションでメニューを操作し、**押しても反応しないボタンが無いか**と、実際にコインやアイテムが正しく動くかを確認
+- `test/run-tests.mjs` — 通貨・報告・ショップ・じゃんけん・スロット・署名検証
+- `test/menu-tests.mjs` — メニューの操作。**押しても反応しないボタンが無いか**、権限のない人が管理操作をできないかまで確認します
 
-コマンドを追加するときは `src/commands/` に `data`（SlashCommandBuilder）と `execute` を export するファイルを置くだけで自動的に読み込まれます。ボタンを使う場合は `namespace` と `handleComponent` も export してください（customId を `<namespace>:...` の形式にします）。
+D1 の代わりに、テストでは同じ形をした better-sqlite3 製の偽物（`test/fake-d1.mjs`）を差し込んでいます。
 
 ```
 src/
-  index.js            Bot 本体（インタラクションの振り分け）
-  deploy-commands.js  スラッシュコマンドの登録
-  commands/           各スラッシュコマンド
-  menu/               `/menu` の画面（ボタン・セレクト・入力フォーム）
+  index.js            入口（署名の確認と振り分け、1分ごとの定期処理）
+  commands.js         スラッシュコマンドの定義（/menu と /help）
+  context.js          DB・Discord API をまとめた道具箱
+  discord/            Discord とのやり取り（署名検証・JSON組み立て・REST）
+  menu/               画面
     router.js         customId `m:<画面>:<操作>:<引数>` の振り分け
     home.js           トップ画面
     report.js         報告
     games.js          スロット・コイントス・じゃんけん
-    shop.js           ショップ（出品・購入・編集）
-    wallet.js         所持金・送金・履歴・ランキング
+    rps-challenge.js  じゃんけんの公開メッセージ
+    shop.js           ショップ
+    wallet.js         所持金・送金・履歴
     admin.js          管理メニュー
-    upload.js         画像の受け取り
-  lib/
-    db.js             SQLite とスキーマ
-    economy.js        残高・送金・台帳
-    activities.js     報告アクションとクールダウン
-    shop.js           出品・購入（在庫と送金を1トランザクションで処理）
-    rps.js            じゃんけんの状態管理と返金
-    slot.js           スロットの出目と配当
-    images.js         出品画像の保存と表示
+  lib/                中身のロジック（通貨・報告・ショップ・じゃんけん・スロット）
+migrations/           D1 のテーブル定義
 ```

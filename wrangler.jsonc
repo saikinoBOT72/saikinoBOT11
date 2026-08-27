@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "saikinobot",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "saikinobot",
+      // GitHub Actions が CLOUDFLARE_D1_ID シークレットの値に置き換える
+      "database_id": "DATABASE_ID_PLACEHOLDER",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "triggers": {
+    // じゃんけんの時間切れ返金のために1分ごとに起こす
+    "crons": ["* * * * *"]
+  },
+  "vars": {
+    "TIMEZONE": "Asia/Tokyo"
+  }
+}

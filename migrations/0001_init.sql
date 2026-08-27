@@ -1,9 +1,4 @@
-import Database from 'better-sqlite3';
-import fs from 'node:fs';
-import path from 'node:path';
-import { config } from '../config.js';
-
-const SCHEMA = `
+-- 身内用 Discord Bot のデータベース（Cloudflare D1 / SQLite）
 CREATE TABLE IF NOT EXISTS guild_settings (
   guild_id         TEXT PRIMARY KEY,
   currency_name    TEXT    NOT NULL DEFAULT 'コイン',
@@ -20,7 +15,7 @@ CREATE TABLE IF NOT EXISTS balances (
   PRIMARY KEY (guild_id, user_id)
 );
 
--- 通貨の増減はすべてここに記録する（不具合時の追跡・巻き戻し用）
+-- コインの増減はすべてここに残す（追跡用）
 CREATE TABLE IF NOT EXISTS ledger (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   guild_id   TEXT    NOT NULL,
@@ -30,7 +25,7 @@ CREATE TABLE IF NOT EXISTS ledger (
   detail     TEXT,
   created_at INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_ledger_user ON ledger (guild_id, user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ledger_user ON ledger (guild_id, user_id, id DESC);
 
 CREATE TABLE IF NOT EXISTS activities (
   guild_id     TEXT    NOT NULL,
@@ -38,8 +33,7 @@ CREATE TABLE IF NOT EXISTS activities (
   emoji        TEXT,
   reward       INTEGER NOT NULL,
   cooldown_sec INTEGER NOT NULL DEFAULT 0,
-  daily_limit  INTEGER NOT NULL DEFAULT 0,  -- 0 = 無制限
-  need_proof   INTEGER NOT NULL DEFAULT 0,  -- 1 = 画像添付を必須にする
+  daily_limit  INTEGER NOT NULL DEFAULT 0,
   description  TEXT,
   created_at   INTEGER NOT NULL,
   PRIMARY KEY (guild_id, name)
@@ -63,9 +57,8 @@ CREATE TABLE IF NOT EXISTS shop_items (
   name        TEXT    NOT NULL,
   description TEXT,
   price       INTEGER NOT NULL,
-  image_url   TEXT,                          -- 外部URLをそのまま使う場合
-  image_file  TEXT,                          -- 添付画像を保存したローカルファイル名
-  stock       INTEGER NOT NULL DEFAULT -1,   -- -1 = 在庫無制限
+  image_url   TEXT,
+  stock       INTEGER NOT NULL DEFAULT -1,   -- -1 = 無制限
   sold        INTEGER NOT NULL DEFAULT 0,
   active      INTEGER NOT NULL DEFAULT 1,
   created_at  INTEGER NOT NULL
@@ -81,45 +74,24 @@ CREATE TABLE IF NOT EXISTS purchases (
   name       TEXT    NOT NULL,
   price      INTEGER NOT NULL,
   image_url  TEXT,
-  image_file TEXT,
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_purchase_buyer ON purchases (guild_id, buyer_id, created_at DESC);
 
--- じゃんけん対戦。Bot再起動時に未決着の賭け金を返金するために永続化する
+-- じゃんけん。時間切れは1分ごとの定期実行で返金する
 CREATE TABLE IF NOT EXISTS rps_matches (
-  id             TEXT PRIMARY KEY,
-  guild_id       TEXT    NOT NULL,
-  channel_id     TEXT    NOT NULL,
-  message_id     TEXT,
-  challenger_id  TEXT    NOT NULL,
-  opponent_id    TEXT    NOT NULL,
-  bet            INTEGER NOT NULL,
-  status         TEXT    NOT NULL,  -- pending / playing / done / cancelled
+  id              TEXT PRIMARY KEY,
+  guild_id        TEXT    NOT NULL,
+  channel_id      TEXT    NOT NULL,
+  message_id      TEXT,
+  challenger_id   TEXT    NOT NULL,
+  opponent_id     TEXT    NOT NULL,
+  bet             INTEGER NOT NULL,
+  status          TEXT    NOT NULL,          -- pending / playing / done / cancelled
   challenger_hand TEXT,
   opponent_hand   TEXT,
-  round          INTEGER NOT NULL DEFAULT 1,
-  created_at     INTEGER NOT NULL
+  round           INTEGER NOT NULL DEFAULT 1,
+  expires_at      INTEGER NOT NULL,
+  created_at      INTEGER NOT NULL
 );
-`;
-
-let db = null;
-
-/** SQLite を開いてスキーマを用意する（プロセス内で使い回す）。 */
-export function getDb() {
-  if (db) return db;
-  fs.mkdirSync(path.dirname(config.databasePath), { recursive: true });
-  fs.mkdirSync(config.imageDir, { recursive: true });
-  db = new Database(config.databasePath);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-  db.exec(SCHEMA);
-  return db;
-}
-
-export function closeDb() {
-  if (db) {
-    db.close();
-    db = null;
-  }
-}
+CREATE INDEX IF NOT EXISTS idx_rps_open ON rps_matches (status, expires_at);

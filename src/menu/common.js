@@ -1,6 +1,8 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } from 'discord.js';
+import { button as makeButton, embed, row } from '../discord/builders.js';
+import { ButtonStyle } from '../discord/constants.js';
+import { modalResponse, reply, update } from '../discord/respond.js';
 
-/** メニューの customId は `m:<画面>:<操作>:<引数...>` の形式にする。 */
+/** メニューの customId は `m:<画面>:<操作>:<引数...>`。 */
 export const MENU_PREFIX = 'm';
 
 export function id(...parts) {
@@ -8,38 +10,30 @@ export function id(...parts) {
 }
 
 /**
- * メニュー画面を描き直す。
- * ボタン／セレクト／（メッセージから開いた）モーダルは元のメッセージを編集し、
- * それ以外は新しく本人だけに見えるメッセージを出す。
+ * 画面を表示する。
+ * ボタン・セレクト・（メニューから開いた）入力フォームは元のメッセージを書き換え、
+ * スラッシュコマンドからは新しく本人だけに見えるメッセージを出す。
  */
-export async function show(interaction, payload) {
-  const data = { content: '', embeds: [], components: [], files: [], ...payload };
-  // 編集時は attachments: [] を渡して、前の画面で貼った画像を消す
-  if (interaction.deferred || interaction.replied) return interaction.editReply({ ...data, attachments: [] });
-  if (interaction.isModalSubmit() && !interaction.isFromMessage()) {
-    return interaction.reply({ ...data, flags: MessageFlags.Ephemeral });
-  }
-  if (interaction.isChatInputCommand()) return interaction.reply({ ...data, flags: MessageFlags.Ephemeral });
-  return interaction.update({ ...data, attachments: [] });
+export function show(ix, payload) {
+  const data = { content: '', embeds: [], components: [], ...payload };
+  if (ix.isComponent || (ix.isModalSubmit && ix.fromMessage)) return update(data);
+  return reply(data);
 }
 
-/** 画面はそのままに、短いお知らせだけ本人に出す。 */
-export async function toast(interaction, content) {
-  if (interaction.replied || interaction.deferred) {
-    return interaction.followUp({ content, flags: MessageFlags.Ephemeral });
-  }
-  return interaction.reply({ content, flags: MessageFlags.Ephemeral });
+/** 入力フォームを開く。 */
+export function openModal(data) {
+  return modalResponse(data);
 }
 
-export function button(customId, label, { style = ButtonStyle.Secondary, emoji, disabled = false } = {}) {
-  const b = new ButtonBuilder().setCustomId(customId).setLabel(label).setStyle(style).setDisabled(disabled);
-  if (emoji) b.setEmoji(emoji);
-  return b;
+/** 画面の先頭に一言お知らせを差し込む。 */
+export function withNotice(embedObject, notice) {
+  if (!notice) return embedObject;
+  const body = embedObject.description ? `\n\n${embedObject.description}` : '';
+  return { ...embedObject, description: `⚠️ ${notice}${body}` };
 }
 
-export function row(...components) {
-  return new ActionRowBuilder().addComponents(...components.filter(Boolean));
-}
+export const button = makeButton;
+export { row, embed };
 
 export function backButton(target = 'home', label = '戻る') {
   return button(id(target, 'open'), label, { emoji: '◀️' });
@@ -49,25 +43,26 @@ export function homeButton() {
   return button(id('home', 'open'), 'メニュー', { emoji: '🏠' });
 }
 
-/** 賭け金・金額を選ぶボタン列。所持金で足りないものは押せなくする。 */
+/** 賭け金・金額を選ぶボタン。所持金で足りないものは押せなくする。 */
 export const AMOUNT_PRESETS = [10, 50, 100, 500, 1000];
 
-export function amountRows(prefix, balance, { extra = [], maxBet = 0 } = {}) {
-  const presets = AMOUNT_PRESETS.filter((amount) => maxBet <= 0 || amount <= maxBet);
-  const buttons = presets.map((amount) =>
+export function amountRows(prefix, balance, { maxBet = 0, extra = [] } = {}) {
+  const buttons = AMOUNT_PRESETS.filter((amount) => maxBet <= 0 || amount <= maxBet).map((amount) =>
     button(id(...prefix, String(amount)), amount.toLocaleString('ja-JP'), {
-      style: ButtonStyle.Primary,
+      style: ButtonStyle.PRIMARY,
       disabled: balance < amount,
     }),
   );
   return [row(...buttons), row(button(id(...prefix, 'custom'), '金額を入力', { emoji: '⌨️' }), ...extra)];
 }
 
-/** モーダルの入力を整数として読む。読めなければ {error} を返す。 */
-export function readInt(interaction, field, { min = 0, max = Number.MAX_SAFE_INTEGER, fallback = null } = {}) {
-  const raw = interaction.fields.getTextInputValue(field).trim();
+/** 入力フォームの数値を読む。読めなければ {error} を返す。 */
+export function readInt(ix, field, { min = 0, max = Number.MAX_SAFE_INTEGER, fallback = null } = {}) {
+  const raw = ix.field(field).trim();
   if (raw === '') return fallback;
-  const normalized = raw.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0)).replace(/[,，\s]/g, '');
+  const normalized = raw
+    .replace(/[０-９]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0))
+    .replace(/[,，\s]/g, '');
   if (!/^-?\d+$/.test(normalized)) return { error: `「${raw}」は数字として読めませんでした。` };
   const value = Number(normalized);
   if (value < min || value > max) return { error: `${min} 〜 ${max} の範囲で入力してください（入力: ${value}）。` };
@@ -78,17 +73,8 @@ export function isError(value) {
   return typeof value === 'object' && value !== null && 'error' in value;
 }
 
-/** モーダルの任意テキスト（空欄なら null）。 */
-export function readText(interaction, field) {
-  const value = interaction.fields.getTextInputValue(field).trim();
+/** 入力フォームの任意テキスト（空欄なら null）。 */
+export function readText(ix, field) {
+  const value = ix.field(field).trim();
   return value === '' ? null : value;
-}
-
-/** チャンネルへの公開投稿。権限が無ければ黙って諦める。 */
-export async function announce(interaction, payload) {
-  try {
-    if (interaction.channel?.isSendable()) await interaction.channel.send(payload);
-  } catch (error) {
-    console.error('公開メッセージの送信に失敗:', error);
-  }
 }

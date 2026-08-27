@@ -21,14 +21,20 @@ export const screens = {
 
 export const namespace = MENU_PREFIX;
 
-export async function handleComponent(interaction) {
-  const [, screen, action, ...args] = interaction.customId.split(':');
+export function findHandler(customId) {
+  const [prefix, screen, action, ...args] = customId.split(':');
+  if (prefix !== MENU_PREFIX) return null;
   const handler = screens[screen]?.[action];
-  if (!handler) {
-    console.warn(`未知のメニュー操作: ${interaction.customId}`);
-    return;
+  return handler ? { handler, args } : null;
+}
+
+export async function handleComponent(ix, ctx) {
+  const found = findHandler(ix.customId);
+  if (!found) {
+    console.warn(`未知のメニュー操作: ${ix.customId}`);
+    return home.open(ix, [], ctx, 'その操作は使えなくなっています。メニューを開き直しました。');
   }
-  await handler(interaction, args);
+  return found.handler(ix, found.args, ctx);
 }
 
 export const openHome = home.open;
