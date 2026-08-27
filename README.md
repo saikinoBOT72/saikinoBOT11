@@ -55,8 +55,6 @@
 2. **General Information** のページで次の2つを控える
    - **Application ID**
    - **Public Key**
-
-   同じページの **Privacy Policy URL** の欄に、このリポジトリの `PRIVACY.md` のURLを貼っておきます（Discordの開発者ポリシーで求められています）。
 3. **Bot** のページで **Reset Token** を押してトークンを控える（一度しか表示されません）
 4. 下のURLの `ここにApplicationID` を差し替えてブラウザで開き、自分のサーバーに招待する
 
@@ -104,7 +102,17 @@ Developer Portal の **General Information** に戻り、**Interactions Endpoint
 
 （保存できないときは、Actions のデプロイが成功しているか、`DISCORD_PUBLIC_KEY` が正しいかを確認してください。）
 
-### 5. 遊びはじめる
+### 5. プライバシーポリシーのURLを設定する
+
+`main` にマージしたあとであれば、Developer Portal の **General Information** にある **Privacy Policy URL** の欄に次のURLを貼れます（Discordの開発者ポリシーで求められています）。
+
+```
+https://github.com/<自分のアカウント>/<リポジトリ名>/blob/main/PRIVACY.md
+```
+
+> マージ前だとこのファイルが `main` に存在せず、URLが見つからないので弾かれます。**必ずマージのあとに設定してください。**
+
+### 6. 遊びはじめる
 
 サーバーで **`/menu`** を実行してください。まず管理者が **⚙️ 管理 → 📋 アクション管理 → 📦 おすすめを一括登録** を押すと、筋トレ・ランニング・勉強・早起き・自炊がすぐ使えるようになります。
 
