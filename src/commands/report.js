@@ -1,7 +1,8 @@
 import { SlashCommandBuilder, EmbedBuilder, InteractionContextType, MessageFlags } from 'discord.js';
-import { getSettings, deposit } from '../lib/economy.js';
-import { canReport, countToday, getActivity, listActivities, logReport, reportStats } from '../lib/activities.js';
-import { coins, duration, relative, truncate } from '../lib/format.js';
+import { getSettings } from '../lib/economy.js';
+import { getActivity, listActivities, reportStats } from '../lib/activities.js';
+import { attemptReport, reportEmbed } from '../lib/reporting.js';
+import { coins, duration, truncate } from '../lib/format.js';
 
 export const data = new SlashCommandBuilder()
   .setName('report')
@@ -69,38 +70,21 @@ async function handleReport(interaction) {
     return;
   }
 
-  const gate = canReport(guildId, interaction.user.id, activity);
-  if (!gate.ok) {
-    const message =
-      gate.reason === 'cooldown'
-        ? `「${activity.name}」はまだクールダウン中です。あと ${duration((gate.retryAtMs - Date.now()) / 1000)}（${relative(gate.retryAtMs)}）待ってください。`
-        : `「${activity.name}」は1日 ${gate.limit} 回までです。日付が変わるまで待ってください。`;
-    await interaction.reply({ content: message, flags: MessageFlags.Ephemeral });
+  const result = attemptReport({ guildId, userId: interaction.user.id, activity, note });
+  if (!result.ok) {
+    await interaction.reply({ content: result.message, flags: MessageFlags.Ephemeral });
     return;
   }
 
-  logReport(guildId, interaction.user.id, activity.name, activity.reward, note);
-  const balance = deposit(guildId, interaction.user.id, activity.reward, 'report', activity.name);
-
-  const embed = new EmbedBuilder()
-    .setColor(0x2ecc71)
-    .setAuthor({
-      name: interaction.member?.displayName ?? interaction.user.username,
-      iconURL: interaction.user.displayAvatarURL(),
-    })
-    .setTitle(`${activity.emoji ?? '✅'} ${activity.name} 達成！`)
-    .setDescription(`${coins(activity.reward, settings)} を獲得しました`)
-    .addFields({ name: '所持金', value: coins(balance, settings), inline: true });
-
-  if (activity.daily_limit > 0) {
-    embed.addFields({
-      name: '今日の報告',
-      value: `${countToday(guildId, interaction.user.id, activity.name)} / ${activity.daily_limit} 回`,
-      inline: true,
-    });
-  }
-  if (note) embed.addFields({ name: 'ひとこと', value: truncate(note, 200) });
-  if (proof) embed.setImage(proof.url);
+  const embed = reportEmbed({
+    guildId,
+    user: interaction.user,
+    displayName: interaction.member?.displayName,
+    activity,
+    result,
+    note,
+    imageUrl: proof?.url ?? null,
+  });
 
   await interaction.reply({ embeds: [embed] });
 }

@@ -51,14 +51,39 @@ export async function execute(interaction) {
     }
   }
 
+  const message = await startChallenge({
+    channel: interaction.channel,
+    guildId,
+    challenger: interaction.user,
+    opponent,
+    bet,
+  });
+  if (!message) {
+    await interaction.reply({ content: 'このチャンネルに挑戦状を送れませんでした。', flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  await interaction.reply({
+    content: `<@${opponent.id}> に挑戦状を送りました。相手の応答を待ちましょう。`,
+    flags: MessageFlags.Ephemeral,
+  });
+}
+
+/**
+ * 挑戦状をチャンネルに投稿して対戦を作る。コマンドからもメニューからも使う。
+ * @returns {Promise<import('discord.js').Message|null>}
+ */
+export async function startChallenge({ channel, guildId, challenger, opponent, bet }) {
+  if (!channel?.isSendable()) return null;
+  const settings = getSettings(guildId);
   const id = randomUUID();
-  createMatch({ id, guildId, channelId: interaction.channelId, challengerId: interaction.user.id, opponentId: opponent.id, bet });
+  createMatch({ id, guildId, channelId: channel.id, challengerId: challenger.id, opponentId: opponent.id, bet });
 
   const embed = new EmbedBuilder()
     .setColor(0x5865f2)
     .setTitle('✊✌️🖐️ じゃんけん勝負！')
     .setDescription(
-      `<@${interaction.user.id}> が <@${opponent.id}> に勝負を挑みました。\n` +
+      `<@${challenger.id}> が <@${opponent.id}> に勝負を挑みました。\n` +
         (bet > 0 ? `賭け金は ${coins(bet, settings)}（勝者が総取り）` : '賭けなしの真剣勝負'),
     )
     .setFooter({ text: '2分以内に応答がなければ自動でキャンセルされます' });
@@ -68,11 +93,10 @@ export async function execute(interaction) {
     new ButtonBuilder().setCustomId(`rps:decline:${id}`).setLabel('やめておく').setStyle(ButtonStyle.Secondary),
   );
 
-  await interaction.reply({ content: `<@${opponent.id}>`, embeds: [embed], components: [row] });
-  const message = await interaction.fetchReply();
+  const message = await channel.send({ content: `<@${opponent.id}>`, embeds: [embed], components: [row] });
   setMessageId(id, message.id);
-
-  scheduleTimeout(interaction.client, id, INVITE_TIMEOUT_MS);
+  scheduleTimeout(channel.client, id, INVITE_TIMEOUT_MS);
+  return message;
 }
 
 export async function handleComponent(interaction) {

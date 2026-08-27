@@ -8,6 +8,8 @@ export const config = {
   databasePath: path.resolve(process.env.DATABASE_PATH || './data/economy.db'),
   imageDir: path.resolve(process.env.IMAGE_DIR || './data/images'),
   timezone: process.env.TZ || 'Asia/Tokyo',
+  // true にすると特権インテント Message Content を使い、メンション無しでも画像を受け取れる
+  messageContentIntent: process.env.MESSAGE_CONTENT_INTENT === 'true',
 };
 
 /** 起動に最低限必要な環境変数が揃っているか確認する。 */

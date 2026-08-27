@@ -40,10 +40,10 @@ test('全コマンドが JSON にシリアライズできる', () => {
 });
 test('期待するコマンドが揃っている', () => {
   const names = [...commands.keys()].sort();
-  assert.deepEqual(names, ['activity','balance','coinflip','economy','help','inventory','leaderboard','pay','report','rps','shop','slot']);
+  assert.deepEqual(names, ['activity','balance','coinflip','economy','help','inventory','leaderboard','menu','pay','report','rps','shop','slot']);
 });
 test('コンポーネント handler が rps と shop に登録されている', () => {
-  assert.deepEqual([...components.keys()].sort(), ['rps','shop']);
+  assert.deepEqual([...components.keys()].sort(), ['m','rps','shop']);
 });
 
 const G = 'guild1', A = 'userA', B = 'userB';

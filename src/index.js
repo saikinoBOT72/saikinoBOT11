@@ -13,7 +13,12 @@ try {
 getDb();
 
 const { commands, components } = await loadCommands();
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+// GuildMessages はメニューから画像を受け取るために必要（添付を読むだけ）。
+// MESSAGE_CONTENT_INTENT=true にすると、メンション無しの画像も拾えるようになる。
+const intents = [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages];
+if (config.messageContentIntent) intents.push(GatewayIntentBits.MessageContent);
+
+const client = new Client({ intents });
 
 client.once(Events.ClientReady, (ready) => {
   const refunded = refundStaleMatches();
@@ -43,16 +48,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    if (interaction.isButton() || interaction.isStringSelectMenu()) {
+    if (interaction.isButton() || interaction.isAnySelectMenu() || interaction.isModalSubmit()) {
       const [namespace] = interaction.customId.split(':');
       const handler = components.get(namespace);
       if (handler) await handler.handleComponent(interaction);
     }
   } catch (error) {
+    // 期限切れのメニュー（15分以上前のもの）はどう応答しても届かないので記録だけする
+    if (EXPIRED_CODES.has(error?.code)) {
+      console.warn('期限切れのインタラクションを無視しました:', error.code);
+      return;
+    }
     console.error('インタラクション処理でエラー:', error);
     await replyError(interaction);
   }
 });
+
+// 10062: Unknown interaction / 40060: すでに応答済み
+const EXPIRED_CODES = new Set([10062, 40060]);
 
 async function replyError(interaction) {
   if (!interaction.isRepliable()) return;

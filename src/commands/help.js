@@ -1,4 +1,12 @@
-import { SlashCommandBuilder, EmbedBuilder, InteractionContextType, MessageFlags } from 'discord.js';
+import {
+  SlashCommandBuilder,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  InteractionContextType,
+  MessageFlags,
+} from 'discord.js';
 import { getSettings } from '../lib/economy.js';
 
 export const data = new SlashCommandBuilder()
@@ -13,7 +21,9 @@ export async function execute(interaction) {
   const embed = new EmbedBuilder()
     .setColor(0x5865f2)
     .setTitle(`${c} の使い方`)
-    .setDescription(`このサーバーでは ${c} を貯めて遊べます。`)
+    .setDescription(
+      `このサーバーでは ${c} を貯めて遊べます。\n**コマンドを覚えるのが面倒なら \`/menu\` だけでOK。**下のボタンからも開けます。`,
+    )
     .addFields(
       {
         name: '💪 コインを稼ぐ',
@@ -55,5 +65,9 @@ export async function execute(interaction) {
       },
     );
 
-  await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('m:home:open').setLabel('メニューを開く').setEmoji('🏠').setStyle(ButtonStyle.Success),
+  );
+
+  await interaction.reply({ embeds: [embed], components: [row], flags: MessageFlags.Ephemeral });
 }
