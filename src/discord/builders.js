@@ -61,6 +61,17 @@ export function userSelect(customId, placeholder) {
   return row({ type: ComponentType.USER_SELECT, custom_id: customId, placeholder, max_values: 1 });
 }
 
+/** テキストチャンネルだけ選べるメニュー。 */
+export function channelSelect(customId, placeholder) {
+  return row({
+    type: ComponentType.CHANNEL_SELECT,
+    custom_id: customId,
+    placeholder,
+    max_values: 1,
+    channel_types: [0, 5], // 0=テキスト 5=アナウンス
+  });
+}
+
 export function textInput(customId, label, { style = TextInputStyle.SHORT, placeholder, value, required = false, max } = {}) {
   return row(
     compact({

@@ -1,5 +1,5 @@
 import { getBalance, rankOf } from '../lib/economy.js';
-import { getStreak } from '../lib/streak.js';
+import { allStreaks } from '../lib/streak.js';
 import { listActivities } from '../lib/activities.js';
 import { countItems } from '../lib/shop.js';
 import { coins } from '../lib/format.js';
@@ -9,11 +9,11 @@ import { button, embed, homeButton, id, row, show, withNotice } from './common.j
 export async function open(ix, _args, ctx, notice = null) {
   const settings = await ctx.settings(ix.guildId);
   const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
-  const [rank, activities, items, streak] = await Promise.all([
+  const [rank, activities, items, streaks] = await Promise.all([
     rankOf(ctx.db, ix.guildId, ix.userId),
     listActivities(ctx.db, ix.guildId),
     countItems(ctx.db, ix.guildId),
-    getStreak(ctx.db, ix.guildId, ix.userId, ctx.timezone),
+    allStreaks(ctx.db, ix.guildId, ix.userId, ctx.timezone),
   ]);
 
   const main = embed({
@@ -22,7 +22,7 @@ export async function open(ix, _args, ctx, notice = null) {
     title: '🏠 メニュー',
     description: `所持金 ${coins(balance, settings)}　（${rank} 位）`,
     fields: [
-      { name: '連続報告', value: streak.current > 0 ? `🔥 **${streak.current}** 日` : '—', inline: true },
+      { name: '連続記録', value: topStreak(streaks), inline: true },
       { name: '報告できること', value: `${activities.length} 種類`, inline: true },
       { name: '出品中のアイテム', value: `${items} 個`, inline: true },
     ],
@@ -46,6 +46,12 @@ export async function open(ix, _args, ctx, notice = null) {
   });
 }
 
+/** いちばん続いているアクションを一行で。 */
+function topStreak(streaks) {
+  const best = streaks.find((streak) => streak.current > 0);
+  return best ? `🔥 ${best.activity} **${best.current}** 日` : '—';
+}
+
 export async function help(ix, _args, ctx) {
   const settings = await ctx.settings(ix.guildId);
   const currency = `${settings.currency_emoji}${settings.currency_name}`;
@@ -65,7 +71,7 @@ export async function help(ix, _args, ctx) {
           {
             name: '🔥 連日ボーナス・🏅 称号',
             value:
-              '毎日続けて報告すると連続日数が伸び、決められた日数に届くとボーナスが出ます。条件を満たすと称号も自動で贈られます。獲得状況は **お財布 → 🏅 称号・連続記録** で見られます。',
+              '連続日数はアクションごとに数えます。決められた日数に届くとボーナスが出て、条件を満たすと称号も自動で贈られます。**お財布 → 🏅 称号・連続記録** から、持っている称号を1つ選んで名前の横に表示できます。',
           },
           {
             name: '🎮 あそぶ',
