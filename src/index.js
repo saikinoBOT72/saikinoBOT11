@@ -3,6 +3,7 @@ import { assertConfig, config } from './config.js';
 import { closeDb, getDb } from './lib/db.js';
 import { loadCommands } from './lib/loader.js';
 import { refundStaleMatches } from './lib/rps.js';
+import { syncCommands } from './lib/deploy.js';
 
 try {
   assertConfig();
@@ -19,6 +20,20 @@ const intents = [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages];
 if (config.messageContentIntent) intents.push(GatewayIntentBits.MessageContent);
 
 const client = new Client({ intents });
+
+if (config.autoDeployCommands) {
+  try {
+    const result = await syncCommands(commands);
+    console.log(
+      result.skipped
+        ? `スラッシュコマンドは登録済みです（${result.registered} 件）`
+        : `スラッシュコマンドを登録しました（${result.registered} 件）`,
+    );
+  } catch (error) {
+    console.error('スラッシュコマンドの登録に失敗しました:', error.message);
+    console.error('トークンと CLIENT_ID を確認してください。Bot は起動を続けます。');
+  }
+}
 
 client.once(Events.ClientReady, (ready) => {
   const refunded = refundStaleMatches();

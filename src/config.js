@@ -10,6 +10,8 @@ export const config = {
   timezone: process.env.TZ || 'Asia/Tokyo',
   // true にすると特権インテント Message Content を使い、メンション無しでも画像を受け取れる
   messageContentIntent: process.env.MESSAGE_CONTENT_INTENT === 'true',
+  // 起動時にスラッシュコマンドを自動登録する（内容が変わったときだけ実行される）
+  autoDeployCommands: process.env.AUTO_DEPLOY_COMMANDS !== 'false',
 };
 
 /** 起動に最低限必要な環境変数が揃っているか確認する。 */

@@ -1,0 +1,10 @@
+services:
+  bot:
+    build: .
+    # ビルド済みイメージを使う場合はここを image: に差し替える
+    container_name: saikinobot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # 残高・履歴・出品画像はすべてここに残る（バックアップはこのフォルダを丸ごとコピー）
+      - ./data:/app/data

@@ -1,6 +1,6 @@
-import { REST, Routes } from 'discord.js';
 import { assertConfig, config } from './config.js';
 import { loadCommands } from './lib/loader.js';
+import { syncCommands } from './lib/deploy.js';
 
 try {
   assertConfig();
@@ -10,15 +10,9 @@ try {
 }
 
 const { commands } = await loadCommands();
-const body = [...commands.values()].map((command) => command.data.toJSON());
-const rest = new REST().setToken(config.token);
+const result = await syncCommands(commands, { force: true });
 
-const route = config.guildId
-  ? Routes.applicationGuildCommands(config.clientId, config.guildId)
-  : Routes.applicationCommands(config.clientId);
-
-const result = await rest.put(route, { body });
 console.log(
-  `${result.length} 件のコマンドを登録しました（${config.guildId ? `サーバー ${config.guildId}` : 'グローバル：反映に最大1時間'}）`,
+  `${result.registered} 件のコマンドを登録しました（${config.guildId ? `サーバー ${config.guildId}` : 'グローバル：反映に最大1時間'}）`,
 );
-for (const command of result) console.log(` - /${command.name}`);
+for (const command of commands.keys()) console.log(` - /${command}`);

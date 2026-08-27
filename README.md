@@ -134,14 +134,40 @@ npm start        # Bot 起動
 
 起動したらサーバーで **`/menu`** を実行してみてください。まずは管理者がメニューの **⚙️ 管理 → 📋 アクション管理 → 📦 おすすめを一括登録**（または `/activity preset`）を実行すると、すぐに報告して稼げるようになります。
 
+`npm run deploy` は必須ではありません。**起動時にコマンドの内容が変わっていれば自動で登録し直します**（`data/commands.hash` で判定）。手動で登録し直したいときだけ使ってください。
+
 ### 3. 常時稼働させる
 
-Bot はプロセスが動いている間だけ反応します。VPS や自宅サーバーなら systemd や [pm2](https://pm2.keymetrics.io/) が手軽です。
+Bot はプロセスが動いている間だけ反応します。PCを閉じれば止まるので、置き場所を決める必要があります。
+
+#### Docker（VPS・自宅サーバー・ラズパイ共通、おすすめ）
+
+```bash
+cp .env.example .env    # トークンなどを記入
+docker compose up -d    # 起動
+docker compose logs -f  # ログを見る
+docker compose pull && docker compose up -d --build   # 更新するとき
+```
+
+`data/` をホスト側にマウントしているので、コンテナを作り直しても残高やアイテムは消えません。
+
+#### systemd（Docker を使わない場合）
+
+`deploy/saikinobot.service` を使います。ファイル冒頭のコメントに手順を書いてあります。
+
+```bash
+sudo cp deploy/saikinobot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now saikinobot
+journalctl -u saikinobot -f
+```
+
+#### pm2（手軽に済ませたい場合）
 
 ```bash
 npm install -g pm2
 pm2 start npm --name saikinobot -- start
-pm2 save
+pm2 save && pm2 startup
 ```
 
 ---
@@ -154,7 +180,7 @@ pm2 save
 - コインの増減はすべて `ledger` テーブルに記録されるので、おかしくなったら `/economy history` で追跡できます。
 - データはサーバー（ギルド）ごとに完全に分かれています。
 
-環境変数で保存先やタイムゾーンを変えられます（`.env.example` 参照）。「1日の上限回数」は `TZ`（初期値 `Asia/Tokyo`）の日付で判定します。
+Docker で動かす場合は `data/` がそのままホスト側に見えます。環境変数で保存先やタイムゾーンを変えられます（`.env.example` 参照）。「1日の上限回数」は `TZ`（初期値 `Asia/Tokyo`）の日付で判定します。
 
 ---
 
