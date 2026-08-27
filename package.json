@@ -1,0 +1,23 @@
+{
+  "name": "saikinobot11",
+  "version": "2.0.0",
+  "description": "身内用 Discord Bot（Cloudflare Workers + D1）: サーバー内通貨・アクション報酬・ミニゲーム・ユーザーショップ",
+  "private": true,
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "node test/run-tests.mjs && node test/menu-tests.mjs",
+    "check": "wrangler deploy --dry-run",
+    "deploy": "wrangler deploy",
+    "register": "node scripts/register-commands.mjs",
+    "migrate": "wrangler d1 migrations apply saikinobot --remote"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "better-sqlite3": "^13.0.3",
+    "wrangler": "^4.127.0"
+  }
+}
