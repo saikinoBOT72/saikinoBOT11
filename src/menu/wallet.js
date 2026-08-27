@@ -50,7 +50,7 @@ export async function open(ix, _args, ctx, notice = null) {
         button(id('wallet', 'history'), '履歴', { emoji: '📜' }),
         button(id('wallet', 'rank'), 'ランキング', { emoji: '🏆' }),
       ),
-      row(backButton()),
+      row(backButton(), button(id('privacy', 'open'), '自分のデータ', { emoji: '🔐' })),
     ],
   });
 }

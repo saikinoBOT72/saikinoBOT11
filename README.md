@@ -55,6 +55,8 @@
 2. **General Information** のページで次の2つを控える
    - **Application ID**
    - **Public Key**
+
+   同じページの **Privacy Policy URL** の欄に、このリポジトリの `PRIVACY.md` のURLを貼っておきます（Discordの開発者ポリシーで求められています）。
 3. **Bot** のページで **Reset Token** を押してトークンを控える（一度しか表示されません）
 4. 下のURLの `ここにApplicationID` を差し替えてブラウザで開き、自分のサーバーに招待する
 
@@ -108,6 +110,24 @@ Developer Portal の **General Information** に戻り、**Interactions Endpoint
 
 ---
 
+## 運用のルール（大事）
+
+**コインを現金・電子マネー・ギフト券などと交換しないでください。**
+
+Discord は「現実の価値があるものを賭ける行為」をギャンブルとして規制していますが、換金できない遊び用のポイントはこれに当たりません。日本の賭博罪も「財物」性が要件なので同じです。逆に言うと、**コインに現金価値を持たせた瞬間に話が変わります**。
+
+- ❌ 「1000コインで現金1000円」のような出品・交換
+- ❌ コインを外部で売買する
+- ⭕ 「肩たたき券」「1回おごり」など、身内の遊びの範囲のやり取り
+
+未成年のメンバーがいる場合は、スロットやコイントスを使わない運用（管理メニューで賭け金上限を絞る、報告とショップだけ使う）も検討してください。
+
+## プライバシー
+
+保存しているのは Discord のユーザーIDと、このサーバーでの遊んだ記録だけです。**メッセージの本文は読み取れません**（そのための権限を持っていません）。
+
+各自が **`/menu` → 💰 お財布 → 🔐 自分のデータ** から、保存内容の確認と削除をいつでも自分で行えます。詳しくは [PRIVACY.md](PRIVACY.md) を参照してください。導入時は、このファイルのURLを Developer Portal の **Privacy Policy URL** 欄に設定してください。
+
 ## 知っておいてほしいこと
 
 - **Botはメンバー一覧で「オフライン」と表示されます。** 常時接続する作りではなく、コマンドが押されたときだけ Cloudflare 側が起きる方式のためです。動作には影響ありません
@@ -123,7 +143,7 @@ Developer Portal の **General Information** に戻り、**Interactions Endpoint
 
 ```bash
 npm install
-npm test    # Cloudflare にも Discord にも繋がずに検証（80件）
+npm test    # Cloudflare にも Discord にも繋がずに検証（85件）
 npm run check   # Worker がビルドできるか確認
 ```
 
@@ -148,6 +168,7 @@ src/
     rps-challenge.js  じゃんけんの公開メッセージ
     shop.js           ショップ
     wallet.js         所持金・送金・履歴
+    privacy.js        自分のデータの確認と削除
     admin.js          管理メニュー
   lib/                中身のロジック（通貨・報告・ショップ・じゃんけん・スロット）
 migrations/           D1 のテーブル定義

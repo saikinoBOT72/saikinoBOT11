@@ -436,5 +436,62 @@ await test('終わった勝負のボタンはもう効かない', async () => {
   assert.match(screenText(payload), /終了/);
 });
 
+
+section('[自分のデータ]');
+
+await test('保存されている内容を本人が確認できる', async () => {
+  const payload = await press('m:privacy:open');
+  const fields = firstEmbed(payload).fields.map((field) => field.name);
+  assert.deepEqual(fields, ['所持金', 'コインの増減記録', '報告の記録', '出品', '購入履歴']);
+  assertAllButtonsWork(payload, '自分のデータ');
+});
+
+await test('確認画面を挟んでから消える', async () => {
+  const confirmScreen = await press('m:privacy:confirm');
+  assert.ok(customIds(confirmScreen).includes('m:privacy:purge'));
+  assert.match(firstEmbed(confirmScreen).description, /元には戻せません/);
+});
+
+await test('削除すると自分の記録が消え、他人の記録は残る', async () => {
+  // 消す人の出品を他の人が買った状態を作る
+  const sellItem = await shop.createItem(db, { guildId: GUILD, sellerId: ME, name: '消える人の商品', price: 10, stock: -1 });
+  await eco.setBalance(db, GUILD, OTHER, 100, 'test');
+  await shop.purchase(db, GUILD, sellItem.id, OTHER);
+
+  await press('m:privacy:purge');
+
+  assert.equal(await db.get('SELECT * FROM balances WHERE guild_id = ?1 AND user_id = ?2', GUILD, ME), null);
+  assert.equal((await db.all('SELECT * FROM ledger WHERE guild_id = ?1 AND user_id = ?2', GUILD, ME)).length, 0);
+  assert.equal((await db.all('SELECT * FROM activity_logs WHERE guild_id = ?1 AND user_id = ?2', GUILD, ME)).length, 0);
+  assert.equal((await db.all('SELECT * FROM shop_items WHERE guild_id = ?1 AND seller_id = ?2', GUILD, ME)).length, 0);
+  assert.equal((await db.all('SELECT * FROM purchases WHERE guild_id = ?1 AND buyer_id = ?2', GUILD, ME)).length, 0);
+
+  const otherPurchase = await db.get('SELECT * FROM purchases WHERE guild_id = ?1 AND buyer_id = ?2 AND name = ?3', GUILD, OTHER, '消える人の商品');
+  assert.ok(otherPurchase, '買った人の記録は残る');
+  assert.equal(otherPurchase.seller_id, 'deleted', '出品者のIDは伏せられる');
+});
+
+await test('進行中のじゃんけんがあれば相手に返金してから消す', async () => {
+  await eco.setBalance(db, GUILD, ME, 500, 'test');
+  await eco.setBalance(db, GUILD, OTHER, 500, 'test');
+  const settings = await ctx.settings(GUILD);
+  await rpsChallenge.startChallenge(ctx, {
+    guildId: GUILD, channelId: 'c1', challengerId: ME, opponentId: OTHER, bet: 200, settings,
+  });
+  const match = await db.get("SELECT * FROM rps_matches WHERE status = 'pending' ORDER BY created_at DESC");
+  await pressRps(`rps:accept:${match.id}`, { userId: OTHER });
+  assert.equal(await eco.getBalance(db, GUILD, OTHER), 300, '賭け金を預けた状態');
+
+  await press('m:privacy:purge');
+
+  assert.equal(await eco.getBalance(db, GUILD, OTHER), 500, '相手には返金される');
+  assert.equal(await db.get('SELECT * FROM rps_matches WHERE id = ?1', match.id), null);
+});
+
+await test('削除後にまた遊ぶと初期残高から始まる', async () => {
+  const settings = await eco.getSettings(db, GUILD);
+  assert.equal(await eco.getBalance(db, GUILD, ME), settings.starting_balance);
+});
+
 runner.done();
 db.close();
