@@ -7,6 +7,8 @@ import { handleComponent as handleMenu } from './menu/router.js';
 import { handleComponent as handleRps, cancelEmbed } from './menu/rps-challenge.js';
 import { findCommand } from './commands.js';
 import { cancelExpired } from './lib/rps.js';
+import { buildAnnouncement, dueAnnouncements, markAnnounced } from './lib/announcements.js';
+import { dateKey } from './lib/streak.js';
 
 export default {
   /** Discord からの Interaction を受け取る入口。 */
@@ -40,25 +42,50 @@ export default {
     }
   },
 
-  /** 1分ごとに走り、時間切れのじゃんけんを片付ける。 */
+  /** 1分ごとに走る。時間切れのじゃんけんを片付け、時間になった発表を投稿する。 */
   async scheduled(_event, env, executionCtx) {
     const ctx = createContext(env, executionCtx);
-    const handled = await cancelExpired(ctx.db);
-    for (const { match, refunded } of handled) {
-      if (!match.message_id) continue;
-      await ctx.rest
-        .editMessage(match.channel_id, match.message_id, {
-          content: '',
-          embeds: [
-            cancelEmbed(refunded ? '時間切れのため中止しました。賭け金は返しました。' : '時間切れのため勝負は流れました。'),
-          ],
-          components: [],
-        })
-        .catch((error) => console.error('時間切れメッセージの更新に失敗:', error));
-    }
-    if (handled.length > 0) console.log(`時間切れのじゃんけんを ${handled.length} 件片付けました`);
+    await sweepExpiredMatches(ctx);
+    await postDueAnnouncements(ctx);
   },
 };
+
+async function sweepExpiredMatches(ctx) {
+  const handled = await cancelExpired(ctx.db);
+  for (const { match, refunded } of handled) {
+    if (!match.message_id) continue;
+    await ctx.rest
+      .editMessage(match.channel_id, match.message_id, {
+        content: '',
+        embeds: [cancelEmbed(refunded ? '時間切れのため中止しました。賭け金は返しました。' : '時間切れのため勝負は流れました。')],
+        components: [],
+      })
+      .catch((error) => console.error('時間切れメッセージの更新に失敗:', error));
+  }
+  if (handled.length > 0) console.log(`時間切れのじゃんけんを ${handled.length} 件片付けました`);
+}
+
+async function postDueAnnouncements(ctx) {
+  const due = await dueAnnouncements(ctx.db, ctx.timezone);
+  const today = dateKey(ctx.timezone);
+
+  for (const announcement of due) {
+    // 先に「発表済み」にしてから作る（失敗しても同じ日に二重投稿しない）
+    await markAnnounced(ctx.db, announcement.id, today);
+    try {
+      const settings = await ctx.settings(announcement.guild_id);
+      const built = await buildAnnouncement(ctx.db, announcement, { settings, timezone: ctx.timezone });
+      if (!built) continue;
+      await ctx.rest.createMessage(announcement.channel_id, {
+        embeds: [built.embed],
+        allowed_mentions: { users: built.winners },
+      });
+    } catch (error) {
+      console.error(`発表 #${announcement.id} に失敗:`, error);
+    }
+  }
+  if (due.length > 0) console.log(`${due.length} 件の発表を処理しました`);
+}
 
 async function dispatch(ix, ctx) {
   if (!ix.guildId) return reply({ content: 'このBotはサーバー内でのみ使えます。' });

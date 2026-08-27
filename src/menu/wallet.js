@@ -1,4 +1,5 @@
 import { getBalance, ledgerFor, rankOf, topBalances, totals, transfer } from '../lib/economy.js';
+import { equippedTitles, titleTag } from '../lib/achievements.js';
 import { coins } from '../lib/format.js';
 import { modal, textInput, userSelect } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
@@ -160,6 +161,7 @@ export async function history(ix, _args, ctx) {
 export async function rank(ix, _args, ctx) {
   const settings = await ctx.settings(ix.guildId);
   const rows = await topBalances(ctx.db, ix.guildId, 15);
+  const titles = await equippedTitles(ctx.db, ix.guildId, rows.map((row) => row.user_id));
 
   return show(ix, {
     embeds: [
@@ -170,10 +172,13 @@ export async function rank(ix, _args, ctx) {
           rows.length === 0
             ? 'まだ誰も口座を持っていません。'
             : rows
-                .map(
-                  (entry, index) =>
-                    `${MEDALS[index] ?? `**${index + 1}.**`} <@${entry.user_id}> — ${settings.currency_emoji} ${entry.balance.toLocaleString('ja-JP')}`,
-                )
+                .map((entry, index) => {
+                  const tag = titleTag(titles.get(entry.user_id));
+                  return (
+                    `${MEDALS[index] ?? `**${index + 1}.**`} ${tag ? `\`${tag}\` ` : ''}` +
+                    `<@${entry.user_id}> — ${settings.currency_emoji} ${entry.balance.toLocaleString('ja-JP')}`
+                  );
+                })
                 .join('\n'),
       }),
     ],

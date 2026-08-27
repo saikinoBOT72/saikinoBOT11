@@ -21,6 +21,7 @@ export const ComponentType = {
   STRING_SELECT: 3,
   TEXT_INPUT: 4,
   USER_SELECT: 5,
+  CHANNEL_SELECT: 8,
 };
 
 export const ButtonStyle = { PRIMARY: 1, SECONDARY: 2, SUCCESS: 3, DANGER: 4, LINK: 5 };

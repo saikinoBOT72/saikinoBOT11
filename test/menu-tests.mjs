@@ -11,6 +11,7 @@ const { findCommand, COMMAND_DEFINITIONS } = await import(src('commands.js'));
 const eco = await import(src('lib/economy.js'));
 const streakLib = await import(src('lib/streak.js'));
 const achLib = await import(src('lib/achievements.js'));
+const annLib = await import(src('lib/announcements.js'));
 const act = await import(src('lib/activities.js'));
 const shop = await import(src('lib/shop.js'));
 
@@ -515,9 +516,9 @@ await test('ランキングはお財布、持ち物はショップから開け�
   assert.ok(customIds(await press('m:shop:open')).includes('m:shop:inventory'), 'ショップに持ち物');
 });
 
-await test('ホームに連続日数が出る', async () => {
+await test('ホームに連続記録が出る', async () => {
   const payload = await press('m:home:open');
-  assert.ok(firstEmbed(payload).fields.some((field) => field.name === '連続報告'));
+  assert.ok(firstEmbed(payload).fields.some((field) => field.name === '連続記録'));
 });
 
 section('[連日ボーナス（管理者が作る）]');
@@ -528,29 +529,39 @@ await test('管理メニューから連日ボーナスと称号に行ける', as
   assert.ok(ids.includes('m:admin:ach'));
 });
 
-await test('フォームからボーナスを追加でき、一覧に出る', async () => {
-  await press('m:admin:streaksave', { type: 5, admin: true, fields: { days: '3', reward: '300' } });
-  const payload = await press('m:admin:streak', { admin: true });
+await test('アクションを選んでからボーナスを設定する', async () => {
+  const list = await press('m:admin:streak', { admin: true });
+  const options = list.data.components[0].components[0].options.map((option) => option.value);
+  assert.ok(options.includes('筋トレ'), 'アクションの一覧から選ぶ');
+
+  const picked = await press('m:admin:streakact', { admin: true, values: ['筋トレ'] });
+  assert.match(firstEmbed(picked).title, /筋トレ/);
+  assertAllButtonsWork(picked, '連日ボーナス');
+});
+
+await test('フォームから追加でき、そのアクションにだけ付く', async () => {
+  await press('m:admin:streaksave:筋トレ', { type: 5, admin: true, fields: { days: '3', reward: '300' } });
+  const payload = await press('m:admin:streakview:筋トレ', { admin: true });
   assert.match(firstEmbed(payload).description, /3日連続/);
-  assert.match(firstEmbed(payload).description, /300/);
-  assertAllButtonsWork(payload, '連日ボーナス');
+
+  assert.equal((await streakLib.listStreakRewards(db, GUILD, '筋トレ')).length, 1);
+  assert.equal((await streakLib.listStreakRewards(db, GUILD, '勉強')).length, 0, '別のアクションには付かない');
 });
 
 await test('数字でない入力は弾かれる', async () => {
-  const payload = await press('m:admin:streaksave', { type: 5, admin: true, fields: { days: 'さん', reward: '300' } });
+  const payload = await press('m:admin:streaksave:筋トレ', { type: 5, admin: true, fields: { days: 'さん', reward: '300' } });
   assert.match(firstEmbed(payload).description, /数字/);
 });
 
 await test('権限が無ければボーナスを作れない', async () => {
-  const payload = await press('m:admin:streaksave', { type: 5, admin: false, fields: { days: '99', reward: '99999' } });
+  const payload = await press('m:admin:streaksave:筋トレ', { type: 5, admin: false, fields: { days: '99', reward: '99999' } });
   assert.match(firstEmbed(payload).description, /権限/);
-  const rewards = await streakLib.listStreakRewards(db, GUILD);
-  assert.equal(rewards.some((reward) => reward.days === 99), false);
+  assert.equal((await streakLib.listStreakRewards(db, GUILD, '筋トレ')).some((r) => r.days === 99), false);
 });
 
 await test('選ぶと削除できる', async () => {
-  await press('m:admin:streakdel', { admin: true, values: ['3'] });
-  assert.equal((await streakLib.listStreakRewards(db, GUILD)).length, 0);
+  await press('m:admin:streakdel:筋トレ', { admin: true, values: ['3'] });
+  assert.equal((await streakLib.listStreakRewards(db, GUILD, '筋トレ')).length, 0);
 });
 
 section('[称号（管理者が作る）]');
@@ -558,7 +569,7 @@ section('[称号（管理者が作る）]');
 await test('条件の種類を選ぶ画面が出る', async () => {
   const payload = await press('m:admin:achnew', { admin: true });
   const options = payload.data.components[0].components[0].options.map((option) => option.value);
-  assert.deepEqual(options.sort(), ['activity_reports', 'balance', 'streak', 'total_reports']);
+  assert.deepEqual(options.sort(), ['activity_count', 'activity_streak', 'balance', 'total_reports']);
 });
 
 await test('フォームから称号を作れる', async () => {
@@ -575,7 +586,7 @@ await test('フォームから称号を作れる', async () => {
 });
 
 await test('存在しないアクションを条件にはできない', async () => {
-  const payload = await press('m:admin:achsave:activity_reports', {
+  const payload = await press('m:admin:achsave:activity_count', {
     type: 5,
     admin: true,
     fields: { name: 'ヨガ王', emoji: '', threshold: '10', reward: '0', activity: 'ヨガ' },
@@ -597,7 +608,7 @@ await test('権限が無ければ称号を作れない', async () => {
 await test('メンバーは称号画面で獲得状況を見られる', async () => {
   const payload = await press('m:titles:open');
   const names = firstEmbed(payload).fields.map((field) => field.name);
-  assert.ok(names.some((name) => name.includes('連続報告')));
+  assert.ok(names.some((name) => name.includes('連続記録')));
   assert.ok(names.some((name) => name.includes('称号')));
   assertAllButtonsWork(payload, '称号画面');
 });
@@ -605,11 +616,12 @@ await test('メンバーは称号画面で獲得状況を見られる', async ()
 await test('報告すると連続日数と称号がまとめて処理される', async () => {
   await achLib.createAchievement(db, GUILD, {
     name: 'はじめの一歩',
-    condition_type: 'total_reports',
+    condition_type: 'activity_count',
     threshold: 1,
+    activity_name: 'ランニング',
     reward: 50,
   });
-  await streakLib.upsertStreakReward(db, GUILD, 1, 100);
+  await streakLib.upsertStreakReward(db, GUILD, 'ランニング', 1, 100);
   const fresh = 'userFresh';
   const ix = new Ix(rawInteraction({ customId: 'm:report:pick', values: ['ランニング'], userId: fresh }));
   const response = await handleComponent(ix, ctx);
@@ -620,7 +632,116 @@ await test('報告すると連続日数と称号がまとめて処理される',
   const announced = ctx.sent.at(-1).payload.embeds[0];
   assert.match(announced.description, /連続ボーナス/);
   assert.match(announced.description, /はじめの一歩/);
-  assert.ok(announced.fields.some((field) => field.name === '連続日数'));
+  assert.ok(announced.fields.some((field) => field.name.includes('連続')));
+});
+
+await test('獲得した称号を選ぶと名前の横に出る', async () => {
+  const fresh = 'userTitle';
+  await achLib.createAchievement(db, GUILD, {
+    name: '一歩目',
+    emoji: '🥇',
+    condition_type: 'activity_count',
+    threshold: 1,
+    activity_name: '早起き',
+    reward: 0,
+  });
+  await act.logReport(db, GUILD, fresh, '早起き', 10);
+  await achLib.evaluate(db, { guildId: GUILD, userId: fresh, timezone: 'Asia/Tokyo' });
+
+  const list = await achLib.earnedBy(db, GUILD, fresh);
+  const target = list.find((achievement) => achievement.name === '一歩目');
+
+  const ix = new Ix(rawInteraction({ customId: 'm:titles:equip', values: [String(target.id)], userId: fresh }));
+  const payload = await (await handleComponent(ix, ctx)).json();
+  assert.match(firstEmbed(payload).author.name, /一歩目/, '名前の横に称号が出る');
+  assert.match(firstEmbed(payload).description, /一歩目/);
+
+  const equipped = await achLib.equippedTitle(db, GUILD, fresh);
+  assert.equal(equipped.name, '一歩目');
+});
+
+await test('称号を外せる', async () => {
+  const fresh = 'userTitle';
+  const ix = new Ix(rawInteraction({ customId: 'm:titles:equip', values: ['none'], userId: fresh }));
+  await handleComponent(ix, ctx);
+  assert.equal(await achLib.equippedTitle(db, GUILD, fresh), null);
+});
+
+section('[定期発表（管理者が作る）]');
+
+await test('管理メニューから定期発表に行ける', async () => {
+  const ids = customIds(await press('m:admin:open', { admin: true }));
+  assert.ok(ids.includes('m:admin:ann'));
+  const payload = await press('m:admin:ann', { admin: true });
+  assertAllButtonsWork(payload, '定期発表');
+});
+
+await test('チャンネル→種類→頻度→詳細の順に設定できる', async () => {
+  const step1 = await press('m:admin:annnew', { admin: true });
+  assert.equal(step1.data.components[0].components[0].type, 8, 'チャンネル選択メニュー');
+
+  const step2 = await press('m:admin:annch', { admin: true, values: ['chan99'] });
+  const metrics = step2.data.components[0].components[0].options.map((option) => option.value);
+  assert.deepEqual(metrics.sort(), ['activity_count', 'activity_streak', 'activity_total', 'balance', 'earned']);
+
+  const step3 = await press('m:admin:annmetric:chan99', { admin: true, values: ['activity_streak'] });
+  const whens = step3.data.components[0].components[0].options.map((option) => option.value);
+  assert.equal(whens[0], 'daily');
+  assert.equal(whens.length, 8, '毎日＋曜日7つ');
+
+  await press('m:admin:annsave:chan99:activity_streak:daily', {
+    type: 5,
+    admin: true,
+    fields: { hour: '9', top_n: '3', prize: '500', activity: '筋トレ' },
+  });
+
+  const list = await annLib.listAnnouncements(db, GUILD);
+  const created = list.find((row) => row.channel_id === 'chan99');
+  assert.equal(created.metric, 'activity_streak');
+  assert.equal(created.activity_name, '筋トレ');
+  assert.equal(created.hour, 9);
+  assert.equal(created.top_n, 3);
+  assert.equal(created.prize, 500);
+  assert.equal(created.frequency, 'daily');
+});
+
+await test('時刻や対象アクションがおかしいと作られない', async () => {
+  const before = (await annLib.listAnnouncements(db, GUILD)).length;
+  const badHour = await press('m:admin:annsave:chan99:balance:daily', {
+    type: 5, admin: true, fields: { hour: '99', top_n: '3', prize: '0' },
+  });
+  assert.match(firstEmbed(badHour).description, /0 〜 23/);
+
+  const badActivity = await press('m:admin:annsave:chan99:activity_streak:daily', {
+    type: 5, admin: true, fields: { hour: '9', top_n: '3', prize: '0', activity: 'ヨガ' },
+  });
+  assert.match(firstEmbed(badActivity).description, /登録されていません/);
+  assert.equal((await annLib.listAnnouncements(db, GUILD)).length, before);
+});
+
+await test('権限が無ければ作れない', async () => {
+  const before = (await annLib.listAnnouncements(db, GUILD)).length;
+  const payload = await press('m:admin:annsave:chan99:balance:daily', {
+    type: 5, admin: false, fields: { hour: '9', top_n: '3', prize: '0' },
+  });
+  assert.match(firstEmbed(payload).description, /権限/);
+  assert.equal((await annLib.listAnnouncements(db, GUILD)).length, before);
+});
+
+await test('停止・再開・削除ができる', async () => {
+  const list = await annLib.listAnnouncements(db, GUILD);
+  const target = list.find((row) => row.channel_id === 'chan99');
+
+  const view = await press(`m:admin:annpick`, { admin: true, values: [String(target.id)] });
+  assertAllButtonsWork(view, '発表の設定');
+
+  await press(`m:admin:anntoggle:${target.id}`, { admin: true });
+  assert.equal((await annLib.getAnnouncement(db, GUILD, target.id)).enabled, 0);
+  await press(`m:admin:anntoggle:${target.id}`, { admin: true });
+  assert.equal((await annLib.getAnnouncement(db, GUILD, target.id)).enabled, 1);
+
+  await press(`m:admin:anndel:${target.id}`, { admin: true });
+  assert.equal(await annLib.getAnnouncement(db, GUILD, target.id), null);
 });
 
 runner.done();

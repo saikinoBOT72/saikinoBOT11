@@ -1,15 +1,27 @@
 import { PRESET_ACTIVITIES, getActivity, listActivities, removeActivity, upsertActivity } from '../lib/activities.js';
 import {
+  CONDITION_EXAMPLES,
   CONDITION_TYPES,
   createAchievement,
   describeCondition,
   listAchievements,
   removeAchievement,
 } from '../lib/achievements.js';
-import { listStreakRewards, removeStreakReward, upsertStreakReward } from '../lib/streak.js';
+import { listStreakRewards, removeStreakReward, removeStreakRewardsFor, upsertStreakReward } from '../lib/streak.js';
 import { adjust, getBalance, ledgerFor, setBalance, updateSettings } from '../lib/economy.js';
 import { coins, duration, truncate } from '../lib/format.js';
-import { modal, stringSelect, textInput, userSelect } from '../discord/builders.js';
+import { channelSelect, modal, stringSelect, textInput, userSelect } from '../discord/builders.js';
+import {
+  WEEKDAYS,
+  createAnnouncement,
+  describeAnnouncement,
+  describeSchedule,
+  getAnnouncement,
+  listAnnouncements,
+  removeAnnouncement,
+  toggleAnnouncement,
+} from '../lib/announcements.js';
+import { METRICS, rankingTitle } from '../lib/ranking.js';
 import { ButtonStyle } from '../discord/constants.js';
 import {
   backButton,
@@ -64,6 +76,7 @@ export async function open(ix, _args, ctx, notice = null) {
         button(id('admin', 'ach'), '称号', { emoji: '🏅', style: ButtonStyle.PRIMARY }),
       ),
       row(
+        button(id('admin', 'ann'), '定期発表', { emoji: '📢', style: ButtonStyle.PRIMARY }),
         button(id('admin', 'bal'), '残高を調整', { emoji: '💰' }),
         button(id('admin', 'cfg'), '通貨の設定', { emoji: '⚙️' }),
       ),
@@ -72,18 +85,89 @@ export async function open(ix, _args, ctx, notice = null) {
   });
 }
 
-/* ------------------------------------------------------------------ 連日ボーナス */
+/* ------------------------------------------------------------------ 連日ボーナス（アクションごと） */
 
 export async function streak(ix, _args, ctx, notice = null) {
   if (!ix.isAdmin) return denied(ix, ctx);
   const settings = await ctx.settings(ix.guildId);
-  const rewards = await listStreakRewards(ctx.db, ix.guildId);
+  const [activities, rewards] = await Promise.all([
+    listActivities(ctx.db, ix.guildId),
+    listStreakRewards(ctx.db, ix.guildId),
+  ]);
+
+  if (activities.length === 0) {
+    return show(ix, {
+      embeds: [
+        withNotice(
+          embed({
+            color: 0xe67e22,
+            title: '🔥 連日ボーナス',
+            description: '先に **📋 アクション管理** でアクションを作ってください。連日ボーナスはアクションごとに設定します。',
+          }),
+          notice,
+        ),
+      ],
+      components: [row(backButton('admin'), homeButton())],
+    });
+  }
+
+  const summary = activities.map((activity) => {
+    const own = rewards.filter((reward) => reward.activity === activity.name);
+    const detail =
+      own.length === 0
+        ? '未設定'
+        : own.map((reward) => `${reward.days}日→${settings.currency_emoji}${reward.reward}`).join('、');
+    return `${activity.emoji ?? '•'} **${activity.name}** — ${detail}`;
+  });
+
+  return show(ix, {
+    embeds: [
+      withNotice(
+        embed({
+          color: 0xe67e22,
+          title: '🔥 連日ボーナス',
+          description:
+            'アクションごとに「何日続けたら何コイン」を決められます。\n連続はアクション別に数えるので、筋トレと勉強は別々です。\n\n' +
+            summary.join('\n'),
+          footer: { text: '1日空くとそのアクションの連続は1日目に戻ります' },
+        }),
+        notice,
+      ),
+    ],
+    components: [
+      stringSelect(
+        id('admin', 'streakact'),
+        '設定するアクションを選ぶ',
+        activities.map((activity) => ({
+          label: truncate(activity.name, 100),
+          value: activity.name,
+          emoji: activity.emoji ?? undefined,
+          description: truncate(
+            rewards.filter((reward) => reward.activity === activity.name).length > 0 ? '設定済み' : 'まだ未設定',
+            100,
+          ),
+        })),
+      ),
+      row(backButton('admin'), homeButton()),
+    ],
+  });
+}
+
+export async function streakact(ix, _args, ctx) {
+  return streakview(ix, [ix.values[0]], ctx);
+}
+
+export async function streakview(ix, args, ctx, notice = null) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const activity = args.join(':');
+  const settings = await ctx.settings(ix.guildId);
+  const rewards = await listStreakRewards(ctx.db, ix.guildId, activity);
 
   const components = [];
   if (rewards.length > 0) {
     components.push(
       stringSelect(
-        id('admin', 'streakdel'),
+        id('admin', 'streakdel', activity),
         '削除するものを選ぶ',
         rewards.map((reward) => ({
           label: `${reward.days}日連続 → ${reward.reward}`,
@@ -94,8 +178,8 @@ export async function streak(ix, _args, ctx, notice = null) {
     );
   }
   components.push(
-    row(button(id('admin', 'streaknew'), '追加・変更', { emoji: '➕', style: ButtonStyle.SUCCESS })),
-    row(backButton('admin'), homeButton()),
+    row(button(id('admin', 'streaknew', activity), '追加・変更', { emoji: '➕', style: ButtonStyle.SUCCESS })),
+    row(backButton('admin', '管理メニュー'), button(id('admin', 'streak'), '別のアクション', { emoji: '🔄' }), homeButton()),
   );
 
   return show(ix, {
@@ -103,13 +187,12 @@ export async function streak(ix, _args, ctx, notice = null) {
       withNotice(
         embed({
           color: 0xe67e22,
-          title: '🔥 連日ボーナス',
+          title: `🔥 ${activity} の連日ボーナス`,
           description:
             rewards.length === 0
-              ? '毎日続けて報告した人へのボーナスを設定できます。\n例:「3日連続で50コイン」「7日連続で200コイン」\n\nまだ何も設定されていません。'
-              : '報告の連続日数が**ちょうどその日数に達したとき**に支払われます。\n\n' +
-                rewards.map((reward) => `🔥 **${reward.days}日連続** → ${coins(reward.reward, settings)}`).join('\n'),
-          footer: { text: '連続が途切れると1日目からやり直しになります' },
+              ? 'まだ設定されていません。\n例: 3日→50、7日→200、30日→1000 のように段階を作ると続きやすくなります。'
+              : rewards.map((reward) => `🔥 **${reward.days}日連続** → ${coins(reward.reward, settings)}`).join('\n'),
+          footer: { text: 'ちょうどその日数に到達したときに支払われます' },
         }),
         notice,
       ),
@@ -118,33 +201,36 @@ export async function streak(ix, _args, ctx, notice = null) {
   });
 }
 
-export async function streaknew(ix, _args, ctx) {
+export async function streaknew(ix, args, ctx) {
   if (!ix.isAdmin) return denied(ix, ctx);
+  const activity = args.join(':');
   return openModal(
-    modal(id('admin', 'streaksave'), '連日ボーナスを追加', [
+    modal(id('admin', 'streaksave', activity), `${truncate(activity, 30)} の連日ボーナス`, [
       textInput('days', '何日連続で', { placeholder: '例: 7', required: true, max: 6 }),
       textInput('reward', 'もらえるコイン', { placeholder: '例: 200', required: true, max: 12 }),
     ]),
   );
 }
 
-export async function streaksave(ix, _args, ctx) {
+export async function streaksave(ix, args, ctx) {
   if (!ix.isAdmin) return denied(ix, ctx);
+  const activity = args.join(':');
   const days = readInt(ix, 'days', { min: 1, max: 3650 });
   const reward = readInt(ix, 'reward', { min: 1 });
-  if (isError(days)) return streak(ix, [], ctx, days.error);
-  if (isError(reward)) return streak(ix, [], ctx, reward.error);
-  if (days === null || reward === null) return streak(ix, [], ctx, '日数とコインの両方を入力してください。');
+  if (isError(days)) return streakview(ix, [activity], ctx, days.error);
+  if (isError(reward)) return streakview(ix, [activity], ctx, reward.error);
+  if (days === null || reward === null) return streakview(ix, [activity], ctx, '日数とコインの両方を入力してください。');
 
-  await upsertStreakReward(ctx.db, ix.guildId, days, reward);
-  return streak(ix, [], ctx, `${days}日連続のボーナスを ${reward} に設定しました`);
+  await upsertStreakReward(ctx.db, ix.guildId, activity, days, reward);
+  return streakview(ix, [activity], ctx, `${days}日連続のボーナスを ${reward} に設定しました`);
 }
 
-export async function streakdel(ix, _args, ctx) {
+export async function streakdel(ix, args, ctx) {
   if (!ix.isAdmin) return denied(ix, ctx);
+  const activity = args.join(':');
   const days = Number(ix.values[0]);
-  await removeStreakReward(ctx.db, ix.guildId, days);
-  return streak(ix, [], ctx, `${days}日連続のボーナスを削除しました`);
+  await removeStreakReward(ctx.db, ix.guildId, activity, days);
+  return streakview(ix, [activity], ctx, `${days}日連続のボーナスを削除しました`);
 }
 
 /* ------------------------------------------------------------------ 称号 */
@@ -182,7 +268,7 @@ export async function ach(ix, _args, ctx, notice = null) {
           title: '🏅 称号',
           description:
             achievements.length === 0
-              ? '条件を満たした人に自動で贈られる称号を作れます。\n例:「筋トレ王 = 筋トレ100回」「鉄の意志 = 30日連続」\n\nまだ何も作られていません。'
+              ? '条件を満たした人に自動で贈られる称号を作れます。\n獲得した人は名前の横に表示できます。\n\nまだ何も作られていません。'
               : achievements
                   .map(
                     (achievement) =>
@@ -209,7 +295,7 @@ export async function achnew(ix, _args, ctx) {
         description: 'まず、どんな条件で贈るかを選んでください。',
         fields: Object.entries(CONDITION_TYPES).map(([key, type]) => ({
           name: type.label,
-          value: EXAMPLES[key],
+          value: CONDITION_EXAMPLES[key],
           inline: true,
         })),
       }),
@@ -221,20 +307,13 @@ export async function achnew(ix, _args, ctx) {
         Object.entries(CONDITION_TYPES).map(([key, type]) => ({
           label: type.label,
           value: key,
-          description: truncate(EXAMPLES[key], 100),
+          description: truncate(CONDITION_EXAMPLES[key], 100),
         })),
       ),
       row(backButton('admin', '管理メニュー'), button(id('admin', 'ach'), '称号一覧', { emoji: '🏅' })),
     ],
   });
 }
-
-const EXAMPLES = {
-  total_reports: '例: 報告を合計100回で「継続の鬼」',
-  activity_reports: '例: 筋トレを50回で「筋トレ王」',
-  streak: '例: 30日連続で「鉄の意志」',
-  balance: '例: 所持金10000で「富豪」',
-};
 
 export async function achtype(ix, _args, ctx) {
   if (!ix.isAdmin) return denied(ix, ctx);
@@ -245,7 +324,7 @@ export async function achtype(ix, _args, ctx) {
   const inputs = [
     textInput('name', '称号の名前', { placeholder: '例: 筋トレ王', required: true, max: 32 }),
     textInput('emoji', '絵文字（任意）', { placeholder: '例: 💪', max: 8 }),
-    textInput('threshold', `条件の数（${meta.label}）`, { placeholder: '例: 100', required: true, max: 12 }),
+    textInput('threshold', `条件の数（${meta.unit || 'コイン'}）`, { placeholder: '例: 100', required: true, max: 12 }),
     textInput('reward', '獲得時のボーナス（任意）', { placeholder: '例: 500', max: 12 }),
   ];
   if (meta.needsActivity) {
@@ -289,8 +368,7 @@ export async function achsave(ix, [type], ctx) {
 
 export async function achdel(ix, _args, ctx) {
   if (!ix.isAdmin) return denied(ix, ctx);
-  const id2 = Number(ix.values[0]);
-  await removeAchievement(ctx.db, ix.guildId, id2);
+  await removeAchievement(ctx.db, ix.guildId, Number(ix.values[0]));
   return ach(ix, [], ctx, '称号を削除しました');
 }
 
@@ -466,6 +544,7 @@ export async function actdel(ix, args, ctx) {
   if (!ix.isAdmin) return denied(ix, ctx);
   const name = args.join(':');
   await removeActivity(ctx.db, ix.guildId, name);
+  await removeStreakRewardsFor(ctx.db, ix.guildId, name);
   return acts(ix, [], ctx, `「${name}」を削除しました`);
 }
 
@@ -630,9 +709,272 @@ export async function cfgsave(ix, _args, ctx) {
   return open(ix, [], ctx, '設定を保存しました');
 }
 
+
+/* ------------------------------------------------------------------ 定期発表 */
+
+export async function ann(ix, _args, ctx, notice = null) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const list = await listAnnouncements(ctx.db, ix.guildId);
+
+  const components = [];
+  if (list.length > 0) {
+    components.push(
+      stringSelect(
+        id('admin', 'annpick'),
+        '設定を選んで停止・削除する',
+        list.map((announcement) => ({
+          label: truncate(
+            rankingTitle({
+              metric: announcement.metric,
+              activityName: announcement.activity_name,
+              period: announcement.frequency === 'weekly' ? 'week' : 'day',
+            }),
+            100,
+          ),
+          value: String(announcement.id),
+          description: truncate(`${describeSchedule(announcement)}${announcement.enabled ? '' : '・停止中'}`, 100),
+        })),
+      ),
+    );
+  }
+  components.push(
+    row(button(id('admin', 'annnew'), '新しく作る', { emoji: '➕', style: ButtonStyle.SUCCESS })),
+    row(backButton('admin'), homeButton()),
+  );
+
+  return show(ix, {
+    embeds: [
+      withNotice(
+        embed({
+          color: 0x3498db,
+          title: '📢 定期発表',
+          description:
+            list.length === 0
+              ? '決まった時間にランキングを自動で発表できます。\n「毎朝9時に今日の筋トレ連続記録」「毎週月曜に先週稼いだコイン」など。\n\nまだ何も設定されていません。'
+              : list
+                  .map((announcement) => `${announcement.enabled ? '🟢' : '⚪'} <#${announcement.channel_id}> ${describeAnnouncement(announcement)}`)
+                  .join('\n'),
+          footer: { text: '時刻は ' + ctx.timezone + ' 基準です' },
+        }),
+        notice,
+      ),
+    ],
+    components,
+  });
+}
+
+export async function annnew(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  return show(ix, {
+    embeds: [
+      embed({
+        color: 0x3498db,
+        title: '📢 定期発表を作る（1/4）',
+        description: 'まず、どのチャンネルに発表するかを選んでください。',
+      }),
+    ],
+    components: [channelSelect(id('admin', 'annch'), '発表するチャンネルを選ぶ'), row(backButton('admin', 'やめる'))],
+  });
+}
+
+export async function annch(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const channelId = ix.values[0];
+  return show(ix, {
+    embeds: [
+      embed({
+        color: 0x3498db,
+        title: '📢 定期発表を作る（2/4）',
+        description: `発表先: <#${channelId}>\n\n何のランキングを出しますか？`,
+        fields: Object.entries(METRICS).map(([key, meta]) => ({
+          name: meta.label,
+          value: METRIC_HINTS[key],
+          inline: true,
+        })),
+      }),
+    ],
+    components: [
+      stringSelect(
+        id('admin', 'annmetric', channelId),
+        'ランキングの種類を選ぶ',
+        Object.entries(METRICS).map(([key, meta]) => ({
+          label: meta.label,
+          value: key,
+          description: truncate(METRIC_HINTS[key], 100),
+        })),
+      ),
+      row(backButton('admin', 'やめる')),
+    ],
+  });
+}
+
+const METRIC_HINTS = {
+  balance: 'いま誰が一番持っているか',
+  earned: '期間内にどれだけ増やしたか',
+  activity_count: '期間内に何回報告したか',
+  activity_total: 'これまでの合計回数',
+  activity_streak: 'いま何日続いているか',
+};
+
+export async function annmetric(ix, [channelId], ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const metric = ix.values[0];
+  if (!METRICS[metric]) return ann(ix, [], ctx, '不明な種類です。');
+
+  const options = [
+    { label: '毎日', value: 'daily', description: '毎日その時刻に発表します' },
+    ...WEEKDAYS.map((name, index) => ({
+      label: `毎週 ${name}`,
+      value: `w${index}`,
+      description: `${name}にだけ発表します`,
+    })),
+  ];
+
+  return show(ix, {
+    embeds: [
+      embed({
+        color: 0x3498db,
+        title: '📢 定期発表を作る（3/4）',
+        description:
+          `発表先: <#${channelId}>\n種類: **${METRICS[metric].label}**\n\nどのくらいの頻度で発表しますか？\n` +
+          (METRICS[metric].usesPeriod
+            ? '*毎日を選ぶと「今日」の集計、毎週を選ぶと「今週」の集計になります。*'
+            : '*この種類は集計期間に関係なく、いまの状態で並べます。*'),
+      }),
+    ],
+    components: [
+      stringSelect(id('admin', 'annwhen', channelId, metric), '頻度を選ぶ', options),
+      row(backButton('admin', 'やめる')),
+    ],
+  });
+}
+
+export async function annwhen(ix, [channelId, metric], ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const when = ix.values[0];
+  const meta = METRICS[metric];
+  if (!meta) return ann(ix, [], ctx, '不明な種類です。');
+
+  const inputs = [
+    textInput('hour', '発表する時刻（0〜23の数字）', { placeholder: '例: 9', required: true, max: 2 }),
+    textInput('top_n', '何位まで出すか', { placeholder: '例: 5', required: true, max: 2, value: '5' }),
+    textInput('prize', '1位への賞金（0でなし）', { placeholder: '例: 500', max: 12, value: '0' }),
+  ];
+  if (meta.needsActivity) {
+    inputs.push(
+      textInput('activity', meta.needsActivity === true ? '対象のアクション名' : '対象のアクション名（空欄で全部）', {
+        placeholder: '例: 筋トレ',
+        required: meta.needsActivity === true,
+        max: 32,
+      }),
+    );
+  }
+
+  return openModal(modal(id('admin', 'annsave', channelId, metric, when), '発表の詳細（4/4）', inputs));
+}
+
+export async function annsave(ix, [channelId, metric, when], ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const meta = METRICS[metric];
+  if (!meta) return ann(ix, [], ctx, '不明な種類です。');
+
+  const hour = readInt(ix, 'hour', { min: 0, max: 23 });
+  const topN = readInt(ix, 'top_n', { min: 1, max: 20 });
+  const prize = readInt(ix, 'prize', { min: 0, fallback: 0 });
+  if (isError(hour)) return ann(ix, [], ctx, hour.error);
+  if (hour === null) return ann(ix, [], ctx, '発表する時刻を入力してください。');
+  if (isError(topN)) return ann(ix, [], ctx, topN.error);
+  if (isError(prize)) return ann(ix, [], ctx, prize.error);
+
+  let activityName = null;
+  if (meta.needsActivity) {
+    activityName = readText(ix, 'activity');
+    if (meta.needsActivity === true && !activityName) {
+      return ann(ix, [], ctx, 'この種類では対象のアクション名が必要です。');
+    }
+    if (activityName && !(await getActivity(ctx.db, ix.guildId, activityName))) {
+      return ann(ix, [], ctx, `「${activityName}」というアクションは登録されていません。`);
+    }
+  }
+
+  const created = await createAnnouncement(ctx.db, ix.guildId, {
+    channelId,
+    metric,
+    activityName,
+    frequency: when === 'daily' ? 'daily' : 'weekly',
+    weekday: when === 'daily' ? null : Number(when.slice(1)),
+    hour,
+    topN: topN ?? 5,
+    prize: prize ?? 0,
+  });
+
+  return ann(ix, [], ctx, `${describeSchedule(created)}に <#${channelId}> で発表します`);
+}
+
+export async function annpick(ix, _args, ctx) {
+  return annview(ix, [ix.values[0]], ctx);
+}
+
+export async function annview(ix, [rawId], ctx, notice = null) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const announcement = await getAnnouncement(ctx.db, ix.guildId, Number(rawId));
+  if (!announcement) return ann(ix, [], ctx, 'その設定は見つかりませんでした。');
+
+  return show(ix, {
+    embeds: [
+      withNotice(
+        embed({
+          color: 0x3498db,
+          title: '📢 発表の設定',
+          description: `発表先: <#${announcement.channel_id}>\n${describeAnnouncement(announcement)}`,
+          fields: [
+            { name: '状態', value: announcement.enabled ? '🟢 有効' : '⚪ 停止中', inline: true },
+            { name: '最後の発表', value: announcement.last_run_date ?? 'まだ', inline: true },
+          ],
+        }),
+        notice,
+      ),
+    ],
+    components: [
+      row(
+        button(id('admin', 'anntoggle', String(announcement.id)), announcement.enabled ? '停止する' : '再開する', {
+          emoji: announcement.enabled ? '⏸️' : '▶️',
+          style: announcement.enabled ? ButtonStyle.SECONDARY : ButtonStyle.SUCCESS,
+        }),
+        button(id('admin', 'anndel', String(announcement.id)), '削除する', { emoji: '🗑️', style: ButtonStyle.DANGER }),
+      ),
+      row(backButton('admin', '管理メニュー'), button(id('admin', 'ann'), '一覧へ', { emoji: '📢' }), homeButton()),
+    ],
+  });
+}
+
+export async function anntoggle(ix, [rawId], ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const updated = await toggleAnnouncement(ctx.db, ix.guildId, Number(rawId));
+  return annview(ix, [rawId], ctx, updated?.enabled ? '再開しました' : '停止しました');
+}
+
+export async function anndel(ix, [rawId], ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  await removeAnnouncement(ctx.db, ix.guildId, Number(rawId));
+  return ann(ix, [], ctx, '設定を削除しました');
+}
+
 export const actions = {
   open,
+  ann,
+  annnew,
+  annch,
+  annmetric,
+  annwhen,
+  annsave,
+  annpick,
+  annview,
+  anntoggle,
+  anndel,
   streak,
+  streakact,
+  streakview,
   streaknew,
   streaksave,
   streakdel,

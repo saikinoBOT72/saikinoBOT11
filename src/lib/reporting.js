@@ -1,7 +1,7 @@
 import { canReport, countToday, logReport } from './activities.js';
 import { deposit, getBalance } from './economy.js';
 import { payStreakBonus, touchStreak } from './streak.js';
-import { evaluate } from './achievements.js';
+import { equippedTitle, evaluate, titleTag } from './achievements.js';
 import { coins, duration, relative, truncate } from './format.js';
 import { embed } from '../discord/builders.js';
 
@@ -26,9 +26,13 @@ export async function attemptReport(db, { guildId, userId, activity, timezone, n
   await logReport(db, guildId, userId, activity.name, activity.reward, note);
   await deposit(db, guildId, userId, activity.reward, 'report', activity.name);
 
-  const streak = await touchStreak(db, guildId, userId, timezone);
-  const streakBonus = streak.isNewDay ? await payStreakBonus(db, guildId, userId, streak.current) : null;
+  // 連続記録はアクションごとに数える
+  const streak = await touchStreak(db, guildId, userId, activity.name, timezone);
+  const streakBonus = streak.isNewDay
+    ? await payStreakBonus(db, guildId, userId, activity.name, streak.current)
+    : null;
   const unlocked = await evaluate(db, { guildId, userId, timezone });
+  const title = await equippedTitle(db, guildId, userId);
 
   return {
     ok: true,
@@ -37,6 +41,7 @@ export async function attemptReport(db, { guildId, userId, activity, timezone, n
     streak,
     streakBonus,
     unlocked,
+    title,
   };
 }
 
@@ -44,7 +49,7 @@ export async function attemptReport(db, { guildId, userId, activity, timezone, n
 export function reportEmbed({ user, displayName, avatarUrl, activity, result, settings, note }) {
   const fields = [{ name: '所持金', value: coins(result.balance, settings), inline: true }];
   if (result.streak?.current > 0) {
-    fields.push({ name: '連続日数', value: `🔥 **${result.streak.current}** 日`, inline: true });
+    fields.push({ name: `${activity.name} の連続`, value: `🔥 **${result.streak.current}** 日`, inline: true });
   }
   if (activity.daily_limit > 0) {
     fields.push({ name: '今日の報告', value: `${result.count} / ${activity.daily_limit} 回`, inline: true });
@@ -53,16 +58,19 @@ export function reportEmbed({ user, displayName, avatarUrl, activity, result, se
 
   const lines = [`${coins(activity.reward, settings)} を獲得しました`];
   if (result.streakBonus) {
-    lines.push(`🔥 **${result.streakBonus.days}日連続ボーナス！** ${coins(result.streakBonus.reward, settings)} を追加で獲得`);
+    lines.push(
+      `🔥 **${activity.name} ${result.streakBonus.days}日連続ボーナス！** ${coins(result.streakBonus.reward, settings)} を追加で獲得`,
+    );
   }
   for (const unlocked of result.unlocked ?? []) {
     const bonus = unlocked.reward > 0 ? `（${coins(unlocked.reward, settings)}）` : '';
     lines.push(`🏅 称号 **${unlocked.emoji ?? ''}${unlocked.name}** を獲得！${bonus}`);
   }
 
+  const tag = titleTag(result.title);
   return embed({
     color: 0x2ecc71,
-    author: { name: displayName ?? user.username, icon_url: avatarUrl },
+    author: { name: `${tag ? `【${tag}】` : ''}${displayName ?? user.username}`, icon_url: avatarUrl },
     title: `${activity.emoji ?? '✅'} ${activity.name} 達成！`,
     description: lines.join('\n'),
     fields,
