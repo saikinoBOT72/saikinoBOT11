@@ -7,7 +7,13 @@ import {
   listAchievements,
   removeAchievement,
 } from '../lib/achievements.js';
-import { listStreakRewards, removeStreakReward, removeStreakRewardsFor, upsertStreakReward } from '../lib/streak.js';
+import {
+  describeStreakReward,
+  listStreakRewards,
+  removeStreakReward,
+  removeStreakRewardsFor,
+  upsertStreakReward,
+} from '../lib/streak.js';
 import { adjust, getBalance, ledgerFor, setBalance, updateSettings } from '../lib/economy.js';
 import { coins, duration, truncate } from '../lib/format.js';
 import { channelSelect, modal, stringSelect, textInput, userSelect } from '../discord/builders.js';
@@ -116,7 +122,7 @@ export async function streak(ix, _args, ctx, notice = null) {
     const detail =
       own.length === 0
         ? '未設定'
-        : own.map((reward) => `${reward.days}日→${settings.currency_emoji}${reward.reward}`).join('、');
+        : own.map((reward) => describeStreakReward(reward, settings)).join('、');
     return `${activity.emoji ?? '•'} **${activity.name}** — ${detail}`;
   });
 
@@ -127,7 +133,7 @@ export async function streak(ix, _args, ctx, notice = null) {
           color: 0xe67e22,
           title: '🔥 連日ボーナス',
           description:
-            'アクションごとに「何日続けたら何コイン」を決められます。\n連続はアクション別に数えるので、筋トレと勉強は別々です。\n\n' +
+            'アクションごとに「何日目から何日目までは毎日何コイン」を決められます。\n連続はアクション別に数えるので、筋トレと勉強は別々です。\n\n' +
             summary.join('\n'),
           footer: { text: '1日空くとそのアクションの連続は1日目に戻ります' },
         }),
@@ -170,8 +176,8 @@ export async function streakview(ix, args, ctx, notice = null) {
         id('admin', 'streakdel', activity),
         '削除するものを選ぶ',
         rewards.map((reward) => ({
-          label: `${reward.days}日連続 → ${reward.reward}`,
-          value: String(reward.days),
+          label: truncate(describeStreakReward(reward, null), 100),
+          value: String(reward.from_days),
           description: '選ぶと削除されます',
         })),
       ),
@@ -190,9 +196,15 @@ export async function streakview(ix, args, ctx, notice = null) {
           title: `🔥 ${activity} の連日ボーナス`,
           description:
             rewards.length === 0
-              ? 'まだ設定されていません。\n例: 3日→50、7日→200、30日→1000 のように段階を作ると続きやすくなります。'
-              : rewards.map((reward) => `🔥 **${reward.days}日連続** → ${coins(reward.reward, settings)}`).join('\n'),
-          footer: { text: 'ちょうどその日数に到達したときに支払われます' },
+              ? 'まだ設定されていません。\n例:\n・3〜6日目は毎日 50\n・7〜13日目は毎日 100\n・14日目以降は毎日 200\nのように段階を作ると続きやすくなります。'
+              : rewards
+                  .map((reward) => {
+                    const range =
+                      reward.to_days === 0 ? `**${reward.from_days}日目以降**` : `**${reward.from_days}〜${reward.to_days}日目**`;
+                    return `🔥 ${range} は毎日 ${coins(reward.reward, settings)}`;
+                  })
+                  .join('\n'),
+          footer: { text: '連続日数がその範囲にあるあいだ、報告するたび毎日もらえます' },
         }),
         notice,
       ),
@@ -205,9 +217,10 @@ export async function streaknew(ix, args, ctx) {
   if (!ix.isAdmin) return denied(ix, ctx);
   const activity = args.join(':');
   return openModal(
-    modal(id('admin', 'streaksave', activity), `${truncate(activity, 30)} の連日ボーナス`, [
-      textInput('days', '何日連続で', { placeholder: '例: 7', required: true, max: 6 }),
-      textInput('reward', 'もらえるコイン', { placeholder: '例: 200', required: true, max: 12 }),
+    modal(id('admin', 'streaksave', activity), `${truncate(activity, 24)} の連日ボーナス`, [
+      textInput('from_days', '何日目から', { placeholder: '例: 3', required: true, max: 6 }),
+      textInput('to_days', '何日目まで（空欄ならそれ以降ずっと）', { placeholder: '例: 6', max: 6 }),
+      textInput('reward', 'そのあいだ毎日もらえるコイン', { placeholder: '例: 50', required: true, max: 12 }),
     ]),
   );
 }
@@ -215,22 +228,31 @@ export async function streaknew(ix, args, ctx) {
 export async function streaksave(ix, args, ctx) {
   if (!ix.isAdmin) return denied(ix, ctx);
   const activity = args.join(':');
-  const days = readInt(ix, 'days', { min: 1, max: 3650 });
+  const fromDays = readInt(ix, 'from_days', { min: 1, max: 3650 });
+  const toDays = readInt(ix, 'to_days', { min: 0, max: 3650, fallback: 0 });
   const reward = readInt(ix, 'reward', { min: 1 });
-  if (isError(days)) return streakview(ix, [activity], ctx, days.error);
-  if (isError(reward)) return streakview(ix, [activity], ctx, reward.error);
-  if (days === null || reward === null) return streakview(ix, [activity], ctx, '日数とコインの両方を入力してください。');
 
-  await upsertStreakReward(ctx.db, ix.guildId, activity, days, reward);
-  return streakview(ix, [activity], ctx, `${days}日連続のボーナスを ${reward} に設定しました`);
+  if (isError(fromDays)) return streakview(ix, [activity], ctx, fromDays.error);
+  if (isError(toDays)) return streakview(ix, [activity], ctx, toDays.error);
+  if (isError(reward)) return streakview(ix, [activity], ctx, reward.error);
+  if (fromDays === null || reward === null) {
+    return streakview(ix, [activity], ctx, '「何日目から」と「もらえるコイン」は必ず入力してください。');
+  }
+  if (toDays !== 0 && toDays < fromDays) {
+    return streakview(ix, [activity], ctx, '「何日目まで」は「何日目から」以上にしてください（空欄ならそれ以降ずっと）。');
+  }
+
+  await upsertStreakReward(ctx.db, ix.guildId, activity, fromDays, toDays, reward);
+  const range = toDays === 0 ? `${fromDays}日目以降` : `${fromDays}〜${toDays}日目`;
+  return streakview(ix, [activity], ctx, `${range} は毎日 ${reward} に設定しました`);
 }
 
 export async function streakdel(ix, args, ctx) {
   if (!ix.isAdmin) return denied(ix, ctx);
   const activity = args.join(':');
-  const days = Number(ix.values[0]);
-  await removeStreakReward(ctx.db, ix.guildId, activity, days);
-  return streakview(ix, [activity], ctx, `${days}日連続のボーナスを削除しました`);
+  const fromDays = Number(ix.values[0]);
+  await removeStreakReward(ctx.db, ix.guildId, activity, fromDays);
+  return streakview(ix, [activity], ctx, `${fromDays}日目からの設定を削除しました`);
 }
 
 /* ------------------------------------------------------------------ 称号 */

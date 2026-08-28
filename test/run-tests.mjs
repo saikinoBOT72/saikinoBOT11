@@ -208,28 +208,64 @@ await test('続いているものから順に並べて取れる', async () => {
   assert.equal(list.filter((entry) => entry.activity === '勉強')[0].current, 1);
 });
 
-await test('ボーナスはアクションとちょうどの日数が一致したときだけ出る', async () => {
-  await streak.upsertStreakReward(db, G, '筋トレ', 3, 300);
+await test('範囲の中なら毎日もらえる', async () => {
+  await streak.upsertStreakReward(db, G, '筋トレ', 3, 6, 50);
   const before = await eco.getBalance(db, G, A);
 
-  assert.equal(await streak.payStreakBonus(db, G, A, '筋トレ', 2), null, '2日目は対象外');
-  assert.equal(await streak.payStreakBonus(db, G, A, '勉強', 3), null, '別のアクションは対象外');
+  assert.equal(await streak.payStreakBonus(db, G, A, '筋トレ', 2), null, '範囲の手前は対象外');
+  assert.equal(await streak.payStreakBonus(db, G, A, '筋トレ', 7), null, '範囲を過ぎたら対象外');
+  assert.equal(await streak.payStreakBonus(db, G, A, '勉強', 4), null, '別のアクションは対象外');
   assert.equal(await eco.getBalance(db, G, A), before);
 
-  const paid = await streak.payStreakBonus(db, G, A, '筋トレ', 3);
-  assert.deepEqual(paid, { days: 3, reward: 300 });
-  assert.equal(await eco.getBalance(db, G, A), before + 300);
+  for (const day of [3, 4, 5, 6]) {
+    assert.deepEqual(await streak.payStreakBonus(db, G, A, '筋トレ', day), { days: day, reward: 50 });
+  }
+  assert.equal(await eco.getBalance(db, G, A), before + 200, '4日ぶん毎日もらえる');
+});
+
+await test('上限を空けると、それ以降ずっともらえる', async () => {
+  await streak.upsertStreakReward(db, G, '筋トレ', 14, 0, 200);
+  for (const day of [14, 100, 3650]) {
+    assert.deepEqual(await streak.payStreakBonus(db, G, A, '筋トレ', day), { days: day, reward: 200 });
+  }
+});
+
+await test('範囲が重なったら、細かいほう（開始が後のほう）が使われる', async () => {
+  for (const reward of await streak.listStreakRewards(db, G, '筋トレ')) {
+    await streak.removeStreakReward(db, G, '筋トレ', reward.from_days);
+  }
+  await streak.upsertStreakReward(db, G, '筋トレ', 1, 0, 10); // 1日目以降ずっと
+  await streak.upsertStreakReward(db, G, '筋トレ', 7, 13, 100); // その中の一部を上書き
+
+  assert.equal((await streak.findStreakReward(db, G, '筋トレ', 5)).reward, 10);
+  assert.equal((await streak.findStreakReward(db, G, '筋トレ', 7)).reward, 100);
+  assert.equal((await streak.findStreakReward(db, G, '筋トレ', 13)).reward, 100);
+  assert.equal((await streak.findStreakReward(db, G, '筋トレ', 14)).reward, 10, '範囲を抜けたら広いほうに戻る');
 });
 
 await test('設定の上書き・削除・アクション削除時の片付け', async () => {
-  await streak.upsertStreakReward(db, G, '筋トレ', 3, 500);
-  assert.equal((await streak.listStreakRewards(db, G, '筋トレ')).length, 1, '同じ日数は上書き');
-  await streak.upsertStreakReward(db, G, '勉強', 7, 100);
-  assert.equal((await streak.listStreakRewards(db, G)).length, 2, '全アクション分');
+  await streak.upsertStreakReward(db, G, '筋トレ', 3, 6, 500);
+  const own = await streak.listStreakRewards(db, G, '筋トレ');
+  assert.equal(own.filter((reward) => reward.from_days === 3).length, 1, '同じ開始日は上書き');
+  assert.equal(own.find((reward) => reward.from_days === 3).reward, 500);
+
+  await streak.upsertStreakReward(db, G, '勉強', 7, 0, 100);
+  assert.equal((await streak.listStreakRewards(db, G, '勉強')).length, 1);
 
   assert.equal(await streak.removeStreakReward(db, G, '筋トレ', 3), true);
   await streak.removeStreakRewardsFor(db, G, '勉強');
+  assert.equal((await streak.listStreakRewards(db, G, '勉強')).length, 0);
+
+  for (const reward of await streak.listStreakRewards(db, G, '筋トレ')) {
+    await streak.removeStreakReward(db, G, '筋トレ', reward.from_days);
+  }
   assert.equal((await streak.listStreakRewards(db, G)).length, 0);
+});
+
+await test('説明が読める日本語になる', () => {
+  const settings = { currency_emoji: '🪙', currency_name: 'コイン' };
+  assert.equal(streak.describeStreakReward({ from_days: 3, to_days: 6, reward: 50 }, settings), '3〜6日目 は毎日 🪙50');
+  assert.equal(streak.describeStreakReward({ from_days: 14, to_days: 0, reward: 200 }, settings), '14日目以降 は毎日 🪙200');
 });
 
 section('[称号]');
@@ -346,7 +382,7 @@ await test('削除すると獲得記録と装備も消える', async () => {
 await test('報告すると連続日数・ボーナス・称号がまとめて処理される', async () => {
   const C = 'userC';
   await eco.setBalance(db, G, C, 0, 'test');
-  await streak.upsertStreakReward(db, G, 'ランニング', 1, 77);
+  await streak.upsertStreakReward(db, G, 'ランニング', 1, 0, 77);
   await ach.createAchievement(db, G, {
     name: '第一歩',
     condition_type: 'activity_count',
@@ -619,10 +655,21 @@ await test('状態遷移（二重開始・出し直しを防ぐ）', async () =>
 
 await test('あいこで次ラウンドに進むと手がリセットされる', async () => {
   await rps.setHand(db, 'm1', 'opponent', 'rock');
-  const next = await rps.nextRound(db, 'm1');
+  const next = await rps.nextRound(db, 'm1', 1);
   assert.equal(next.round, 2);
   assert.equal(next.challenger_hand, null);
   assert.equal(next.opponent_hand, null);
+  assert.equal(await rps.nextRound(db, 'm1', 1), null, '同じラウンドを二度は進められない');
+});
+
+await test('決着は先に取った1つだけが確定できる', async () => {
+  await rps.setHand(db, 'm1', 'challenger', 'rock');
+  await rps.setHand(db, 'm1', 'opponent', 'scissors');
+  assert.equal(await rps.finishMatch(db, 'm1'), true);
+  assert.equal(await rps.finishMatch(db, 'm1'), false, '二重に確定できない');
+  assert.equal((await rps.getMatch(db, 'm1')).status, 'done');
+  // 後続のテストのために元に戻す
+  await rps.setStatus(db, 'm1', 'playing');
 });
 
 await test('時間切れの対戦を返金して中止する', async () => {
@@ -793,8 +840,31 @@ await test('旧版が入ったデータベースでも 0003 で正しい形に�
 });
 
 await test('新規のデータベースでも同じ形になる', async () => {
-  const columns = (await db.all('PRAGMA table_info(streaks)')).map((column) => column.name);
-  assert.deepEqual(columns.sort(), ['activity', 'best', 'current', 'guild_id', 'last_date', 'user_id']);
+  const streakColumns = (await db.all('PRAGMA table_info(streaks)')).map((column) => column.name);
+  assert.deepEqual(streakColumns.sort(), ['activity', 'best', 'current', 'guild_id', 'last_date', 'user_id']);
+  const rewardColumns = (await db.all('PRAGMA table_info(streak_rewards)')).map((column) => column.name);
+  assert.deepEqual(rewardColumns.sort(), ['activity', 'from_days', 'guild_id', 'reward', 'to_days']);
+});
+
+await test('0004 は既存の「ちょうどN日目」設定をその日だけの範囲に引き継ぐ', async () => {
+  const { default: Database } = await import('better-sqlite3');
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const dir = path.join(process.cwd(), 'migrations');
+
+  const before = new Database(':memory:');
+  for (const file of ['0001_init.sql', '0002_streaks_titles_announcements.sql', '0003_repair_streak_tables.sql']) {
+    before.exec(fs.readFileSync(path.join(dir, file), 'utf8'));
+  }
+  before.prepare('INSERT INTO streak_rewards (guild_id, activity, days, reward) VALUES (?,?,?,?)').run('g', '筋トレ', 7, 200);
+
+  before.exec(fs.readFileSync(path.join(dir, '0004_streak_reward_ranges.sql'), 'utf8'));
+
+  const migrated = before.prepare('SELECT * FROM streak_rewards').get();
+  assert.equal(migrated.from_days, 7);
+  assert.equal(migrated.to_days, 7, '前の設定はその日だけの範囲になる');
+  assert.equal(migrated.reward, 200);
+  before.close();
 });
 
 runner.done();

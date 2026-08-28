@@ -2,6 +2,7 @@ import {
   HANDS,
   MAX_DRAWS,
   createMatch,
+  finishMatch,
   getMatch,
   judge,
   markPlaying,
@@ -132,11 +133,15 @@ async function handleHand(ix, ctx, match, hand) {
   if (!updated.challenger_hand || !updated.opponent_hand) {
     return reply({ content: `${HANDS[hand].emoji} ${HANDS[hand].label} を出しました。相手を待っています。` });
   }
-  return resolve(ctx, updated);
+  return resolveMatch(ctx, updated);
 }
 
-/** 両者の手が出そろったので勝敗を決める。 */
-async function resolve(ctx, match) {
+/**
+ * 両者の手が出そろったので勝敗を決める。
+ * 二人が同時に押すとこの関数も同時に走りうるので、支払いの前に必ず決着を「取る」。
+ * 取れなかった側は結果を書き換えず、本人にだけ短く返す。
+ */
+export async function resolveMatch(ctx, match) {
   const settings = await getSettings(ctx.db, match.guild_id);
   const result = judge(match.challenger_hand, match.opponent_hand);
   const handsLine =
@@ -145,7 +150,7 @@ async function resolve(ctx, match) {
 
   if (result === 'draw') {
     if (match.round >= MAX_DRAWS) {
-      await setStatus(ctx.db, match.id, 'done');
+      if (!(await finishMatch(ctx.db, match.id))) return alreadyResolved();
       await refund(ctx.db, match);
       return update({
         content: '',
@@ -159,7 +164,8 @@ async function resolve(ctx, match) {
         components: [],
       });
     }
-    const next = await nextRound(ctx.db, match.id);
+    const next = await nextRound(ctx.db, match.id, match.round);
+    if (!next) return alreadyResolved();
     return update({
       content: `<@${match.challenger_id}> <@${match.opponent_id}>`,
       embeds: [
@@ -172,7 +178,7 @@ async function resolve(ctx, match) {
     });
   }
 
-  await setStatus(ctx.db, match.id, 'done');
+  if (!(await finishMatch(ctx.db, match.id))) return alreadyResolved();
   const winnerId = result === 'challenger' ? match.challenger_id : match.opponent_id;
   const loserId = result === 'challenger' ? match.opponent_id : match.challenger_id;
   if (match.bet > 0) await deposit(ctx.db, match.guild_id, winnerId, match.bet * 2, 'rps:win', match.id);
@@ -212,6 +218,11 @@ function handRow(id) {
       button(`rps:hand:${id}:${key}`, meta.label, { emoji: meta.emoji, style: ButtonStyle.PRIMARY }),
     ),
   );
+}
+
+/** 相手のリクエストが先に決着を確定した場合の返事。 */
+function alreadyResolved() {
+  return reply({ content: '結果が出ました！ 上のメッセージを見てください。' });
 }
 
 export function cancelEmbed(text) {

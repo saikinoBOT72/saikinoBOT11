@@ -439,6 +439,72 @@ await test('終わった勝負のボタンはもう効かない', async () => {
   assert.match(screenText(payload), /終了/);
 });
 
+await test('二人が同時に手を出しても賞金は一度しか払われない', async () => {
+  await eco.setBalance(db, GUILD, ME, 1000, 'test');
+  await eco.setBalance(db, GUILD, OTHER, 1000, 'test');
+  const settings = await ctx.settings(GUILD);
+  await rpsChallenge.startChallenge(ctx, {
+    guildId: GUILD, channelId: 'c1', challengerId: ME, opponentId: OTHER, bet: 100, settings,
+  });
+  const pending = await db.get("SELECT * FROM rps_matches WHERE status = 'pending' ORDER BY created_at DESC");
+  await pressRps(`rps:accept:${pending.id}`, { userId: OTHER });
+
+  // 両者の手が揃った状態を作り、決着処理が同時に2回走る状況を再現する
+  await db.run("UPDATE rps_matches SET challenger_hand = 'rock', opponent_hand = 'scissors' WHERE id = ?1", pending.id);
+  const match = await db.get('SELECT * FROM rps_matches WHERE id = ?1', pending.id);
+
+  const first = await rpsChallenge.resolveMatch(ctx, match);
+  const second = await rpsChallenge.resolveMatch(ctx, match);
+
+  assert.equal((await first.json()).type, 7, '先に取った方が結果を表示する');
+  assert.equal((await second.json()).type, 4, 'あとの方は本人にだけ短く返す');
+
+  assert.equal(await eco.getBalance(db, GUILD, ME), 1100, '勝者への支払いは1回だけ（900 + 200）');
+  assert.equal(await eco.getBalance(db, GUILD, OTHER), 900);
+});
+
+await test('あいこも同時押しで二重に進まない', async () => {
+  await eco.setBalance(db, GUILD, ME, 1000, 'test');
+  await eco.setBalance(db, GUILD, OTHER, 1000, 'test');
+  const settings = await ctx.settings(GUILD);
+  await rpsChallenge.startChallenge(ctx, {
+    guildId: GUILD, channelId: 'c1', challengerId: ME, opponentId: OTHER, bet: 100, settings,
+  });
+  const pending = await db.get("SELECT * FROM rps_matches WHERE status = 'pending' ORDER BY created_at DESC");
+  await pressRps(`rps:accept:${pending.id}`, { userId: OTHER });
+  await db.run("UPDATE rps_matches SET challenger_hand = 'rock', opponent_hand = 'rock' WHERE id = ?1", pending.id);
+  const match = await db.get('SELECT * FROM rps_matches WHERE id = ?1', pending.id);
+
+  await rpsChallenge.resolveMatch(ctx, match);
+  await rpsChallenge.resolveMatch(ctx, match);
+
+  const after = await db.get('SELECT * FROM rps_matches WHERE id = ?1', pending.id);
+  assert.equal(after.round, 2, 'ラウンドは1つだけ進む');
+  assert.equal(after.challenger_hand, null);
+});
+
+await test('あいこが続いた末の返金も一度だけ', async () => {
+  await eco.setBalance(db, GUILD, ME, 1000, 'test');
+  await eco.setBalance(db, GUILD, OTHER, 1000, 'test');
+  const settings = await ctx.settings(GUILD);
+  await rpsChallenge.startChallenge(ctx, {
+    guildId: GUILD, channelId: 'c1', challengerId: ME, opponentId: OTHER, bet: 100, settings,
+  });
+  const pending = await db.get("SELECT * FROM rps_matches WHERE status = 'pending' ORDER BY created_at DESC");
+  await pressRps(`rps:accept:${pending.id}`, { userId: OTHER });
+  await db.run(
+    "UPDATE rps_matches SET challenger_hand = 'paper', opponent_hand = 'paper', round = 5 WHERE id = ?1",
+    pending.id,
+  );
+  const match = await db.get('SELECT * FROM rps_matches WHERE id = ?1', pending.id);
+
+  await rpsChallenge.resolveMatch(ctx, match);
+  await rpsChallenge.resolveMatch(ctx, match);
+
+  assert.equal(await eco.getBalance(db, GUILD, ME), 1000, '返金は1回だけ');
+  assert.equal(await eco.getBalance(db, GUILD, OTHER), 1000);
+});
+
 
 section('[自分のデータ]');
 
@@ -539,28 +605,57 @@ await test('アクションを選んでからボーナスを設定する', async
   assertAllButtonsWork(picked, '連日ボーナス');
 });
 
-await test('フォームから追加でき、そのアクションにだけ付く', async () => {
-  await press('m:admin:streaksave:筋トレ', { type: 5, admin: true, fields: { days: '3', reward: '300' } });
+await test('範囲で追加でき、そのアクションにだけ付く', async () => {
+  await press('m:admin:streaksave:筋トレ', {
+    type: 5, admin: true, fields: { from_days: '3', to_days: '6', reward: '50' },
+  });
   const payload = await press('m:admin:streakview:筋トレ', { admin: true });
-  assert.match(firstEmbed(payload).description, /3日連続/);
+  assert.match(firstEmbed(payload).description, /3〜6日目/);
+  assert.match(firstEmbed(payload).description, /毎日/);
 
-  assert.equal((await streakLib.listStreakRewards(db, GUILD, '筋トレ')).length, 1);
+  const own = await streakLib.listStreakRewards(db, GUILD, '筋トレ');
+  assert.equal(own.length, 1);
+  assert.equal(own[0].from_days, 3);
+  assert.equal(own[0].to_days, 6);
   assert.equal((await streakLib.listStreakRewards(db, GUILD, '勉強')).length, 0, '別のアクションには付かない');
 });
 
+await test('上限を空欄にすると、それ以降ずっとになる', async () => {
+  await press('m:admin:streaksave:筋トレ', {
+    type: 5, admin: true, fields: { from_days: '14', to_days: '', reward: '200' },
+  });
+  const payload = await press('m:admin:streakview:筋トレ', { admin: true });
+  assert.match(firstEmbed(payload).description, /14日目以降/);
+  assert.equal((await streakLib.findStreakReward(db, GUILD, '筋トレ', 999)).reward, 200);
+});
+
+await test('終わりが始まりより前だと弾かれる', async () => {
+  const payload = await press('m:admin:streaksave:筋トレ', {
+    type: 5, admin: true, fields: { from_days: '10', to_days: '2', reward: '50' },
+  });
+  assert.match(firstEmbed(payload).description, /以上にしてください/);
+  assert.equal((await streakLib.listStreakRewards(db, GUILD, '筋トレ')).some((r) => r.from_days === 10), false);
+});
+
 await test('数字でない入力は弾かれる', async () => {
-  const payload = await press('m:admin:streaksave:筋トレ', { type: 5, admin: true, fields: { days: 'さん', reward: '300' } });
+  const payload = await press('m:admin:streaksave:筋トレ', {
+    type: 5, admin: true, fields: { from_days: 'さん', to_days: '', reward: '300' },
+  });
   assert.match(firstEmbed(payload).description, /数字/);
 });
 
 await test('権限が無ければボーナスを作れない', async () => {
-  const payload = await press('m:admin:streaksave:筋トレ', { type: 5, admin: false, fields: { days: '99', reward: '99999' } });
+  const payload = await press('m:admin:streaksave:筋トレ', {
+    type: 5, admin: false, fields: { from_days: '99', to_days: '', reward: '99999' },
+  });
   assert.match(firstEmbed(payload).description, /権限/);
-  assert.equal((await streakLib.listStreakRewards(db, GUILD, '筋トレ')).some((r) => r.days === 99), false);
+  assert.equal((await streakLib.listStreakRewards(db, GUILD, '筋トレ')).some((r) => r.from_days === 99), false);
 });
 
 await test('選ぶと削除できる', async () => {
   await press('m:admin:streakdel:筋トレ', { admin: true, values: ['3'] });
+  assert.equal((await streakLib.listStreakRewards(db, GUILD, '筋トレ')).some((r) => r.from_days === 3), false);
+  await press('m:admin:streakdel:筋トレ', { admin: true, values: ['14'] });
   assert.equal((await streakLib.listStreakRewards(db, GUILD, '筋トレ')).length, 0);
 });
 
@@ -621,7 +716,7 @@ await test('報告すると連続日数と称号がまとめて処理される',
     activity_name: 'ランニング',
     reward: 50,
   });
-  await streakLib.upsertStreakReward(db, GUILD, 'ランニング', 1, 100);
+  await streakLib.upsertStreakReward(db, GUILD, 'ランニング', 1, 0, 100);
   const fresh = 'userFresh';
   const ix = new Ix(rawInteraction({ customId: 'm:report:pick', values: ['ランニング'], userId: fresh }));
   const response = await handleComponent(ix, ctx);

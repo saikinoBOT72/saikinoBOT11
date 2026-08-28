@@ -84,36 +84,64 @@ export async function touchStreak(db, guildId, userId, activity, timezone) {
   return { current, best, isNewDay: true };
 }
 
+/**
+ * 連日ボーナスの設定。
+ * 「from_days 日目から to_days 日目のあいだは、毎日 reward コイン」を表す。
+ * to_days が 0 のときは上限なし（それ以降ずっと）。
+ */
 export async function listStreakRewards(db, guildId, activity = null) {
   if (activity) {
     return db.all(
-      'SELECT * FROM streak_rewards WHERE guild_id = ?1 AND activity = ?2 ORDER BY days ASC',
+      'SELECT * FROM streak_rewards WHERE guild_id = ?1 AND activity = ?2 ORDER BY from_days ASC',
       guildId,
       activity,
     );
   }
-  return db.all('SELECT * FROM streak_rewards WHERE guild_id = ?1 ORDER BY activity ASC, days ASC', guildId);
+  return db.all('SELECT * FROM streak_rewards WHERE guild_id = ?1 ORDER BY activity ASC, from_days ASC', guildId);
 }
 
-export async function upsertStreakReward(db, guildId, activity, days, reward) {
+export async function upsertStreakReward(db, guildId, activity, fromDays, toDays, reward) {
   await db.run(
-    `INSERT INTO streak_rewards (guild_id, activity, days, reward) VALUES (?1, ?2, ?3, ?4)
-     ON CONFLICT(guild_id, activity, days) DO UPDATE SET reward = excluded.reward`,
+    `INSERT INTO streak_rewards (guild_id, activity, from_days, to_days, reward) VALUES (?1, ?2, ?3, ?4, ?5)
+     ON CONFLICT(guild_id, activity, from_days) DO UPDATE SET to_days = excluded.to_days, reward = excluded.reward`,
     guildId,
     activity,
-    days,
+    fromDays,
+    toDays,
     reward,
   );
 }
 
-export async function removeStreakReward(db, guildId, activity, days) {
+export async function removeStreakReward(db, guildId, activity, fromDays) {
   const result = await db.run(
-    'DELETE FROM streak_rewards WHERE guild_id = ?1 AND activity = ?2 AND days = ?3',
+    'DELETE FROM streak_rewards WHERE guild_id = ?1 AND activity = ?2 AND from_days = ?3',
+    guildId,
+    activity,
+    fromDays,
+  );
+  return result.changes > 0;
+}
+
+/**
+ * その連続日数に当てはまる設定を1つ返す。
+ * 範囲が重なっている場合は、開始日がいちばん後（＝細かいほう）を優先する。
+ */
+export async function findStreakReward(db, guildId, activity, days) {
+  return db.get(
+    `SELECT * FROM streak_rewards
+      WHERE guild_id = ?1 AND activity = ?2 AND from_days <= ?3 AND (to_days = 0 OR to_days >= ?3)
+      ORDER BY from_days DESC LIMIT 1`,
     guildId,
     activity,
     days,
   );
-  return result.changes > 0;
+}
+
+/** 「3〜6日: +50」のような説明。 */
+export function describeStreakReward(reward, settings) {
+  const range = reward.to_days === 0 ? `${reward.from_days}日目以降` : `${reward.from_days}〜${reward.to_days}日目`;
+  const amount = settings ? `${settings.currency_emoji}${reward.reward}` : `${reward.reward}`;
+  return `${range} は毎日 ${amount}`;
 }
 
 /** アクション自体が消えたらボーナス設定も片付ける。 */
@@ -122,16 +150,12 @@ export async function removeStreakRewardsFor(db, guildId, activity) {
 }
 
 /**
- * ちょうどその日数に到達したときのボーナスを支払う。
+ * その日の連日ボーナスを支払う（連続日数が範囲に入っていれば毎日もらえる）。
+ * 日付が変わって初めて報告したときにだけ呼ぶこと。
  * @returns {Promise<{days: number, reward: number} | null>}
  */
 export async function payStreakBonus(db, guildId, userId, activity, days) {
-  const row = await db.get(
-    'SELECT * FROM streak_rewards WHERE guild_id = ?1 AND activity = ?2 AND days = ?3',
-    guildId,
-    activity,
-    days,
-  );
+  const row = await findStreakReward(db, guildId, activity, days);
   if (!row || row.reward <= 0) return null;
   await deposit(db, guildId, userId, row.reward, 'streak', `${activity} ${days}日連続`);
   return { days, reward: row.reward };

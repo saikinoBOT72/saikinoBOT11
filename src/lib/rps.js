@@ -68,16 +68,33 @@ export async function setHand(db, id, role, hand) {
   return result.changes === 1;
 }
 
-/** あいこ。手をリセットして次のラウンドへ。 */
-export async function nextRound(db, id) {
-  await db.run(
+/**
+ * 決着を確定する。
+ * 二人が同時にボタンを押すと両方のリクエストが「手が揃った」と判断しうるため、
+ * この1文を取れた側だけが賞金を払う（そうしないと二重に支払われる）。
+ * @returns {Promise<boolean>} 自分が確定した側なら true
+ */
+export async function finishMatch(db, id) {
+  const result = await db.run("UPDATE rps_matches SET status = 'done' WHERE id = ?1 AND status = 'playing'", id);
+  return result.changes === 1;
+}
+
+/**
+ * あいこ。手をリセットして次のラウンドへ。
+ * これも同時押しで二重に進まないよう、いまのラウンド番号を条件に入れて取り合う。
+ * @returns {Promise<object|null>} 進めた側だけ新しい対戦内容が返る
+ */
+export async function nextRound(db, id, currentRound) {
+  const result = await db.run(
     `UPDATE rps_matches
-        SET challenger_hand = NULL, opponent_hand = NULL, round = round + 1, expires_at = ?2
-      WHERE id = ?1`,
+        SET challenger_hand = NULL, opponent_hand = NULL, round = round + 1, expires_at = ?3
+      WHERE id = ?1 AND round = ?2 AND status = 'playing'
+        AND challenger_hand IS NOT NULL AND opponent_hand IS NOT NULL`,
     id,
+    currentRound,
     Date.now() + PLAY_TIMEOUT_MS,
   );
-  return getMatch(db, id);
+  return result.changes === 1 ? getMatch(db, id) : null;
 }
 
 /** 預かった賭け金を両者に返す。 */

@@ -31,8 +31,8 @@ export async function open(ix, _args, ctx, notice = null) {
         : truncate(
             alive
               .map((streak) => {
-                const next = nextBonus(rewards, streak.activity, streak.current, settings);
-                return `**${streak.activity}** 🔥 ${streak.current} 日（最高 ${streak.best} 日）${next}`;
+                const bonus = bonusLine(rewards, streak.activity, streak.current, settings);
+                return `**${streak.activity}** 🔥 ${streak.current} 日（最高 ${streak.best} 日）${bonus}`;
               })
               .join('\n'),
             1024,
@@ -122,10 +122,18 @@ export async function equip(ix, _args, ctx) {
   return open(ix, [], ctx, ok ? '表示する称号を変えました' : 'その称号はまだ持っていません');
 }
 
-function nextBonus(rewards, activity, current, settings) {
-  const next = rewards.filter((reward) => reward.activity === activity).find((reward) => reward.days > current);
-  if (!next) return '';
-  return `　→ あと ${next.days - current} 日で ${coins(next.reward, settings)}`;
+/** いま毎日もらえている額と、次の段階までの日数。 */
+function bonusLine(rewards, activity, current, settings) {
+  const own = rewards.filter((reward) => reward.activity === activity);
+  const now = own
+    .filter((reward) => reward.from_days <= current && (reward.to_days === 0 || current <= reward.to_days))
+    .sort((a, b) => b.from_days - a.from_days)[0];
+  const next = own.filter((reward) => reward.from_days > current).sort((a, b) => a.from_days - b.from_days)[0];
+
+  const parts = [];
+  if (now) parts.push(`毎日 ${coins(now.reward, settings)}`);
+  if (next) parts.push(`あと ${next.from_days - current} 日で毎日 ${coins(next.reward, settings)}`);
+  return parts.length > 0 ? `　→ ${parts.join('／')}` : '';
 }
 
 export const actions = { open, equip };
