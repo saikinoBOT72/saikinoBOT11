@@ -5,6 +5,11 @@ import { json, pong, reply } from './discord/respond.js';
 import { createContext } from './context.js';
 import { handleComponent as handleMenu } from './menu/router.js';
 import { handleComponent as handleRps, cancelEmbed } from './menu/rps-challenge.js';
+import {
+  handleComponent as handleChinchiro,
+  cancelEmbed as chinchiroCancelEmbed,
+} from './menu/chinchiro-match.js';
+import { cancelExpired as cancelExpiredChinchiro } from './lib/chinchiro.js';
 import { findCommand } from './commands.js';
 import { cancelExpired } from './lib/rps.js';
 import { buildAnnouncement, dueAnnouncements, markAnnounced } from './lib/announcements.js';
@@ -46,6 +51,7 @@ export default {
   async scheduled(_event, env, executionCtx) {
     const ctx = createContext(env, executionCtx);
     await sweepExpiredMatches(ctx);
+    await sweepExpiredChinchiro(ctx);
     await postDueAnnouncements(ctx);
   },
 };
@@ -63,6 +69,25 @@ async function sweepExpiredMatches(ctx) {
       .catch((error) => console.error('時間切れメッセージの更新に失敗:', error));
   }
   if (handled.length > 0) console.log(`時間切れのじゃんけんを ${handled.length} 件片付けました`);
+}
+
+async function sweepExpiredChinchiro(ctx) {
+  const handled = await cancelExpiredChinchiro(ctx.db);
+  for (const { match, refunded } of handled) {
+    if (!match.message_id) continue;
+    await ctx.rest
+      .editMessage(match.channel_id, match.message_id, {
+        content: '',
+        embeds: [
+          chinchiroCancelEmbed(
+            refunded ? '時間切れのため中止しました。預かった額は返しました。' : '時間切れのため勝負は流れました。',
+          ),
+        ],
+        components: [],
+      })
+      .catch((error) => console.error('時間切れメッセージの更新に失敗:', error));
+  }
+  if (handled.length > 0) console.log(`時間切れのチンチロを ${handled.length} 件片付けました`);
 }
 
 async function postDueAnnouncements(ctx) {
@@ -100,6 +125,7 @@ async function dispatch(ix, ctx) {
     const [namespace] = ix.customId.split(':');
     if (namespace === 'm') return handleMenu(ix, ctx);
     if (namespace === 'rps') return handleRps(ix, ctx);
+    if (namespace === 'cc') return handleChinchiro(ix, ctx);
     return reply({ content: 'この操作はもう使えません。`/menu` を開き直してください。' });
   }
 

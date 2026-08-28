@@ -256,6 +256,160 @@ await test('自分自身には挑戦できない', async () => {
   assert.match(firstEmbed(payload).description, /自分自身/);
 });
 
+section('[ハイ&ロー]');
+
+await test('賭けると場が始まり、上か下かを選べる', async () => {
+  await eco.setBalance(db, GUILD, ME, 1000, 'test');
+  const payload = await press('m:hl:bet:100');
+  assert.equal(await eco.getBalance(db, GUILD, ME), 900, '賭け金が引かれる');
+  const ids = customIds(payload);
+  assert.ok(ids.includes('m:hl:pick:high') && ids.includes('m:hl:pick:low'));
+  assertAllButtonsWork(payload, 'ハイ&ローの場');
+
+  const game = await db.get('SELECT * FROM highlow_games WHERE guild_id = ?1 AND user_id = ?2', GUILD, ME);
+  assert.equal(game.bet, 100);
+  assert.equal(game.steps, 0);
+});
+
+await test('1回も当てていないうちは降りられない', async () => {
+  const payload = await press('m:hl:open');
+  const stop = payload.data.components[0].components.find((c) => c.custom_id === 'm:hl:stop');
+  assert.equal(stop.disabled, true);
+
+  const tried = await press('m:hl:stop');
+  assert.match(firstEmbed(tried).description, /1回も当ててから/);
+  assert.ok(await db.get('SELECT * FROM highlow_games WHERE guild_id = ?1 AND user_id = ?2', GUILD, ME), '勝負は続く');
+});
+
+await test('進行中は新しい勝負を始められない', async () => {
+  const before = await eco.getBalance(db, GUILD, ME);
+  const payload = await press('m:hl:bet:100');
+  assert.equal(await eco.getBalance(db, GUILD, ME), before, '二重に賭け金を取られない');
+  assert.match(firstEmbed(payload).description, /すでに勝負が進んでいます|次のカード/);
+});
+
+await test('予想すると勝ち負けが決まり、外れると勝負が終わる', async () => {
+  // 当たりを引くまで繰り返す（外れたら賭け直す）
+  let won = false;
+  for (let i = 0; i < 40 && !won; i++) {
+    const game = await db.get('SELECT * FROM highlow_games WHERE guild_id = ?1 AND user_id = ?2', GUILD, ME);
+    if (!game) {
+      await eco.setBalance(db, GUILD, ME, 1000, 'test');
+      await press('m:hl:bet:100');
+      continue;
+    }
+    const chance = (13 - game.card_rank) / 12;
+    await press(chance >= 0.5 ? 'm:hl:pick:high' : 'm:hl:pick:low');
+    const after = await db.get('SELECT * FROM highlow_games WHERE guild_id = ?1 AND user_id = ?2', GUILD, ME);
+    if (after && after.steps > 0) won = true;
+  }
+  assert.ok(won, '当たれば連勝数が増えて勝負が続く');
+
+  const game = await db.get('SELECT * FROM highlow_games WHERE guild_id = ?1 AND user_id = ?2', GUILD, ME);
+  assert.ok(game.multiplier > 1, '倍率が伸びている');
+});
+
+await test('降りると倍率ぶんを受け取って勝負が終わる', async () => {
+  const game = await db.get('SELECT * FROM highlow_games WHERE guild_id = ?1 AND user_id = ?2', GUILD, ME);
+  const before = await eco.getBalance(db, GUILD, ME);
+  const expected = Math.floor(game.bet * game.multiplier);
+
+  const payload = await press('m:hl:stop');
+  assert.equal(await eco.getBalance(db, GUILD, ME), before + expected);
+  assert.match(firstEmbed(payload).title, /確定/);
+  assert.equal(await db.get('SELECT * FROM highlow_games WHERE guild_id = ?1 AND user_id = ?2', GUILD, ME), null);
+});
+
+await test('所持金を超える賭け金は弾かれる', async () => {
+  await eco.setBalance(db, GUILD, ME, 50, 'test');
+  const payload = await press('m:hl:bet:1000');
+  assert.equal(await eco.getBalance(db, GUILD, ME), 50);
+  assert.match(firstEmbed(payload).description, /残高|上限/);
+});
+
+section('[チンチロ]');
+
+const chinchiroMatch = await import(src('menu/chinchiro-match.js'));
+const chinchiroLib = await import(src('lib/chinchiro.js'));
+
+async function pressCc(customId, options = {}) {
+  const ix = new Ix(rawInteraction({ customId, ...options }));
+  const response = await chinchiroMatch.handleComponent(ix, ctx);
+  await ctx.settle();
+  return response.json();
+}
+
+await test('賭け金の5倍を預けられないと挑戦できない', async () => {
+  await eco.setBalance(db, GUILD, ME, 400, 'test');
+  const payload = await press(`m:cc:go:${OTHER}:100`);
+  assert.match(firstEmbed(payload).description, /預ける必要があります/);
+  assert.equal((await db.all("SELECT id FROM chinchiro_matches WHERE status = 'pending'")).length, 0);
+});
+
+await test('挑戦状が投稿され、承諾で両者から預かる', async () => {
+  await eco.setBalance(db, GUILD, ME, 1000, 'test');
+  await eco.setBalance(db, GUILD, OTHER, 1000, 'test');
+  const sentBefore = ctx.sent.length;
+  const payload = await press(`m:cc:go:${OTHER}:100`);
+  assert.equal(ctx.sent.length, sentBefore + 1);
+  assert.match(firstEmbed(payload).title, /挑戦状/);
+
+  const match = await db.get("SELECT * FROM chinchiro_matches WHERE status = 'pending' ORDER BY created_at DESC");
+  assert.equal(match.escrow, 500);
+
+  await pressCc(`cc:accept:${match.id}`, { userId: OTHER });
+  assert.equal(await eco.getBalance(db, GUILD, ME), 500, '挑戦者から預かる');
+  assert.equal(await eco.getBalance(db, GUILD, OTHER), 500, '相手からも預かる');
+  const playing = await db.get('SELECT * FROM chinchiro_matches WHERE id = ?1', match.id);
+  assert.equal(playing.status, 'playing');
+  assert.equal(playing.turn, 'challenger', '挑戦者から振る');
+  globalThis.__ccId = match.id;
+});
+
+await test('手番でない人は振れない', async () => {
+  const payload = await pressCc(`cc:roll:${globalThis.__ccId}`, { userId: OTHER });
+  assert.match(screenText(payload), /あなたの番ではありません/);
+  const payload2 = await pressCc(`cc:roll:${globalThis.__ccId}`, { userId: 'u9' });
+  assert.match(screenText(payload2), /参加者ではありません/);
+});
+
+await test('順番に振ると決着し、コインの総量は変わらない', async () => {
+  const totalBefore = (await eco.getBalance(db, GUILD, ME)) + (await eco.getBalance(db, GUILD, OTHER));
+
+  await pressCc(`cc:roll:${globalThis.__ccId}`, { userId: ME });
+  const midway = await db.get('SELECT * FROM chinchiro_matches WHERE id = ?1', globalThis.__ccId);
+  assert.ok(midway.challenger_dice, '挑戦者の出目が記録される');
+  assert.equal(midway.turn, 'opponent', '手番が移る');
+
+  await pressCc(`cc:roll:${globalThis.__ccId}`, { userId: OTHER });
+  const done = await db.get('SELECT * FROM chinchiro_matches WHERE id = ?1', globalThis.__ccId);
+  assert.equal(done.status, 'done');
+
+  const totalAfter = (await eco.getBalance(db, GUILD, ME)) + (await eco.getBalance(db, GUILD, OTHER));
+  assert.equal(totalAfter, totalBefore + 1000, '預かった1000がすべて返っている（勝ち負けは移動のみ）');
+
+  const me = await eco.getBalance(db, GUILD, ME);
+  const other = await eco.getBalance(db, GUILD, OTHER);
+  assert.ok(me >= 0 && other >= 0, 'マイナスにならない');
+  assert.ok(Math.abs(me - 1000) <= 500, '動く額は預かりの範囲に収まる');
+});
+
+await test('終わった勝負のボタンはもう効かない', async () => {
+  const payload = await pressCc(`cc:roll:${globalThis.__ccId}`, { userId: ME });
+  assert.match(screenText(payload), /終了/);
+});
+
+await test('断ると預かりは発生しない', async () => {
+  await eco.setBalance(db, GUILD, ME, 1000, 'test');
+  await eco.setBalance(db, GUILD, OTHER, 1000, 'test');
+  await press(`m:cc:go:${OTHER}:100`);
+  const match = await db.get("SELECT * FROM chinchiro_matches WHERE status = 'pending' ORDER BY created_at DESC");
+  await pressCc(`cc:decline:${match.id}`, { userId: OTHER });
+  assert.equal(await eco.getBalance(db, GUILD, ME), 1000);
+  assert.equal(await eco.getBalance(db, GUILD, OTHER), 1000);
+  assert.equal((await db.get('SELECT * FROM chinchiro_matches WHERE id = ?1', match.id)).status, 'cancelled');
+});
+
 section('[ショップ]');
 
 await test('一覧から詳細を開ける', async () => {

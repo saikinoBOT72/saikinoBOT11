@@ -6,6 +6,7 @@ import * as wallet from './wallet.js';
 import * as admin from './admin.js';
 import * as privacy from './privacy.js';
 import * as titles from './titles.js';
+import * as highlow from './highlow.js';
 import { MENU_PREFIX } from './common.js';
 
 /** 画面名 → 操作名 → ハンドラ。customId は `m:<画面>:<操作>:<引数...>`。 */
@@ -16,11 +17,13 @@ export const screens = {
   slot: games.slot,
   cf: games.cf,
   rps: games.rps,
+  cc: games.cc,
   shop: shop.actions,
   wallet: wallet.actions,
   admin: admin.actions,
   privacy: privacy.actions,
   titles: titles.actions,
+  hl: highlow.actions,
 };
 
 export const namespace = MENU_PREFIX;

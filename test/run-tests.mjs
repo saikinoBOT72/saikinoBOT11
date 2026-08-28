@@ -691,6 +691,211 @@ await test('まだ期限が来ていない対戦は触らない', async () => {
   assert.equal((await rps.getMatch(db, 'm2')).status, 'pending');
 });
 
+section('[ハイ&ロー]');
+
+const hl = await import(src('lib/highlow.js'));
+
+await test('倍率は当たりにくい予想ほど高い', () => {
+  assert.ok(hl.stepMultiplier(2, 'low') > hl.stepMultiplier(2, 'high'), '2でLOWは高倍率');
+  assert.ok(hl.stepMultiplier(12, 'high') > hl.stepMultiplier(12, 'low'), '12でHIGHは高倍率');
+  assert.equal(hl.stepMultiplier(7, 'high'), hl.stepMultiplier(7, 'low'), '7は五分五分');
+});
+
+await test('端のカードでは片方を選べない', () => {
+  assert.equal(hl.canChoose(1, 'low'), false);
+  assert.equal(hl.canChoose(13, 'high'), false);
+  assert.equal(hl.canChoose(1, 'high'), true);
+});
+
+await test('勝敗と引き分けの判定', () => {
+  assert.equal(hl.judge({ rank: 5 }, { rank: 9 }, 'high'), 'win');
+  assert.equal(hl.judge({ rank: 5 }, { rank: 2 }, 'high'), 'lose');
+  assert.equal(hl.judge({ rank: 5 }, { rank: 2 }, 'low'), 'win');
+  assert.equal(hl.judge({ rank: 5 }, { rank: 5 }, 'high'), 'draw');
+});
+
+await test('倍率は掛け算で伸び、上限で頭打ちになる', () => {
+  assert.equal(hl.multiply(1, 1.84), 1.84);
+  assert.equal(hl.multiply(1.84, 2), 3.68);
+  assert.equal(hl.payout(100, 3.68), 368);
+  assert.equal(hl.payout(100, 999), 100 * hl.MAX_MULTIPLIER, '上限を超えて払わない');
+});
+
+await test('還元率は「1回で降りると約97%、粘るほど下がる」', () => {
+  const simulate = (maxSteps) => {
+    let staked = 0;
+    let returned = 0;
+    for (let game = 0; game < 120000; game++) {
+      staked += 100;
+      let card = hl.drawCard();
+      let multiplier = 1;
+      let steps = 0;
+      while (steps < maxSteps && multiplier < hl.MAX_MULTIPLIER) {
+        const chance = hl.chances(card.rank);
+        let choice = chance.high >= chance.low ? 'high' : 'low';
+        if (!hl.canChoose(card.rank, choice)) choice = choice === 'high' ? 'low' : 'high';
+        const step = hl.stepMultiplier(card.rank, choice);
+        const next = hl.drawCard();
+        const result = hl.judge(card, next, choice);
+        card = next;
+        if (result === 'draw') continue;
+        if (result === 'lose') { multiplier = 0; break; }
+        multiplier = hl.multiply(multiplier, step);
+        steps++;
+      }
+      returned += hl.payout(100, multiplier);
+    }
+    return returned / staked;
+  };
+  const once = simulate(1);
+  const thrice = simulate(3);
+  assert.ok(once > 0.94 && once < 0.99, `1回で降りる: ${(once * 100).toFixed(1)}%`);
+  assert.ok(thrice > 0.88 && thrice < 0.94, `3連勝狙い: ${(thrice * 100).toFixed(1)}%`);
+  assert.ok(once > thrice, '粘るほど不利になる');
+});
+
+section('[チンチロ]');
+
+const dice = await import(src('lib/dice.js'));
+
+await test('役の判定', () => {
+  assert.equal(dice.evaluate([1, 1, 1]).kind, 'pinzoro');
+  assert.equal(dice.evaluate([4, 4, 4]).kind, 'zorome');
+  assert.equal(dice.evaluate([6, 4, 5]).kind, 'shigoro');
+  assert.equal(dice.evaluate([2, 1, 3]).kind, 'hifumi');
+  assert.equal(dice.evaluate([3, 3, 6]).kind, 'me');
+  assert.equal(dice.evaluate([3, 3, 6]).value, 6, '残りの1つが出目');
+  assert.equal(dice.evaluate([2, 4, 6]).kind, 'none');
+});
+
+await test('役の格で勝敗と倍率が決まる', () => {
+  const pinzoro = dice.evaluate([1, 1, 1]);
+  const zorome = dice.evaluate([5, 5, 5]);
+  const me6 = dice.evaluate([2, 2, 6]);
+  const me3 = dice.evaluate([2, 2, 3]);
+
+  assert.deepEqual(
+    { winner: dice.compare(pinzoro, zorome).winner, multiplier: dice.compare(pinzoro, zorome).multiplier },
+    { winner: 'a', multiplier: 5 },
+  );
+  assert.equal(dice.compare(zorome, me6).multiplier, 3);
+  assert.equal(dice.compare(me6, me3).winner, 'a', '出目が大きい方が勝ち');
+  assert.equal(dice.compare(me6, me3).multiplier, 1);
+  assert.equal(dice.compare(me6, dice.evaluate([3, 3, 6])).winner, 'draw', '同じ出目は引き分け');
+});
+
+await test('ヒフミは相手の役に関係なく負けて2倍払い', () => {
+  const hifumi = dice.evaluate([1, 2, 3]);
+  const none = dice.evaluate([2, 4, 6]);
+  const pinzoro = dice.evaluate([1, 1, 1]);
+
+  assert.deepEqual(dice.compare(hifumi, none), { winner: 'b', multiplier: 2, reason: 'ヒフミは2倍払い' });
+  assert.equal(dice.compare(pinzoro, hifumi).winner, 'a');
+  assert.equal(dice.compare(pinzoro, hifumi).multiplier, 2, 'ヒフミ相手は2倍（ピンゾロの5倍ではない）');
+  assert.equal(dice.compare(hifumi, hifumi).winner, 'draw');
+});
+
+await test('役が出るまで最大3回振る', () => {
+  for (let i = 0; i < 2000; i++) {
+    const { throws, hand } = dice.rollHand();
+    assert.ok(throws.length >= 1 && throws.length <= dice.MAX_THROWS);
+    if (throws.length < dice.MAX_THROWS) assert.notEqual(hand.kind, 'none', '役が出たらそこで止まる');
+    assert.deepEqual(hand.dice, throws[throws.length - 1]);
+  }
+});
+
+const chinchiro = await import(src('lib/chinchiro.js'));
+
+await test('動く最大額を預かるので払えない状況が起きない', async () => {
+  assert.equal(chinchiro.escrowFor(100), 500, '賭け金の5倍');
+
+  const P1 = 'ccA';
+  const P2 = 'ccB';
+  await eco.setBalance(db, G, P1, 1000, 'test');
+  await eco.setBalance(db, G, P2, 1000, 'test');
+  const match = await chinchiro.createMatch(db, {
+    id: 'cc1', guildId: G, channelId: 'c', challengerId: P1, opponentId: P2, bet: 100,
+  });
+  assert.equal(match.escrow, 500);
+
+  assert.equal(await eco.withdraw(db, G, P1, match.escrow, 'test'), true);
+  assert.equal(await eco.withdraw(db, G, P2, match.escrow, 'test'), true);
+  assert.equal(await eco.getBalance(db, G, P1), 500);
+
+  // 挑戦者が ×3 で勝った場合
+  await chinchiro.settle(db, match, 'challenger', 3);
+  assert.equal(await eco.getBalance(db, G, P1), 1300, '預かり返却＋300');
+  assert.equal(await eco.getBalance(db, G, P2), 700, '預かりから300引かれて返却');
+});
+
+await test('最大倍率で決着しても払いきれる', async () => {
+  const P1 = 'ccC';
+  const P2 = 'ccD';
+  await eco.setBalance(db, G, P1, 500, 'test');
+  await eco.setBalance(db, G, P2, 500, 'test');
+  const match = await chinchiro.createMatch(db, {
+    id: 'cc2', guildId: G, channelId: 'c', challengerId: P1, opponentId: P2, bet: 100,
+  });
+  await eco.withdraw(db, G, P1, match.escrow, 'test');
+  await eco.withdraw(db, G, P2, match.escrow, 'test');
+  assert.equal(await eco.getBalance(db, G, P2), 0, '全額預けた状態');
+
+  await chinchiro.settle(db, match, 'challenger', dice.MAX_MULTIPLIER);
+  assert.equal(await eco.getBalance(db, G, P1), 1000, '相手の全額を受け取れる');
+  assert.equal(await eco.getBalance(db, G, P2), 0, 'マイナスにならない');
+});
+
+await test('引き分けなら預かった額がそのまま返る', async () => {
+  const P1 = 'ccE';
+  const P2 = 'ccF';
+  await eco.setBalance(db, G, P1, 1000, 'test');
+  await eco.setBalance(db, G, P2, 1000, 'test');
+  const match = await chinchiro.createMatch(db, {
+    id: 'cc3', guildId: G, channelId: 'c', challengerId: P1, opponentId: P2, bet: 200,
+  });
+  await eco.withdraw(db, G, P1, match.escrow, 'test');
+  await eco.withdraw(db, G, P2, match.escrow, 'test');
+  await chinchiro.settle(db, match, 'draw', 0);
+  assert.equal(await eco.getBalance(db, G, P1), 1000);
+  assert.equal(await eco.getBalance(db, G, P2), 1000);
+});
+
+await test('決着は先に取った1つだけ、時間切れは返金される', async () => {
+  const match = await chinchiro.createMatch(db, {
+    id: 'cc4', guildId: G, channelId: 'c', challengerId: 'ccE', opponentId: 'ccF', bet: 100,
+  });
+  assert.equal(await chinchiro.markPlaying(db, 'cc4'), true);
+  assert.equal(await chinchiro.markPlaying(db, 'cc4'), false, '二重開始できない');
+  assert.equal(await chinchiro.finishMatch(db, 'cc4'), true);
+  assert.equal(await chinchiro.finishMatch(db, 'cc4'), false, '二重精算できない');
+
+  const expiring = await chinchiro.createMatch(db, {
+    id: 'cc5', guildId: G, channelId: 'c', challengerId: 'ccE', opponentId: 'ccF', bet: 100,
+  });
+  await chinchiro.markPlaying(db, 'cc5');
+  await eco.withdraw(db, G, 'ccE', expiring.escrow, 'test');
+  await eco.withdraw(db, G, 'ccF', expiring.escrow, 'test');
+  const before = await eco.getBalance(db, G, 'ccE');
+
+  await db.run('UPDATE chinchiro_matches SET expires_at = ?1 WHERE id = ?2', Date.now() - 1000, 'cc5');
+  const handled = await chinchiro.cancelExpired(db);
+  assert.equal(handled.length, 1);
+  assert.equal(handled[0].refunded, true);
+  assert.equal(await eco.getBalance(db, G, 'ccE'), before + expiring.escrow);
+  assert.equal((await chinchiro.cancelExpired(db)).length, 0, '二重返金しない');
+});
+
+await test('順番に振るので同じ人が続けて振れない', async () => {
+  await chinchiro.createMatch(db, {
+    id: 'cc6', guildId: G, channelId: 'c', challengerId: 'ccE', opponentId: 'ccF', bet: 100,
+  });
+  await chinchiro.markPlaying(db, 'cc6');
+  assert.equal(await chinchiro.recordRoll(db, 'cc6', 'opponent', [[1, 2, 4]]), false, '先攻より先には振れない');
+  assert.equal(await chinchiro.recordRoll(db, 'cc6', 'challenger', [[1, 2, 4]]), true);
+  assert.equal(await chinchiro.recordRoll(db, 'cc6', 'challenger', [[3, 3, 3]]), false, '二度は振れない');
+  assert.equal(await chinchiro.recordRoll(db, 'cc6', 'opponent', [[5, 5, 2]]), true);
+});
+
 section('[スロット]');
 
 await test('出目は3つ、配当は倍率どおり', () => {
