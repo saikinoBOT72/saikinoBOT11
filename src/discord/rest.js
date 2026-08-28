@@ -26,6 +26,14 @@ export function createRest(token) {
     editMessage(channelId, messageId, payload) {
       return call('PATCH', `/channels/${channelId}/messages/${messageId}`, payload);
     },
+    /**
+     * 返事として出したメッセージを後から書き換える。
+     * 「回転中…」→「結果」のような演出に使う（トークンは15分間有効）。
+     */
+    editOriginalResponse(applicationId, interactionToken, payload) {
+      return call('PATCH', `/webhooks/${applicationId}/${interactionToken}/messages/@original`, payload);
+    },
+
     /** スラッシュコマンドの登録。 */
     putCommands(applicationId, guildId, commands) {
       const path = guildId

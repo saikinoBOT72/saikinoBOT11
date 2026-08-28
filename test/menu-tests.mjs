@@ -3,7 +3,16 @@
 //   2. 実際の操作でコイン・アイテムが正しく動くか
 //   3. 権限のない人が管理操作をできないか
 import assert from 'node:assert/strict';
-import { createRunner, createTestContext, customIds, firstEmbed, rawInteraction, screenText, src } from './harness.mjs';
+import {
+  createRunner,
+  createTestContext,
+  customIds,
+  finalFrame,
+  firstEmbed,
+  rawInteraction,
+  screenText,
+  src,
+} from './harness.mjs';
 
 const { screens, handleComponent, findHandler } = await import(src('menu/router.js'));
 const { Ix } = await import(src('discord/interaction.js'));
@@ -134,13 +143,20 @@ await test('消えたアクションを選んでも落ちない', async () => {
 
 section('[ゲーム]');
 
-await test('スロットは賭け金が引かれ、結果が出る', async () => {
+await test('スロットはまず回転中を出し、少しずつ結果が現れる', async () => {
   const before = await eco.getBalance(db, GUILD, ME);
-  const payload = await press('m:slot:bet:100');
+  const first = await press('m:slot:bet:100');
   const after = await eco.getBalance(db, GUILD, ME);
-  assert.ok(after <= before + 300000 && after >= before - 100);
-  assert.match(firstEmbed(payload).description, /🍒|🍋|🍇|🔔|⭐|7️⃣|💎/);
-  assertAllButtonsWork(payload, 'スロット結果');
+
+  assert.match(firstEmbed(first).description, /回転中/, '押した直後は回転中');
+  assert.deepEqual(first.data.components, [], '回っているあいだはボタンを出さない');
+  assert.ok(after <= before + 300000 && after >= before - 100, 'お金の処理は先に済んでいる');
+
+  assert.equal(ctx.animated.length, 3, 'リールが1つずつ止まる');
+  assert.match(ctx.animated[0].embeds[0].description, /回転中/);
+  const last = finalFrame(ctx);
+  assert.match(last.embeds[0].description, /🍒|🍋|🍇|🔔|⭐|7️⃣|💎/);
+  assertAllButtonsWork({ data: last }, 'スロット結果');
 });
 
 await test('所持金を超える賭け金は弾かれる', async () => {
@@ -153,7 +169,8 @@ await test('所持金を超える賭け金は弾かれる', async () => {
 
 await test('入力フォームの金額（全角も可）でスロットが回る', async () => {
   const before = await eco.getBalance(db, GUILD, ME);
-  await press('m:slot:amount', { type: 5, fields: { amount: '２００' } });
+  const payload = await press('m:slot:amount', { type: 5, fields: { amount: '２００' } });
+  assert.match(firstEmbed(payload).description, /回転中/);
   assert.notEqual(await eco.getBalance(db, GUILD, ME), before);
 });
 
@@ -164,14 +181,21 @@ await test('数字でない入力は弾かれる', async () => {
   assert.match(firstEmbed(payload).description, /数字/);
 });
 
-await test('コイントスは表裏を選んでから勝負する', async () => {
+await test('コイントスは表裏を選んでから勝負し、結果は少し待って出る', async () => {
   const payload = await press('m:cf:bet:100');
   const ids = customIds(payload);
   assert.ok(ids.includes('m:cf:go:100:heads') && ids.includes('m:cf:go:100:tails'));
+
   const before = await eco.getBalance(db, GUILD, ME);
-  await press('m:cf:go:100:heads');
+  const tossing = await press('m:cf:go:100:heads');
   const after = await eco.getBalance(db, GUILD, ME);
+
+  assert.match(firstEmbed(tossing).description, /弾きました/, '押した直後は投げただけ');
   assert.ok(after === before + 100 || after === before - 100, `${before} → ${after}`);
+
+  const last = finalFrame(ctx);
+  assert.match(last.embeds[0].description, /結果は/);
+  assertAllButtonsWork({ data: last }, 'コイントス結果');
 });
 
 await test('じゃんけんの挑戦状がチャンネルに投稿される', async () => {
@@ -306,6 +330,113 @@ await test('編集フォームで内容を更新できる', async () => {
   assert.equal(updated.name, '改名した商品');
   assert.equal(updated.price, 150);
   assert.equal(updated.stock, 2);
+});
+
+section('[アイテムの種類と使用]');
+
+await test('出品はまず種類を選ぶ', async () => {
+  const payload = await press('m:shop:sell');
+  const ids = customIds(payload);
+  assert.ok(ids.includes('m:shop:sellform:consumable'));
+  assert.ok(ids.includes('m:shop:sellform:permanent'));
+  assertAllButtonsWork(payload, '出品の種類');
+});
+
+await test('種類ごとに入力フォームが開く', async () => {
+  const payload = await press('m:shop:sellform:permanent');
+  assert.equal(payload.type, 9, '入力フォームを開く');
+  assert.equal(payload.data.custom_id, 'm:shop:create:permanent');
+});
+
+await test('使い切りは買うと持ち物から使えて、みんなに知らされる', async () => {
+  await press('m:shop:create:consumable', {
+    type: 5,
+    fields: { name: '肩たたき券', price: '10', description: '10分間の肩たたき', stock: '', image_url: '' },
+  });
+  const listed = (await shop.listItems(db, GUILD, { sellerId: ME })).find((row) => row.name === '肩たたき券');
+  assert.equal(listed.kind, 'consumable');
+
+  // 別の人が2つ買う
+  await eco.setBalance(db, GUILD, OTHER, 100, 'test');
+  await shop.purchase(db, GUILD, listed.id, OTHER);
+  await shop.purchase(db, GUILD, listed.id, OTHER);
+
+  const detail = await press('m:shop:owned', { userId: OTHER, values: [String(listed.id)] });
+  assert.match(firstEmbed(detail).title, /肩たたき券/);
+  const fields = Object.fromEntries(firstEmbed(detail).fields.map((f) => [f.name, f.value]));
+  assert.equal(fields['持っている数'], '2 個');
+  assert.equal(fields['使える数'], '2 個');
+  assert.ok(customIds(detail).includes(`m:shop:use:${listed.id}`));
+
+  const sentBefore = ctx.sent.length;
+  const afterUse = await press(`m:shop:use:${listed.id}`, { userId: OTHER });
+  assert.equal(ctx.sent.length, sentBefore + 1, '使用のお知らせが1件');
+  const announced = ctx.sent.at(-1).payload.embeds[0];
+  assert.match(announced.title, /肩たたき券/);
+  assert.match(announced.title, /使いました/);
+  assert.equal(
+    Object.fromEntries(announced.fields.map((f) => [f.name, f.value]))['説明'],
+    '10分間の肩たたき',
+    'お知らせに詳細が載る',
+  );
+
+  const left = Object.fromEntries(firstEmbed(afterUse).fields.map((f) => [f.name, f.value]));
+  assert.equal(left['使える数'], '1 個', '使うと減る');
+  assert.equal(left['持っている数'], '2 個', '持っていた記録は残る');
+  globalThis.__consumableId = listed.id;
+});
+
+await test('使い切ると使うボタンが押せなくなる', async () => {
+  const itemId = globalThis.__consumableId;
+  await press(`m:shop:use:${itemId}`, { userId: OTHER });
+  const payload = await press('m:shop:owned', { userId: OTHER, values: [String(itemId)] });
+  const useButton = payload.data.components[0].components.find((c) => c.custom_id === `m:shop:use:${itemId}`);
+  assert.equal(useButton.disabled, true);
+
+  const sentBefore = ctx.sent.length;
+  const again = await press(`m:shop:use:${itemId}`, { userId: OTHER });
+  assert.equal(ctx.sent.length, sentBefore, '無いものは使えないので知らせない');
+  assert.match(firstEmbed(again).description, /使えるものがありません/);
+});
+
+await test('ずっと残るアイテムには使うボタンが無い', async () => {
+  await press('m:shop:create:permanent', {
+    type: 5,
+    fields: { name: '記念トロフィー', price: '10', description: '', stock: '', image_url: '' },
+  });
+  const listed = (await shop.listItems(db, GUILD, { sellerId: ME })).find((row) => row.name === '記念トロフィー');
+  assert.equal(listed.kind, 'permanent');
+
+  await eco.setBalance(db, GUILD, OTHER, 100, 'test');
+  await shop.purchase(db, GUILD, listed.id, OTHER);
+
+  const payload = await press('m:shop:owned', { userId: OTHER, values: [String(listed.id)] });
+  assert.ok(!customIds(payload).includes(`m:shop:use:${listed.id}`), '使うボタンは出さない');
+  assert.equal(await shop.useItem(db, GUILD, OTHER, listed.id), null, '直接呼んでも使えない');
+});
+
+await test('出品者は種類を切り替えられる', async () => {
+  const listed = (await shop.listItems(db, GUILD, { sellerId: ME })).find((row) => row.name === '記念トロフィー');
+  await press(`m:shop:kind:${listed.id}`);
+  assert.equal((await shop.getItem(db, GUILD, listed.id)).kind, 'consumable');
+  await press(`m:shop:kind:${listed.id}`);
+  assert.equal((await shop.getItem(db, GUILD, listed.id)).kind, 'permanent');
+});
+
+await test('他人の出品の種類は変えられない', async () => {
+  const payload = await press(`m:shop:kind:${item.id}`);
+  assert.match(firstEmbed(payload).description, /自分の出品/);
+});
+
+await test('購入のお知らせは一行の簡素な文になる', async () => {
+  await eco.setBalance(db, GUILD, ME, 1000, 'test');
+  const sentBefore = ctx.sent.length;
+  await press(`m:shop:buy:${item.id}`);
+  const message = ctx.sent.at(-1).payload;
+  assert.equal(ctx.sent.length, sentBefore + 1);
+  assert.equal(message.embeds, undefined, '埋め込みではなくただの文');
+  assert.match(message.content, /購入しました/);
+  assert.match(message.content, /テスト商品/);
 });
 
 section('[お財布]');

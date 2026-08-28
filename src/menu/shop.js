@@ -2,16 +2,20 @@ import { getBalance } from '../lib/economy.js';
 import { equippedTitle, titleTag } from '../lib/achievements.js';
 import { coins, truncate } from '../lib/format.js';
 import {
+  ITEM_KINDS,
   ShopError,
   countItems,
   createItem,
   getItem,
   inventoryOf,
+  isConsumable,
   listItems,
+  ownedItem,
   purchase,
   salesOf,
   setActive,
   updateItem,
+  useItem,
 } from '../lib/shop.js';
 import { modal, stringSelect, textInput } from '../discord/builders.js';
 import { ButtonStyle, TextInputStyle } from '../discord/constants.js';
@@ -34,6 +38,19 @@ const PAGE_SIZE = 25;
 
 function isImageUrl(url) {
   return /^https?:\/\/\S+$/i.test(url);
+}
+
+function kindLabel(value) {
+  const meta = ITEM_KINDS[value] ?? ITEM_KINDS.consumable;
+  return `${meta.emoji} ${meta.label}`;
+}
+
+function otherKind(value) {
+  return isConsumable(value) ? ITEM_KINDS.permanent : ITEM_KINDS.consumable;
+}
+
+function usableCount(entry) {
+  return isConsumable(entry.kind) ? entry.usable : entry.count;
 }
 
 /* ------------------------------------------------------------------ 一覧 */
@@ -146,6 +163,7 @@ async function detail(ix, itemId, ctx, notice = null) {
           fields: [
             { name: '価格', value: coins(item.price, settings), inline: true },
             { name: '在庫', value: item.stock < 0 ? '無制限' : `${item.stock}`, inline: true },
+            { name: '種類', value: kindLabel(item.kind), inline: true },
             { name: '出品者', value: `<@${item.seller_id}>`, inline: true },
             { name: '所持金', value: coins(balance, settings), inline: true },
           ],
@@ -208,14 +226,7 @@ export async function buy(ix, [rawId], ctx) {
 
   const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
   ctx.announce(ix.channelId, {
-    embeds: [
-      embed({
-        color: 0x1abc9c,
-        title: '🧾 購入がありました',
-        description: `<@${ix.userId}> が <@${item.seller_id}> の **${item.name}** を ${coins(item.price, settings)} で購入しました。`,
-        thumbnail: item.image_url ?? undefined,
-      }),
-    ],
+    content: `🧾 <@${ix.userId}> が **${truncate(item.name, 60)}** を ${coins(item.price, settings)} で購入しました。`,
     allowed_mentions: { users: [item.seller_id] },
   });
 
@@ -240,9 +251,40 @@ export async function buy(ix, [rawId], ctx) {
 
 /* ------------------------------------------------------------------ 出品 */
 
-export function sell() {
+export async function sell(ix, _args, _ctx) {
+  return show(ix, {
+    embeds: [
+      embed({
+        color: 0x1abc9c,
+        title: '🆕 出品する',
+        description: 'まず、どんなアイテムかを選んでください。',
+        fields: Object.entries(ITEM_KINDS).map(([, kind]) => ({
+          name: `${kind.emoji} ${kind.label}`,
+          value: kind.hint,
+          inline: true,
+        })),
+      }),
+    ],
+    components: [
+      row(
+        button(id('shop', 'sellform', 'consumable'), ITEM_KINDS.consumable.label, {
+          emoji: ITEM_KINDS.consumable.emoji,
+          style: ButtonStyle.SUCCESS,
+        }),
+        button(id('shop', 'sellform', 'permanent'), ITEM_KINDS.permanent.label, {
+          emoji: ITEM_KINDS.permanent.emoji,
+          style: ButtonStyle.PRIMARY,
+        }),
+      ),
+      row(backButton('shop', 'やめる')),
+    ],
+  });
+}
+
+export function sellform(ix, [kind]) {
+  const meta = ITEM_KINDS[kind] ?? ITEM_KINDS.consumable;
   return openModal(
-    modal(id('shop', 'create'), 'アイテムを出品する', [
+    modal(id('shop', 'create', kind), `出品する（${meta.label}）`, [
       textInput('name', 'アイテム名', { placeholder: '例: 肩たたき券', required: true, max: 60 }),
       textInput('price', '価格', { placeholder: '例: 500', required: true, max: 12 }),
       textInput('description', '説明（任意）', { style: TextInputStyle.PARAGRAPH, max: 400 }),
@@ -252,7 +294,7 @@ export function sell() {
   );
 }
 
-export async function create(ix, _args, ctx) {
+export async function create(ix, [kind = 'consumable'] = [], ctx) {
   const name = readText(ix, 'name');
   const price = readInt(ix, 'price', { min: 0 });
   const stock = readInt(ix, 'stock', { min: 1, fallback: -1 });
@@ -271,6 +313,7 @@ export async function create(ix, _args, ctx) {
     price,
     imageUrl,
     stock,
+    kind: ITEM_KINDS[kind] ? kind : 'consumable',
   });
 
   await announceListing(ix, ctx, item);
@@ -283,10 +326,12 @@ async function announceListing(ix, ctx, item) {
   const title = await equippedTitle(ctx.db, ix.guildId, ix.userId);
   const tag = titleTag(title);
 
+  const meta = ITEM_KINDS[item.kind] ?? ITEM_KINDS.consumable;
   const fields = [
     { name: '価格', value: coins(item.price, settings), inline: true },
     { name: '在庫', value: item.stock < 0 ? '無制限' : `${item.stock} 個`, inline: true },
     { name: '商品番号', value: `#${item.id}`, inline: true },
+    { name: '種類', value: `${meta.emoji} ${meta.label}`, inline: true },
   ];
   if (item.description) fields.push({ name: '説明', value: truncate(item.description, 400) });
 
@@ -382,6 +427,7 @@ export async function manage(ix, [rawId], ctx, notice = null) {
             { name: '価格', value: coins(item.price, settings), inline: true },
             { name: '在庫', value: item.stock < 0 ? '無制限' : `${item.stock}`, inline: true },
             { name: '売れた数', value: `${item.sold}`, inline: true },
+            { name: '種類', value: kindLabel(item.kind), inline: true },
             { name: '状態', value: item.active ? '販売中' : '停止中', inline: true },
           ],
         }),
@@ -391,6 +437,9 @@ export async function manage(ix, [rawId], ctx, notice = null) {
     components: [
       row(
         button(id('shop', 'edit', String(item.id)), '内容を編集', { emoji: '✏️', style: ButtonStyle.PRIMARY }),
+        button(id('shop', 'kind', String(item.id)), `種類を「${otherKind(item.kind).label}」に`, {
+          emoji: otherKind(item.kind).emoji,
+        }),
         button(id('shop', 'remove', String(item.id)), item.active ? '取り下げる' : '再開する', {
           emoji: item.active ? '🗑️' : '♻️',
           style: item.active ? ButtonStyle.DANGER : ButtonStyle.SUCCESS,
@@ -448,6 +497,16 @@ export async function update(ix, [rawId], ctx) {
   return manage(ix, [rawId], ctx, '内容を更新しました');
 }
 
+export async function kind(ix, [rawId], ctx) {
+  const item = await getItem(ctx.db, ix.guildId, Number(rawId));
+  if (!item) return mine(ix, [], ctx, 'そのアイテムは見つかりませんでした。');
+  if (item.seller_id !== ix.userId) return open(ix, [], ctx, '自分の出品だけ編集できます。');
+
+  const next = isConsumable(item.kind) ? 'permanent' : 'consumable';
+  await updateItem(ctx.db, ix.guildId, item.id, { kind: next });
+  return manage(ix, [rawId], ctx, `種類を「${ITEM_KINDS[next].label}」にしました（これから買われるぶんに適用されます）`);
+}
+
 export async function remove(ix, [rawId], ctx) {
   const item = await getItem(ctx.db, ix.guildId, Number(rawId));
   if (!item) return mine(ix, [], ctx, 'そのアイテムは見つかりませんでした。');
@@ -488,12 +547,16 @@ export async function inventory(ix, _args, ctx, notice = null) {
   if (owned.length > 0) {
     components.push(
       stringSelect(
-        id('shop', 'view'),
-        '持っているアイテムを見る',
+        id('shop', 'owned'),
+        '持っているアイテムを見る・使う',
         owned.map((entry) => ({
-          label: truncate(`#${entry.item_id} ${entry.name}`, 100),
+          label: truncate(`${entry.name} ×${usableCount(entry)}`, 100),
           value: String(entry.item_id),
-          description: `×${entry.count}`,
+          emoji: (ITEM_KINDS[entry.kind] ?? ITEM_KINDS.consumable).emoji,
+          description: truncate(
+            isConsumable(entry.kind) ? `使い切り・使える数 ${entry.usable}` : 'ずっと残る',
+            100,
+          ),
         })),
       ),
     );
@@ -511,10 +574,13 @@ export async function inventory(ix, _args, ctx, notice = null) {
             owned.length === 0
               ? 'まだ何も持っていません。ショップを覗いてみましょう。'
               : owned
-                  .map(
-                    (entry) =>
-                      `• **${truncate(entry.name, 40)}** ×${entry.count}　*(#${entry.item_id}・計 ${settings.currency_emoji}${entry.total})*`,
-                  )
+                  .map((entry) => {
+                    const meta = ITEM_KINDS[entry.kind] ?? ITEM_KINDS.consumable;
+                    const amount = isConsumable(entry.kind)
+                      ? `使える ${entry.usable} 個（使用済み ${entry.count - entry.usable}）`
+                      : `${entry.count} 個`;
+                    return `${meta.emoji} **${truncate(entry.name, 40)}** — ${amount}　*(#${entry.item_id})*`;
+                  })
                   .join('\n'),
           fields,
         }),
@@ -525,6 +591,79 @@ export async function inventory(ix, _args, ctx, notice = null) {
   });
 }
 
+/** 持ち物のアイテム1種類ぶんの画面。使い切りならここから使う。 */
+export async function owned(ix, args, ctx, notice = null) {
+  const itemId = Number(args.length > 0 ? args[0] : ix.values[0]);
+  const entry = await ownedItem(ctx.db, ix.guildId, ix.userId, itemId);
+  if (!entry) return inventory(ix, [], ctx, 'そのアイテムは持っていません。');
+
+  const consumable = isConsumable(entry.kind);
+  const usable = consumable ? entry.usable : entry.count;
+
+  return show(ix, {
+    embeds: [
+      withNotice(
+        embed({
+          color: 0x1abc9c,
+          author: { name: ix.displayName, icon_url: ix.avatar },
+          title: `${(ITEM_KINDS[entry.kind] ?? ITEM_KINDS.consumable).emoji} ${entry.name}`,
+          description: consumable
+            ? `使い切りのアイテムです。使うと1つ減り、みんなに知らせます。`
+            : 'ずっと手元に残るアイテムです。',
+          image: entry.image_url ?? undefined,
+          fields: [
+            { name: '持っている数', value: `${entry.count} 個`, inline: true },
+            consumable ? { name: '使える数', value: `${entry.usable} 個`, inline: true } : null,
+            { name: '商品番号', value: `#${entry.item_id}`, inline: true },
+          ].filter(Boolean),
+        }),
+        notice,
+      ),
+    ],
+    components: [
+      row(
+        consumable
+          ? button(id('shop', 'use', String(entry.item_id)), '使う', {
+              emoji: '✨',
+              style: ButtonStyle.SUCCESS,
+              disabled: usable <= 0,
+            })
+          : null,
+        button(id('shop', 'view2', String(entry.item_id)), '商品ページ', { emoji: '🔍' }),
+      ),
+      row(backButton('shop', 'ショップへ'), button(id('shop', 'inventory'), '持ち物', { emoji: '🎒' }), homeButton()),
+    ],
+  });
+}
+
+export async function use(ix, [rawId], ctx) {
+  const itemId = Number(rawId);
+  const used = await useItem(ctx.db, ix.guildId, ix.userId, itemId);
+  if (!used) return owned(ix, [String(itemId)], ctx, '使えるものがありませんでした。');
+
+  const item = await getItem(ctx.db, ix.guildId, itemId);
+  const fields = [{ name: '商品番号', value: `#${itemId}`, inline: true }];
+  if (item?.seller_id) fields.push({ name: '出品者', value: `<@${item.seller_id}>`, inline: true });
+  if (item?.description) fields.push({ name: '説明', value: truncate(item.description, 400) });
+
+  ctx.announce(ix.channelId, {
+    embeds: [
+      embed({
+        color: 0x9b59b6,
+        author: { name: ix.displayName, icon_url: ix.avatar },
+        title: `✨ ${truncate(used.name, 80)} を使いました！`,
+        description: `<@${ix.userId}> が使いました。`,
+        image: used.image_url ?? undefined,
+        fields,
+        footer: { text: '受け渡しは当人同士でどうぞ' },
+      }),
+    ],
+    allowed_mentions: item?.seller_id ? { users: [item.seller_id] } : { parse: [] },
+  });
+
+  return owned(ix, [String(itemId)], ctx, `**${used.name}** を使いました！ チャンネルにも知らせました`);
+}
+
 export const actions = {
   open,
   view,
@@ -532,7 +671,11 @@ export const actions = {
   confirm,
   buy,
   sell,
+  sellform,
   create,
+  kind,
+  owned,
+  use,
   mine,
   manage,
   manage2,

@@ -110,11 +110,50 @@ async function slotSpin(ix, ctx, bet) {
     return slotOpen(ix, [], ctx, '残高が足りません。');
   }
 
+  // 先にお金の処理を済ませてから、演出だけ後追いで見せる
   const result = spin();
   const payout = result.multiplier * bet;
   if (payout > 0) await deposit(ctx.db, ix.guildId, ix.userId, payout, 'slot:win', `x${result.multiplier}`);
   const after = await getBalance(ctx.db, ix.guildId, ix.userId);
   const net = payout - bet;
+
+  const reelLine = (reels) => `# ${reels.join(' ｜ ')}`;
+  const spinning = (reels, note) =>
+    embed({
+      color: 0xe67e22,
+      title: '🎰 スロット',
+      description: `${reelLine(reels)}\n${note}`,
+      footer: { text: `賭け金 ${bet.toLocaleString('ja-JP')}` },
+    });
+
+  const finalEmbed = embed({
+    color: payout > 0 ? 0x2ecc71 : 0x95a5a6,
+    title: '🎰 スロット',
+    description: `${reelLine(result.reels)}\n${slotHeadline(result, payout, settings)}`,
+    fields: [
+      { name: '賭け金', value: bet.toLocaleString('ja-JP'), inline: true },
+      { name: '収支', value: `${net >= 0 ? '+' : ''}${net.toLocaleString('ja-JP')}`, inline: true },
+      { name: '所持金', value: coins(after, settings), inline: true },
+    ],
+  });
+  const finalComponents = [
+    row(
+      button(id('slot', 'bet', String(bet)), `もう一度（${bet}）`, {
+        emoji: '🔁',
+        style: ButtonStyle.SUCCESS,
+        disabled: after < bet,
+      }),
+      button(id('slot', 'open'), '賭け金を変える', { emoji: '💰' }),
+      homeButton(),
+    ),
+  ];
+
+  // 左のリールから1つずつ止まっていく
+  ctx.animate(ix, [
+    { after: 800, payload: { embeds: [spinning([result.reels[0], '🎲', '🎲'], '回転中…')], components: [] } },
+    { after: 800, payload: { embeds: [spinning([result.reels[0], result.reels[1], '🎲'], '回転中…')], components: [] } },
+    { after: 800, payload: { embeds: [finalEmbed], components: finalComponents } },
+  ]);
 
   if (result.kind === 'triple') {
     ctx.announce(ix.channelId, {
@@ -129,29 +168,8 @@ async function slotSpin(ix, ctx, bet) {
   }
 
   return show(ix, {
-    embeds: [
-      embed({
-        color: payout > 0 ? 0x2ecc71 : 0x95a5a6,
-        title: '🎰 スロット',
-        description: `# ${result.reels.join(' ｜ ')}\n${slotHeadline(result, payout, settings)}`,
-        fields: [
-          { name: '賭け金', value: bet.toLocaleString('ja-JP'), inline: true },
-          { name: '収支', value: `${net >= 0 ? '+' : ''}${net.toLocaleString('ja-JP')}`, inline: true },
-          { name: '所持金', value: coins(after, settings), inline: true },
-        ],
-      }),
-    ],
-    components: [
-      row(
-        button(id('slot', 'bet', String(bet)), `もう一度（${bet}）`, {
-          emoji: '🔁',
-          style: ButtonStyle.SUCCESS,
-          disabled: after < bet,
-        }),
-        button(id('slot', 'open'), '賭け金を変える', { emoji: '💰' }),
-        homeButton(),
-      ),
-    ],
+    embeds: [spinning(['🎲', '🎲', '🎲'], '**回転中…**')],
+    components: [],
   });
 }
 
@@ -244,32 +262,48 @@ async function cfGo(ix, [rawBet, side], ctx) {
   if (won) await deposit(ctx.db, ix.guildId, ix.userId, bet * 2, 'coinflip:win');
   const after = await getBalance(ctx.db, ix.guildId, ix.userId);
 
-  return show(ix, {
-    embeds: [
-      embed({
-        color: won ? 0x2ecc71 : 0x95a5a6,
-        title: '🪙 コイントス',
-        description:
-          `結果は **${SIDES[outcome].emoji} ${SIDES[outcome].label}**！\n` +
-          (won ? `🎉 的中！ ${coins(bet * 2, settings)} を獲得しました。` : `外れ… ${coins(bet, settings)} を失いました。`),
-        fields: [
-          { name: '賭け', value: `${SIDES[side].label} / ${bet.toLocaleString('ja-JP')}`, inline: true },
-          { name: '所持金', value: coins(after, settings), inline: true },
+  const tossing = (note) =>
+    embed({
+      color: 0xf1c40f,
+      title: '🪙 コイントス',
+      description: note,
+      footer: { text: `${SIDES[side].label} に ${bet.toLocaleString('ja-JP')}` },
+    });
+
+  ctx.animate(ix, [
+    { after: 700, payload: { embeds: [tossing('# 🪙\nくるくる…')], components: [] } },
+    {
+      after: 900,
+      payload: {
+        embeds: [
+          embed({
+            color: won ? 0x2ecc71 : 0x95a5a6,
+            title: '🪙 コイントス',
+            description:
+              `# ${SIDES[outcome].emoji}\n結果は **${SIDES[outcome].label}**！\n` +
+              (won ? `🎉 的中！ ${coins(bet * 2, settings)} を獲得しました。` : `外れ… ${coins(bet, settings)} を失いました。`),
+            fields: [
+              { name: '賭け', value: `${SIDES[side].label} / ${bet.toLocaleString('ja-JP')}`, inline: true },
+              { name: '所持金', value: coins(after, settings), inline: true },
+            ],
+          }),
         ],
-      }),
-    ],
-    components: [
-      row(
-        button(id('cf', 'go', String(bet), side), `もう一度（${SIDES[side].label} ${bet}）`, {
-          emoji: '🔁',
-          style: ButtonStyle.SUCCESS,
-          disabled: after < bet,
-        }),
-        button(id('cf', 'open'), '賭け金を変える', { emoji: '💰' }),
-        homeButton(),
-      ),
-    ],
-  });
+        components: [
+          row(
+            button(id('cf', 'go', String(bet), side), `もう一度（${SIDES[side].label} ${bet}）`, {
+              emoji: '🔁',
+              style: ButtonStyle.SUCCESS,
+              disabled: after < bet,
+            }),
+            button(id('cf', 'open'), '賭け金を変える', { emoji: '💰' }),
+            homeButton(),
+          ),
+        ],
+      },
+    },
+  ]);
+
+  return show(ix, { embeds: [tossing('コインを弾きました…')], components: [] });
 }
 
 export const cf = { open: cfOpen, bet: cfBet, custom: cfCustom, amount: cfAmount, go: cfGo };

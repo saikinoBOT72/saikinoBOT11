@@ -1,5 +1,15 @@
 import { ensureAccount, getBalance } from './economy.js';
 
+/** アイテムの種類。 */
+export const ITEM_KINDS = {
+  consumable: { label: '使い切り', hint: '持ち物から使えて、使うと無くなります', emoji: '✨' },
+  permanent: { label: 'ずっと残る', hint: '使う操作はなく、持ち物にずっと残ります', emoji: '📦' },
+};
+
+export function isConsumable(kind) {
+  return kind !== 'permanent';
+}
+
 export class ShopError extends Error {
   constructor(code, message) {
     super(message);
@@ -7,10 +17,10 @@ export class ShopError extends Error {
   }
 }
 
-export async function createItem(db, { guildId, sellerId, name, description, price, imageUrl, stock }) {
+export async function createItem(db, { guildId, sellerId, name, description, price, imageUrl, stock, kind = 'consumable' }) {
   const result = await db.run(
-    `INSERT INTO shop_items (guild_id, seller_id, name, description, price, image_url, stock, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+    `INSERT INTO shop_items (guild_id, seller_id, name, description, price, image_url, stock, kind, created_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
     guildId,
     sellerId,
     name,
@@ -18,6 +28,7 @@ export async function createItem(db, { guildId, sellerId, name, description, pri
     price,
     imageUrl ?? null,
     stock,
+    ITEM_KINDS[kind] ? kind : 'consumable',
     Date.now(),
   );
   return getItem(db, guildId, result.lastRowId);
@@ -110,9 +121,9 @@ export async function purchase(db, guildId, itemId, buyerId) {
   const results = await db.batch([
     [`UPDATE balances SET balance = balance + ?3 WHERE guild_id = ?1 AND user_id = ?4 AND ${PAY_GUARD}`,
       guildId, buyerId, item.price, item.seller_id],
-    [`INSERT INTO purchases (guild_id, item_id, buyer_id, seller_id, name, price, image_url, created_at)
-      SELECT ?1, ?5, ?2, ?4, ?6, ?3, ?7, ?8 WHERE ${PAY_GUARD}`,
-      guildId, buyerId, item.price, item.seller_id, itemId, item.name, item.image_url, now],
+    [`INSERT INTO purchases (guild_id, item_id, buyer_id, seller_id, name, price, image_url, kind, created_at)
+      SELECT ?1, ?5, ?2, ?4, ?6, ?3, ?7, ?9, ?8 WHERE ${PAY_GUARD}`,
+      guildId, buyerId, item.price, item.seller_id, itemId, item.name, item.image_url, now, item.kind ?? 'consumable'],
     [`INSERT INTO ledger (guild_id, user_id, amount, reason, detail, created_at)
       SELECT ?1, ?2, -?3, 'shop:buy', 'item:' || ?4, ?5 WHERE ${PAY_GUARD}`,
       guildId, buyerId, item.price, itemId, now],
@@ -139,14 +150,53 @@ export async function purchase(db, guildId, itemId, buyerId) {
   return item;
 }
 
+/**
+ * 持ち物。使い切りは未使用のぶんだけ「使える数」として数える。
+ */
 export async function inventoryOf(db, guildId, userId) {
   return db.all(
-    `SELECT item_id, name, COUNT(*) AS count, SUM(price) AS total, MAX(created_at) AS last_at
+    `SELECT item_id, name, kind, COUNT(*) AS count,
+            SUM(CASE WHEN used_at IS NULL THEN 1 ELSE 0 END) AS usable,
+            SUM(price) AS total, MAX(created_at) AS last_at
        FROM purchases WHERE guild_id = ?1 AND buyer_id = ?2
-      GROUP BY item_id, name ORDER BY last_at DESC LIMIT 25`,
+      GROUP BY item_id, name, kind ORDER BY last_at DESC LIMIT 25`,
     guildId,
     userId,
   );
+}
+
+/** 持ち物のうち、そのアイテム1種類ぶんの情報。 */
+export async function ownedItem(db, guildId, userId, itemId) {
+  return db.get(
+    `SELECT item_id, name, kind, image_url, COUNT(*) AS count,
+            SUM(CASE WHEN used_at IS NULL THEN 1 ELSE 0 END) AS usable
+       FROM purchases WHERE guild_id = ?1 AND buyer_id = ?2 AND item_id = ?3
+      GROUP BY item_id, name, kind, image_url`,
+    guildId,
+    userId,
+    itemId,
+  );
+}
+
+/**
+ * 使い切りアイテムを1つ使う。
+ * 同時に押されても1つしか消費しないよう、対象を決めてから条件付きで印を付ける。
+ * @returns {Promise<object|null>} 使えたらその購入記録
+ */
+export async function useItem(db, guildId, userId, itemId) {
+  const target = await db.get(
+    `SELECT * FROM purchases
+      WHERE guild_id = ?1 AND buyer_id = ?2 AND item_id = ?3 AND used_at IS NULL
+      ORDER BY created_at ASC LIMIT 1`,
+    guildId,
+    userId,
+    itemId,
+  );
+  if (!target) return null;
+  if (!isConsumable(target.kind)) return null;
+
+  const claimed = await db.run('UPDATE purchases SET used_at = ?2 WHERE id = ?1 AND used_at IS NULL', target.id, Date.now());
+  return claimed.changes === 1 ? target : null;
 }
 
 export async function salesOf(db, guildId, userId) {

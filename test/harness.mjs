@@ -12,6 +12,8 @@ export function createTestContext() {
   const db = createFakeD1(migrationsDir);
   const sent = [];
   const edited = [];
+  // 演出（回転中→結果）で送られる書き換えを、待ち時間なしで記録する
+  const animated = [];
   const settingsCache = new Map();
   const pending = [];
 
@@ -19,6 +21,7 @@ export function createTestContext() {
     db,
     sent,
     edited,
+    animated,
     env: { TIMEZONE: 'Asia/Tokyo' },
     timezone: 'Asia/Tokyo',
     rest: {
@@ -47,6 +50,9 @@ export function createTestContext() {
     announce(channelId, payload) {
       if (!channelId) return;
       this.waitUntil(this.rest.createMessage(channelId, payload));
+    },
+    animate(_ix, steps) {
+      for (const step of steps) animated.push(step.payload);
     },
     /** 応答後に走る処理（告知など）が終わるのを待つ。 */
     async settle() {
@@ -110,6 +116,11 @@ export function customIds(payload) {
 
 export function embedsOf(payload) {
   return payload?.data?.embeds ?? [];
+}
+
+/** 演出の最後（＝実際にユーザーが見る結果）。 */
+export function finalFrame(ctx) {
+  return ctx.animated.at(-1);
 }
 
 export function firstEmbed(payload) {
