@@ -46,14 +46,22 @@ export function homeButton() {
 /** 賭け金・金額を選ぶボタン。所持金で足りないものは押せなくする。 */
 export const AMOUNT_PRESETS = [10, 50, 100, 500, 1000];
 
-export function amountRows(prefix, balance, { maxBet = 0, extra = [] } = {}) {
+/**
+ * @param {string[]} prefix 金額ボタンの宛先（例: ['slot', 'bet'] → m:slot:bet:100）
+ * @param {number} balance 所持金。足りない額のボタンは押せなくする
+ * @param {{maxBet?: number, extra?: object[], customId?: string}} options
+ *   customId は「金額を入力」ボタンの宛先。省略すると同じ画面の custom 操作に送る
+ *   （金額ボタンと同じ宛先にすると「custom」を金額として読もうとして壊れる）
+ */
+export function amountRows(prefix, balance, { maxBet = 0, extra = [], customId } = {}) {
   const buttons = AMOUNT_PRESETS.filter((amount) => maxBet <= 0 || amount <= maxBet).map((amount) =>
     button(id(...prefix, String(amount)), amount.toLocaleString('ja-JP'), {
       style: ButtonStyle.PRIMARY,
       disabled: balance < amount,
     }),
   );
-  return [row(...buttons), row(button(id(...prefix, 'custom'), '金額を入力', { emoji: '⌨️' }), ...extra)];
+  const custom = customId ?? id(prefix[0], 'custom');
+  return [row(...buttons), row(button(custom, '金額を入力', { emoji: '⌨️' }), ...extra)];
 }
 
 /** 入力フォームの数値を読む。読めなければ {error} を返す。 */

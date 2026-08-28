@@ -57,6 +57,21 @@ function assertAllButtonsWork(payload, label) {
   }
 }
 
+/**
+ * 画面のボタンを実際に押して、入力の読み違いで怒られないことを確かめる。
+ * 「宛先が存在するか」だけでは、別の操作に届いてしまう間違いを見逃すため。
+ */
+async function assertNoButtonComplains(payload, label, options = {}) {
+  for (const customId of customIds(payload)) {
+    const result = await press(customId, options);
+    const text = screenText(result);
+    assert.ok(
+      !/⚠️[^"]*(整数|数字|読めませんでした)/.test(text),
+      `${label} の「${customId}」を押すと入力の読み違いで怒られる: ${text.slice(0, 160)}`,
+    );
+  }
+}
+
 // 下ごしらえ
 await eco.setBalance(db, GUILD, ME, 5000, 'test');
 await eco.setBalance(db, GUILD, OTHER, 500, 'test');
@@ -165,6 +180,33 @@ await test('所持金を超える賭け金は弾かれる', async () => {
   assert.equal(await eco.getBalance(db, GUILD, ME), 50);
   assert.match(firstEmbed(payload).description, /残高|上限/);
   await eco.setBalance(db, GUILD, ME, 5000, 'test');
+});
+
+await test('「金額を入力」を押すと入力フォームが開く', async () => {
+  for (const [screen, options] of [
+    ['m:slot:open', {}],
+    ['m:cf:open', {}],
+  ]) {
+    const payload = await press(screen, options);
+    const customId = customIds(payload).find((id) => id.endsWith(':custom'));
+    assert.ok(customId, `${screen} に金額入力のボタンがある`);
+    const opened = await press(customId, options);
+    assert.equal(opened.type, 9, `${customId} は入力フォームを開く`);
+    assert.match(opened.data.components[0].components[0].custom_id, /amount/);
+  }
+
+  // じゃんけんは相手を選んでからなので別扱い
+  const rps = await press('m:rps:user', { values: [OTHER] });
+  const rpsCustom = customIds(rps).find((id) => id.includes(':custom:'));
+  assert.ok(rpsCustom, 'じゃんけんにも金額入力のボタンがある');
+  assert.equal((await press(rpsCustom)).type, 9);
+});
+
+await test('ゲーム画面のボタンはどれも入力の読み違いで怒られない', async () => {
+  await eco.setBalance(db, GUILD, ME, 5000, 'test');
+  for (const screen of ['m:slot:open', 'm:cf:open', 'm:games:open']) {
+    await assertNoButtonComplains(await press(screen), screen);
+  }
 });
 
 await test('入力フォームの金額（全角も可）でスロットが回る', async () => {
