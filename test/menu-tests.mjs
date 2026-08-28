@@ -521,9 +521,30 @@ await test('自由額なら金額の入力フォームが開き、賭けると�
   assert.match(board.data.embeds[0].description, /300/, '集計に反映される');
 });
 
-await test('同じ人は二度賭けられない', async () => {
-  const payload = await pressPoll(`pl:bet:${globalThis.__pollId}:1`, { userId: OTHER });
-  assert.match(screenText(payload), /すでに参加しています/);
+await test('別の選択肢には移せないが、同じ選択肢には上乗せできる', async () => {
+  const pollId = globalThis.__pollId;
+  const moved = await pressPoll(`pl:bet:${pollId}:1`, { userId: OTHER });
+  assert.match(screenText(moved), /別の選択肢/);
+  assert.equal((await pollLib.betOf(db, pollId, OTHER)).option_idx, 0, '賭けは動かない');
+
+  const form = await pressPoll(`pl:bet:${pollId}:0`, { userId: OTHER });
+  assert.equal(form.type, 9, '上乗せの入力フォームが開く');
+  assert.match(JSON.stringify(form.data), /上乗せ/);
+
+  await pressPoll(`pl:amount:${pollId}:0`, { type: 5, userId: OTHER, fields: { amount: '200' } });
+  assert.equal(await eco.getBalance(db, GUILD, OTHER), 500);
+  assert.equal((await pollLib.betOf(db, pollId, OTHER)).amount, 500, '賭け金が積み上がる');
+  assert.equal((await pollLib.betsOf(db, pollId)).length, 1, '参加者は増えない');
+});
+
+await test('払えない額は上乗せできず、賭け金も動かない', async () => {
+  const pollId = globalThis.__pollId;
+  const payload = await pressPoll(`pl:amount:${pollId}:0`, {
+    type: 5, userId: OTHER, fields: { amount: '999999' },
+  });
+  assert.match(screenText(payload), /残高が足りません/);
+  assert.equal((await pollLib.betOf(db, pollId, OTHER)).amount, 500, '積んだぶんが戻る');
+  assert.equal(await eco.getBalance(db, GUILD, OTHER), 500);
 });
 
 await test('数字でない金額は弾かれる', async () => {
@@ -566,8 +587,8 @@ await test('正解を選ぶと山分けされ、コインの総量は変わら�
   assert.match(result.data.embeds[0].title, /今日Aは来る/);
   assert.match(result.data.embeds[0].description, /正解は/);
 
-  // OTHER が選択肢0に300、ME が選択肢1に100 → 正解0なので OTHER が400を総取り
-  assert.equal(await eco.getBalance(db, GUILD, OTHER), otherBefore + 400);
+  // OTHER が選択肢0に500（300＋上乗せ200）、ME が選択肢1に100 → 正解0なので OTHER が600を総取り
+  assert.equal(await eco.getBalance(db, GUILD, OTHER), otherBefore + 600);
   assert.equal(await eco.getBalance(db, GUILD, ME), meBefore, '外した人は戻らない');
 
   const poll = await pollLib.getPollById(db, globalThis.__pollId);
@@ -676,6 +697,45 @@ await test('出題者は中止でき、賭け金も上乗せも全部戻る', as
   const again = await pressPoll(`pl:cancelok:${pollId}`, { userId: ME });
   assert.match(screenText(again), /もう終わって/);
   assert.equal(await eco.getBalance(db, GUILD, OTHER), 1000, '二重に返金しない');
+});
+
+await test('参加費制の大会は上乗せできない', async () => {
+  await press('m:poll:create', {
+    type: 5,
+    fields: { question: '参加費ありのお題', options: 'A\nB', minutes: '60', stake: '100' },
+  });
+  const pollId = (await db.get('SELECT * FROM polls ORDER BY id DESC')).id;
+
+  await eco.setBalance(db, GUILD, OTHER, 1000, 'test');
+  await pressPoll(`pl:bet:${pollId}:0`, { userId: OTHER });
+  assert.equal((await pollLib.betOf(db, pollId, OTHER)).amount, 100);
+
+  const payload = await pressPoll(`pl:bet:${pollId}:0`, { userId: OTHER });
+  assert.match(screenText(payload), /上乗せはできません/);
+  assert.equal(await eco.getBalance(db, GUILD, OTHER), 900, '二重に取られない');
+});
+
+await test('締切を空欄にすると出題者が締め切るまで受け付ける', async () => {
+  await press('m:poll:create', {
+    type: 5,
+    fields: { question: '締切なしのお題', options: 'A\nB', minutes: '', stake: '' },
+  });
+  const poll = await db.get('SELECT * FROM polls ORDER BY id DESC');
+  assert.equal(poll.open_ended, 1);
+
+  const board = ctx.sent.at(-1).payload;
+  assert.match(JSON.stringify(board.embeds[0].fields), /出題者が締め切るまで/);
+
+  await db.run('UPDATE polls SET closes_at = ?2 WHERE id = ?1', poll.id, Date.now() - 1000);
+  assert.equal(
+    (await pollLib.duePolls(db)).some((row) => row.id === poll.id),
+    false,
+    '時間で勝手に締まらない',
+  );
+
+  const closed = await pressPoll(`pl:close:${poll.id}`, { userId: ME });
+  assert.equal(closed.type, 7);
+  assert.equal((await pollLib.getPollById(db, poll.id)).status, 'closed');
 });
 
 section('[ショップ]');

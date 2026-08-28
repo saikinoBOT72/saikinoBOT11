@@ -34,7 +34,12 @@ export async function open(ix, _args, ctx, notice = null) {
   const lines = [];
   for (const poll of polls) {
     const counts = await tally(ctx.db, poll.id);
-    const state = poll.status === 'open' ? `締切 <t:${Math.floor(poll.closes_at / 1000)}:R>` : '締切済み・正解待ち';
+    const state =
+      poll.status !== 'open'
+        ? '締切済み・正解待ち'
+        : poll.open_ended
+          ? '締切なし'
+          : `締切 <t:${Math.floor(poll.closes_at / 1000)}:R>`;
     const pot = counts.total + (poll.bonus ?? 0);
     const boost = poll.bonus > 0 ? `（うち上乗せ ${poll.bonus}）` : '';
     lines.push(`🗳️ **${truncate(poll.question, 60)}** — ${counts.players}人 / ${coins(pot, settings)}${boost}（${state}）`);
@@ -55,7 +60,8 @@ export async function open(ix, _args, ctx, notice = null) {
             {
               name: '決まりごと',
               value: [
-                '・1人1つ、あとから選び直せません',
+                '・1人1つ。選び直しや取り消しはできませんが、**同じ選択肢への上乗せ**はできます',
+                '・締切は分で指定。空欄なら **出題者が締め切るまで** 受け付けます',
                 `・選択肢は ${MIN_OPTIONS}〜${MAX_OPTIONS} 個`,
                 '・正解者がいなければ全員に返金',
                 '・参加者が1人だけなら不成立で返金',
@@ -86,7 +92,7 @@ export function newPoll() {
         required: true,
         max: 600,
       }),
-      textInput('minutes', '締切まで何分か', { placeholder: '例: 60', required: true, max: 6 }),
+      textInput('minutes', '締切まで何分か（空欄なら締切なし）', { placeholder: '例: 60', max: 6 }),
       textInput('stake', '参加費（空欄なら好きな額を賭けられる）', { placeholder: '例: 100', max: 12 }),
     ]),
   );
@@ -100,7 +106,6 @@ export async function create(ix, _args, ctx) {
 
   if (!question) return open(ix, [], ctx, 'お題を入力してください。');
   if (isError(minutes)) return open(ix, [], ctx, minutes.error);
-  if (minutes === null) return open(ix, [], ctx, '締切までの分数を入力してください。');
   if (isError(stake)) return open(ix, [], ctx, stake.error);
 
   const options = (rawOptions ?? '')
@@ -141,7 +146,10 @@ export async function create(ix, _args, ctx) {
         color: 0x9b59b6,
         title: '🗳️ お題を立てました',
         description:
-          `**${truncate(question, 80)}**\n\nチャンネルに投稿しました。締切は <t:${Math.floor(poll.closes_at / 1000)}:R> です。\n` +
+          `**${truncate(question, 80)}**\n\nチャンネルに投稿しました。` +
+          (poll.open_ended
+            ? '締切はありません（**🔒 締め切る** を押すまで受け付けます）。\n'
+            : `締切は <t:${Math.floor(poll.closes_at / 1000)}:R> です。\n`) +
           `${MODES[poll.mode].label}（${MODES[poll.mode].hint}）\n\n` +
           '締切がきたら、投稿の **✅ 正解を決める** から正解を選んでください。\n' +
           '**💰 賞金を上乗せ** で自腹を切って盛り上げたり、**🚫 中止** で取りやめたりもできます。',

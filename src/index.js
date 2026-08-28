@@ -15,7 +15,14 @@ import {
   boardPayload,
   cancelledPayload as pollCancelledPayload,
 } from './menu/poll-board.js';
-import { abandonedPolls, cancelPoll, closePoll, duePolls, getPollById } from './lib/polls.js';
+import {
+  abandonedPolls,
+  cancelPoll,
+  closePoll,
+  duePolls,
+  getPollById,
+  staleOpenPolls,
+} from './lib/polls.js';
 import { findCommand } from './commands.js';
 import { cancelExpired } from './lib/rps.js';
 import { buildAnnouncement, dueAnnouncements, markAnnounced } from './lib/announcements.js';
@@ -107,6 +114,18 @@ async function sweepPolls(ctx) {
     await ctx.rest
       .editMessage(poll.channel_id, poll.message_id, await boardPayload(ctx.db, fresh, settings))
       .catch((error) => console.error('予想大会の締切表示に失敗:', error));
+  }
+
+  for (const poll of await staleOpenPolls(ctx.db)) {
+    if (!(await cancelPoll(ctx.db, poll))) continue;
+    if (!poll.message_id) continue;
+    await ctx.rest
+      .editMessage(
+        poll.channel_id,
+        poll.message_id,
+        pollCancelledPayload(poll, '締切なしのまま1か月が経ったので、賭けた額は全員に返しました。'),
+      )
+      .catch((error) => console.error('予想大会の取り消し表示に失敗:', error));
   }
 
   for (const poll of await abandonedPolls(ctx.db)) {

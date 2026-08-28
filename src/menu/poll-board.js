@@ -6,6 +6,7 @@ import {
   getPollById,
   optionsOf,
   placeBet,
+  raiseBet,
   settlePoll,
   tally,
 } from '../lib/polls.js';
@@ -39,7 +40,13 @@ export async function boardPayload(db, poll, settings) {
   ];
   if (bonus > 0) fields.push({ name: '出題者の上乗せ', value: `${bonus.toLocaleString('ja-JP')}`, inline: true });
   if (poll.mode === 'fixed') fields.push({ name: '参加費', value: `${poll.stake}`, inline: true });
-  if (open) fields.push({ name: '締切', value: `<t:${Math.floor(poll.closes_at / 1000)}:R>`, inline: true });
+  if (open) {
+    fields.push({
+      name: '締切',
+      value: poll.open_ended ? '出題者が締め切るまで' : `<t:${Math.floor(poll.closes_at / 1000)}:R>`,
+      inline: true,
+    });
+  }
 
   return {
     embeds: [
@@ -49,7 +56,8 @@ export async function boardPayload(db, poll, settings) {
         description:
           lines.join('\n') +
           (open
-            ? '\n\n選択肢のボタンを押して参加してください。**1人1つ、あとから変更はできません。**'
+            ? '\n\n選択肢のボタンを押して参加してください。**選び直しや取り消しはできません**が、' +
+              (poll.mode === 'free' ? '同じ選択肢になら**あとから上乗せ**できます。' : '参加費制なので全員同じ額です。')
             : '\n\n締め切りました。出題者が正解を決めるのを待っています。'),
         fields,
         footer: {
@@ -140,17 +148,30 @@ export async function handleComponent(ix, ctx) {
 async function handleBet(ix, ctx, poll, optionIdx) {
   if (poll.status === 'cancelled') return reply({ content: 'この予想大会は中止されました。' });
   if (poll.status !== 'open') return reply({ content: 'この予想大会はもう締め切られています。' });
-  if (await betOf(ctx.db, poll.id, ix.userId)) {
-    return reply({ content: 'すでに参加しています。あとから選び直すことはできません。' });
-  }
 
+  const existing = await betOf(ctx.db, poll.id, ix.userId);
+  if (existing && existing.option_idx !== optionIdx) {
+    return reply({ content: 'すでに別の選択肢に賭けています。あとから選び直すことはできません。' });
+  }
+  if (existing && poll.mode === 'fixed') {
+    return reply({ content: '参加費を決めた大会なので、全員同じ額です。上乗せはできません。' });
+  }
   if (poll.mode === 'fixed') return finishBet(ix, ctx, poll, optionIdx, poll.stake);
 
   const options = await optionsOf(ctx.db, poll.id);
+  const label = options[optionIdx]?.label ?? '';
   return modalResponse(
-    modal(`pl:amount:${poll.id}:${optionIdx}`, truncate(`「${options[optionIdx]?.label ?? ''}」に賭ける`, 44), [
-      textInput('amount', '賭ける額', { placeholder: '例: 200', required: true, max: 12 }),
-    ]),
+    modal(
+      `pl:amount:${poll.id}:${optionIdx}`,
+      truncate(existing ? `「${label}」に上乗せする` : `「${label}」に賭ける`, 44),
+      [
+        textInput('amount', existing ? `追加で賭ける額（いま ${existing.amount}）` : '賭ける額', {
+          placeholder: '例: 200',
+          required: true,
+          max: 12,
+        }),
+      ],
+    ),
   );
 }
 
@@ -164,12 +185,20 @@ async function handleAmount(ix, ctx, poll, optionIdx) {
 
 async function finishBet(ix, ctx, poll, optionIdx, amount) {
   const settings = await getSettings(ctx.db, poll.guild_id);
-  const result = await placeBet(ctx.db, poll, ix.userId, optionIdx, amount);
+  const existing = await betOf(ctx.db, poll.id, ix.userId);
+
+  // 同時に押されて「先に入っていた」ときは、そのまま上乗せに切り替える
+  let result = existing
+    ? await raiseBet(ctx.db, poll, ix.userId, optionIdx, amount)
+    : await placeBet(ctx.db, poll, ix.userId, optionIdx, amount);
+  if (!result.ok && result.reason === 'already') {
+    result = await raiseBet(ctx.db, poll, ix.userId, optionIdx, amount);
+  }
 
   if (!result.ok) {
     const messages = {
       closed: 'この予想大会はもう締め切られています。',
-      already: 'すでに参加しています。あとから選び直すことはできません。',
+      other: 'すでに別の選択肢に賭けています。あとから選び直すことはできません。',
       insufficient: '残高が足りません。',
     };
     return reply({ content: messages[result.reason] ?? '参加できませんでした。' });

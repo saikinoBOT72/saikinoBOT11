@@ -14,18 +14,29 @@ export const MAX_MINUTES = 60 * 24 * 7;
 /** 正解が決まらないまま放置された大会を返金するまでの期間。 */
 export const ABANDON_MS = 7 * 24 * 60 * 60 * 1000;
 
+/**
+ * 締切なしの大会を、開いたまま放置と見なすまでの期間。
+ * 締切が無い代わりに出題者が消えると賭け金が戻らなくなるので、最後の受け皿として置く。
+ */
+export const STALE_OPEN_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * お題を立てる。minutes を省くと締切なし（出題者が締め切るまで）になる。
+ */
 export async function createPoll(db, { guildId, channelId, ownerId, question, options, mode, stake, minutes }) {
   const now = Date.now();
+  const openEnded = minutes === null || minutes === undefined;
   const result = await db.run(
-    `INSERT INTO polls (guild_id, channel_id, owner_id, question, mode, stake, status, closes_at, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'open', ?7, ?8)`,
+    `INSERT INTO polls (guild_id, channel_id, owner_id, question, mode, stake, status, closes_at, open_ended, created_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'open', ?7, ?8, ?9)`,
     guildId,
     channelId,
     ownerId,
     question,
     mode,
     stake,
-    now + minutes * 60 * 1000,
+    openEnded ? 0 : now + minutes * 60 * 1000,
+    openEnded ? 1 : 0,
     now,
   );
   const pollId = result.lastRowId;
@@ -63,7 +74,8 @@ export async function betOf(db, pollId, userId) {
 export async function listPolls(db, guildId, statuses = ['open', 'closed']) {
   const placeholders = statuses.map((_, index) => `?${index + 2}`).join(', ');
   return db.all(
-    `SELECT * FROM polls WHERE guild_id = ?1 AND status IN (${placeholders}) ORDER BY closes_at ASC LIMIT 25`,
+    `SELECT * FROM polls WHERE guild_id = ?1 AND status IN (${placeholders})
+      ORDER BY open_ended ASC, closes_at ASC LIMIT 25`,
     guildId,
     ...statuses,
   );
@@ -133,9 +145,48 @@ async function refundBonus(db, poll) {
   await deposit(db, poll.guild_id, poll.owner_id, poll.bonus, 'poll:refund', `poll:${poll.id}`);
 }
 
+/**
+ * すでに賭けている人が、同じ選択肢に上乗せする。
+ * 選択肢を条件に入れてあるので、別の選択肢へ移すことはできない。
+ * 先に増やしてから引き落とし、払えなければ元に戻す。
+ * @returns {Promise<{ok: true, total: number} | {ok: false, reason: 'closed'|'other'|'insufficient'}>}
+ */
+export async function raiseBet(db, poll, userId, optionIdx, amount) {
+  const claimed = await db.run(
+    `UPDATE poll_bets SET amount = amount + ?4
+      WHERE poll_id = ?1 AND user_id = ?2 AND option_idx = ?3
+        AND EXISTS (SELECT 1 FROM polls WHERE id = ?1 AND status = 'open')`,
+    poll.id,
+    userId,
+    optionIdx,
+    amount,
+  );
+  if (claimed.changes !== 1) {
+    const fresh = await getPollById(db, poll.id);
+    return { ok: false, reason: fresh?.status === 'open' ? 'other' : 'closed' };
+  }
+
+  if (!(await withdraw(db, poll.guild_id, userId, amount, 'poll:bet', `poll:${poll.id}`))) {
+    await db.run(
+      'UPDATE poll_bets SET amount = amount - ?3 WHERE poll_id = ?1 AND user_id = ?2',
+      poll.id,
+      userId,
+      amount,
+    );
+    return { ok: false, reason: 'insufficient' };
+  }
+  const bet = await betOf(db, poll.id, userId);
+  return { ok: true, total: bet.amount };
+}
+
 /** 締め切る。取れた1つだけが成功する。 */
-export async function closePoll(db, id) {
-  const result = await db.run("UPDATE polls SET status = 'closed' WHERE id = ?1 AND status = 'open'", id);
+export async function closePoll(db, id, now = Date.now()) {
+  // 締めた時刻を closes_at に残す。締切なしの大会でも「放置」を数えられるようにするため
+  const result = await db.run(
+    "UPDATE polls SET status = 'closed', closes_at = ?2 WHERE id = ?1 AND status = 'open'",
+    id,
+    now,
+  );
   return result.changes === 1;
 }
 
@@ -189,7 +240,18 @@ export async function settlePoll(db, poll, answerIdx) {
 
 /** 締切が来た大会。 */
 export async function duePolls(db, now = Date.now()) {
-  return db.all("SELECT * FROM polls WHERE status = 'open' AND closes_at <= ?1 LIMIT 25", now);
+  return db.all(
+    "SELECT * FROM polls WHERE status = 'open' AND open_ended = 0 AND closes_at <= ?1 LIMIT 25",
+    now,
+  );
+}
+
+/** 締切なしのまま、ひと月開きっぱなしの大会。 */
+export async function staleOpenPolls(db, now = Date.now()) {
+  return db.all(
+    "SELECT * FROM polls WHERE status = 'open' AND open_ended = 1 AND created_at <= ?1 LIMIT 25",
+    now - STALE_OPEN_MS,
+  );
 }
 
 /** 正解が決まらないまま放置された大会。 */
