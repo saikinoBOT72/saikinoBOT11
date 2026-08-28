@@ -918,6 +918,163 @@ await test('還元率が 85〜97% に収まる', () => {
   assert.ok(rtp > 0.85 && rtp < 0.97, `RTP = ${(rtp * 100).toFixed(2)}%`);
 });
 
+section('[予想大会]');
+
+const polls = await import(src('lib/polls.js'));
+
+async function makePoll(overrides = {}) {
+  return polls.createPoll(db, {
+    guildId: G,
+    channelId: 'c1',
+    ownerId: 'owner',
+    question: 'お題',
+    options: ['A', 'B', 'C'],
+    mode: 'free',
+    stake: 0,
+    minutes: 60,
+    ...overrides,
+  });
+}
+
+await test('お題と選択肢を作れる', async () => {
+  const poll = await makePoll();
+  assert.equal(poll.status, 'open');
+  const options = await polls.optionsOf(db, poll.id);
+  assert.deepEqual(options.map((option) => option.label), ['A', 'B', 'C']);
+});
+
+await test('1人1つだけ、あとから変えられない', async () => {
+  const poll = await makePoll();
+  await eco.setBalance(db, G, 'p1', 1000, 'test');
+
+  assert.deepEqual(await polls.placeBet(db, poll, 'p1', 0, 100), { ok: true });
+  assert.equal(await eco.getBalance(db, G, 'p1'), 900, '賭けた分が引かれる');
+
+  const again = await polls.placeBet(db, poll, 'p1', 1, 200);
+  assert.equal(again.ok, false);
+  assert.equal(again.reason, 'already');
+  assert.equal(await eco.getBalance(db, G, 'p1'), 900, '二重に取られない');
+});
+
+await test('残高が足りなければ参加できず、記録も残らない', async () => {
+  const poll = await makePoll();
+  await eco.setBalance(db, G, 'poor', 50, 'test');
+  const result = await polls.placeBet(db, poll, 'poor', 0, 500);
+  assert.equal(result.reason, 'insufficient');
+  assert.equal(await eco.getBalance(db, G, 'poor'), 50);
+  assert.equal(await polls.betOf(db, poll.id, 'poor'), null, '席も取られていない');
+});
+
+await test('締切後は参加できない', async () => {
+  const poll = await makePoll();
+  assert.equal(await polls.closePoll(db, poll.id), true);
+  assert.equal(await polls.closePoll(db, poll.id), false, '二重に締め切れない');
+
+  const closed = await polls.getPollById(db, poll.id);
+  await eco.setBalance(db, G, 'late', 1000, 'test');
+  const result = await polls.placeBet(db, closed, 'late', 0, 100);
+  assert.equal(result.reason, 'closed');
+  assert.equal(await eco.getBalance(db, G, 'late'), 1000);
+});
+
+await test('賭けた額に比例して山分けし、コインの総量は変わらない', async () => {
+  const poll = await makePoll();
+  const players = { a: 100, b: 200, c: 100, d: 300 };
+  for (const [name, amount] of Object.entries(players)) {
+    await eco.setBalance(db, G, name, 1000, 'test');
+    // a と b が正解（選択肢0）、c と d は外れ
+    await polls.placeBet(db, poll, name, ['a', 'b'].includes(name) ? 0 : 1, amount);
+  }
+  const totalBefore = 4000 - Object.values(players).reduce((sum, amount) => sum + amount, 0);
+
+  const result = await polls.settlePoll(db, poll, 0);
+  assert.equal(result.refunded, false);
+  assert.equal(result.total, 700);
+
+  // 正解者の賭け金合計は300。a は 700×(100/300)=233、b は 700×(200/300)=466、端数1はbへ
+  const a = await eco.getBalance(db, G, 'a');
+  const b = await eco.getBalance(db, G, 'b');
+  assert.equal(a, 900 + 233);
+  assert.equal(b, 800 + 467, '端数は一番多く賭けた人に寄せる');
+  assert.equal(await eco.getBalance(db, G, 'c'), 900, '外れた人は戻らない');
+
+  const totalAfter = ['a', 'b', 'c', 'd'].reduce((sum, name) => sum + 0, 0);
+  const balances = await Promise.all(['a', 'b', 'c', 'd'].map((name) => eco.getBalance(db, G, name)));
+  assert.equal(balances.reduce((sum, value) => sum + value, 0), totalBefore + 700, 'コインは増えも減りもしない');
+});
+
+await test('参加費を決めた大会は正解者で等分になる', async () => {
+  const poll = await makePoll({ mode: 'fixed', stake: 100 });
+  for (const name of ['e', 'f', 'g']) {
+    await eco.setBalance(db, G, name, 1000, 'test');
+    await polls.placeBet(db, poll, name, name === 'g' ? 1 : 0, 100);
+  }
+  const result = await polls.settlePoll(db, poll, 0);
+  assert.equal(result.total, 300);
+  assert.equal(await eco.getBalance(db, G, 'e'), 900 + 150);
+  assert.equal(await eco.getBalance(db, G, 'f'), 900 + 150);
+  assert.equal(await eco.getBalance(db, G, 'g'), 900);
+});
+
+await test('正解者がいなければ全員に返す', async () => {
+  const poll = await makePoll();
+  for (const name of ['h', 'i']) {
+    await eco.setBalance(db, G, name, 1000, 'test');
+    await polls.placeBet(db, poll, name, 0, 250);
+  }
+  const result = await polls.settlePoll(db, poll, 2);
+  assert.equal(result.refunded, true);
+  assert.equal(await eco.getBalance(db, G, 'h'), 1000);
+  assert.equal(await eco.getBalance(db, G, 'i'), 1000);
+});
+
+await test('参加者が1人だけなら成立させず返す', async () => {
+  const poll = await makePoll();
+  await eco.setBalance(db, G, 'solo', 1000, 'test');
+  await polls.placeBet(db, poll, 'solo', 0, 400);
+  const result = await polls.settlePoll(db, poll, 0);
+  assert.equal(result.refunded, true);
+  assert.equal(await eco.getBalance(db, G, 'solo'), 1000);
+});
+
+await test('山分けは一度だけ', async () => {
+  const poll = await makePoll();
+  for (const name of ['j', 'k']) {
+    await eco.setBalance(db, G, name, 1000, 'test');
+    await polls.placeBet(db, poll, name, name === 'j' ? 0 : 1, 100);
+  }
+  const first = await polls.settlePoll(db, poll, 0);
+  assert.equal(first.settled, true);
+  const balance = await eco.getBalance(db, G, 'j');
+
+  const again = await polls.settlePoll(db, await polls.getPollById(db, poll.id), 0);
+  assert.equal(again.settled, false, '二重に配らない');
+  assert.equal(await eco.getBalance(db, G, 'j'), balance);
+});
+
+await test('締切が来た大会を拾える', async () => {
+  const poll = await makePoll();
+  assert.equal((await polls.duePolls(db)).some((row) => row.id === poll.id), false, 'まだ締切前');
+  await db.run('UPDATE polls SET closes_at = ?2 WHERE id = ?1', poll.id, Date.now() - 1000);
+  assert.equal((await polls.duePolls(db)).some((row) => row.id === poll.id), true);
+});
+
+await test('正解が決まらないまま放置された大会は返金して片付ける', async () => {
+  const poll = await makePoll();
+  await eco.setBalance(db, G, 'm', 1000, 'test');
+  await polls.placeBet(db, poll, 'm', 0, 300);
+  await polls.closePoll(db, poll.id);
+
+  assert.equal((await polls.abandonedPolls(db)).some((row) => row.id === poll.id), false, 'まだ日が浅い');
+  await db.run('UPDATE polls SET closes_at = ?2 WHERE id = ?1', poll.id, Date.now() - polls.ABANDON_MS - 1000);
+
+  const abandoned = await polls.abandonedPolls(db);
+  assert.equal(abandoned.some((row) => row.id === poll.id), true);
+  assert.equal(await polls.cancelPoll(db, await polls.getPollById(db, poll.id)), true);
+  assert.equal(await eco.getBalance(db, G, 'm'), 1000, '返金される');
+  assert.equal(await polls.cancelPoll(db, await polls.getPollById(db, poll.id)), false, '二重返金しない');
+});
+
 section('[表示ヘルパー]');
 
 await test('金額表示', () => {

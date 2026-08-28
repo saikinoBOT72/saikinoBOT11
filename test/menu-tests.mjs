@@ -410,6 +410,119 @@ await test('断ると預かりは発生しない', async () => {
   assert.equal((await db.get('SELECT * FROM chinchiro_matches WHERE id = ?1', match.id)).status, 'cancelled');
 });
 
+section('[予想大会]');
+
+const pollBoard = await import(src('menu/poll-board.js'));
+const pollLib = await import(src('lib/polls.js'));
+
+async function pressPoll(customId, options = {}) {
+  const ix = new Ix(rawInteraction({ customId, ...options }));
+  const response = await pollBoard.handleComponent(ix, ctx);
+  await ctx.settle();
+  return response.json();
+}
+
+await test('お題を立てるとチャンネルに投稿される', async () => {
+  const sentBefore = ctx.sent.length;
+  const payload = await press('m:poll:create', {
+    type: 5,
+    fields: { question: '今日Aは来る？', options: '来る\n来ない\n遅れて来る', minutes: '60', stake: '' },
+  });
+  assert.equal(ctx.sent.length, sentBefore + 1);
+  assert.match(firstEmbed(payload).title, /お題を立てました/);
+
+  const board = ctx.sent.at(-1).payload;
+  assert.match(board.embeds[0].title, /今日Aは来る/);
+  const ids = board.components.flatMap((row) => row.components.map((c) => c.custom_id));
+  assert.equal(ids.filter((id) => id.includes(':bet:')).length, 3, '選択肢の数だけボタンが出る');
+
+  const poll = await db.get('SELECT * FROM polls ORDER BY id DESC');
+  assert.equal(poll.mode, 'free');
+  assert.ok(poll.message_id, 'あとで書き換えられるようメッセージIDを覚える');
+  globalThis.__pollId = poll.id;
+});
+
+await test('選択肢が少なすぎると作られない', async () => {
+  const before = (await db.all('SELECT id FROM polls')).length;
+  const payload = await press('m:poll:create', {
+    type: 5,
+    fields: { question: 'だめなお題', options: 'ひとつだけ', minutes: '60', stake: '' },
+  });
+  assert.match(firstEmbed(payload).description, /2 個以上/);
+  assert.equal((await db.all('SELECT id FROM polls')).length, before);
+});
+
+await test('自由額なら金額の入力フォームが開き、賭けると掲示板が更新される', async () => {
+  const pollId = globalThis.__pollId;
+  const opened = await pressPoll(`pl:bet:${pollId}:0`, { userId: OTHER });
+  assert.equal(opened.type, 9, '金額を入力する');
+
+  await eco.setBalance(db, GUILD, OTHER, 1000, 'test');
+  const board = await pressPoll(`pl:amount:${pollId}:0`, { type: 5, userId: OTHER, fields: { amount: '300' } });
+  assert.equal(board.type, 7, '掲示板が書き換わる');
+  assert.equal(await eco.getBalance(db, GUILD, OTHER), 700);
+  assert.match(board.data.embeds[0].description, /300/, '集計に反映される');
+});
+
+await test('同じ人は二度賭けられない', async () => {
+  const payload = await pressPoll(`pl:bet:${globalThis.__pollId}:1`, { userId: OTHER });
+  assert.match(screenText(payload), /すでに参加しています/);
+});
+
+await test('数字でない金額は弾かれる', async () => {
+  const before = await eco.getBalance(db, GUILD, ME);
+  const payload = await pressPoll(`pl:amount:${globalThis.__pollId}:1`, {
+    type: 5, userId: ME, fields: { amount: 'たくさん' },
+  });
+  assert.match(screenText(payload), /読めませんでした/);
+  assert.equal(await eco.getBalance(db, GUILD, ME), before);
+});
+
+await test('締め切れるのは出題者だけ', async () => {
+  const denied = await pressPoll(`pl:close:${globalThis.__pollId}`, { userId: OTHER });
+  assert.match(screenText(denied), /出題者だけ/);
+
+  await eco.setBalance(db, GUILD, ME, 1000, 'test');
+  await pressPoll(`pl:amount:${globalThis.__pollId}:1`, { type: 5, userId: ME, fields: { amount: '100' } });
+
+  const closed = await pressPoll(`pl:close:${globalThis.__pollId}`, { userId: ME });
+  assert.equal(closed.type, 7);
+  assert.match(closed.data.embeds[0].description, /締め切りました/);
+  const ids = closed.data.components.flatMap((row) => row.components.map((c) => c.custom_id));
+  assert.ok(ids.some((id) => id.includes(':answer:')), '正解を決めるボタンが出る');
+});
+
+await test('正解を決められるのも出題者だけ', async () => {
+  const denied = await pressPoll(`pl:answer:${globalThis.__pollId}`, { userId: OTHER });
+  assert.match(screenText(denied), /出題者だけ/);
+
+  const picker = await pressPoll(`pl:answer:${globalThis.__pollId}`, { userId: ME });
+  const options = picker.data.components[0].components[0].options;
+  assert.equal(options.length, 3);
+});
+
+await test('正解を選ぶと山分けされ、コインの総量は変わらない', async () => {
+  const meBefore = await eco.getBalance(db, GUILD, ME);
+  const otherBefore = await eco.getBalance(db, GUILD, OTHER);
+
+  const result = await pressPoll(`pl:settle:${globalThis.__pollId}`, { userId: ME, values: ['0'] });
+  assert.match(result.data.embeds[0].title, /今日Aは来る/);
+  assert.match(result.data.embeds[0].description, /正解は/);
+
+  // OTHER が選択肢0に300、ME が選択肢1に100 → 正解0なので OTHER が400を総取り
+  assert.equal(await eco.getBalance(db, GUILD, OTHER), otherBefore + 400);
+  assert.equal(await eco.getBalance(db, GUILD, ME), meBefore, '外した人は戻らない');
+
+  const poll = await pollLib.getPollById(db, globalThis.__pollId);
+  assert.equal(poll.status, 'settled');
+  assert.equal(poll.answer, 0);
+});
+
+await test('終わった大会には参加できない', async () => {
+  const payload = await pressPoll(`pl:bet:${globalThis.__pollId}:0`, { userId: 'u9' });
+  assert.match(screenText(payload), /締め切られています/);
+});
+
 section('[ショップ]');
 
 await test('一覧から詳細を開ける', async () => {

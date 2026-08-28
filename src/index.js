@@ -10,6 +10,8 @@ import {
   cancelEmbed as chinchiroCancelEmbed,
 } from './menu/chinchiro-match.js';
 import { cancelExpired as cancelExpiredChinchiro } from './lib/chinchiro.js';
+import { handleComponent as handlePoll, boardPayload } from './menu/poll-board.js';
+import { abandonedPolls, cancelPoll, closePoll, duePolls, getPollById } from './lib/polls.js';
 import { findCommand } from './commands.js';
 import { cancelExpired } from './lib/rps.js';
 import { buildAnnouncement, dueAnnouncements, markAnnounced } from './lib/announcements.js';
@@ -52,6 +54,7 @@ export default {
     const ctx = createContext(env, executionCtx);
     await sweepExpiredMatches(ctx);
     await sweepExpiredChinchiro(ctx);
+    await sweepPolls(ctx);
     await postDueAnnouncements(ctx);
   },
 };
@@ -90,6 +93,37 @@ async function sweepExpiredChinchiro(ctx) {
   if (handled.length > 0) console.log(`時間切れのチンチロを ${handled.length} 件片付けました`);
 }
 
+/** 締切が来た予想大会を締め、放置されたものは返金して片付ける。 */
+async function sweepPolls(ctx) {
+  for (const poll of await duePolls(ctx.db)) {
+    if (!(await closePoll(ctx.db, poll.id))) continue;
+    if (!poll.message_id) continue;
+    const settings = await ctx.settings(poll.guild_id);
+    const fresh = await getPollById(ctx.db, poll.id);
+    await ctx.rest
+      .editMessage(poll.channel_id, poll.message_id, await boardPayload(ctx.db, fresh, settings))
+      .catch((error) => console.error('予想大会の締切表示に失敗:', error));
+  }
+
+  for (const poll of await abandonedPolls(ctx.db)) {
+    if (!(await cancelPoll(ctx.db, poll))) continue;
+    if (!poll.message_id) continue;
+    await ctx.rest
+      .editMessage(poll.channel_id, poll.message_id, {
+        content: '',
+        embeds: [
+          {
+            color: 0x95a5a6,
+            title: '🗳️ 予想大会は取り消されました',
+            description: '正解が決まらないまま日が経ったので、賭けた額は全員に返しました。',
+          },
+        ],
+        components: [],
+      })
+      .catch((error) => console.error('予想大会の取り消し表示に失敗:', error));
+  }
+}
+
 async function postDueAnnouncements(ctx) {
   const due = await dueAnnouncements(ctx.db, ctx.timezone);
   const today = dateKey(ctx.timezone);
@@ -126,6 +160,7 @@ async function dispatch(ix, ctx) {
     if (namespace === 'm') return handleMenu(ix, ctx);
     if (namespace === 'rps') return handleRps(ix, ctx);
     if (namespace === 'cc') return handleChinchiro(ix, ctx);
+    if (namespace === 'pl') return handlePoll(ix, ctx);
     return reply({ content: 'この操作はもう使えません。`/menu` を開き直してください。' });
   }
 

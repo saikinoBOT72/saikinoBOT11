@@ -42,6 +42,7 @@ export async function open(ix, _args, ctx, notice = null) {
             { name: '🃏 ハイ&ロー', value: '連勝で倍率上昇。降り際が勝負', inline: true },
             { name: '✊ じゃんけん', value: '1対1。勝てば総取り', inline: true },
             { name: '🎲 チンチロ', value: '1対1。役で倍率が変わる', inline: true },
+            { name: '🗳️ 予想大会', value: 'みんなで賭けて、正解者で山分け', inline: true },
           ],
         }),
         notice,
@@ -56,6 +57,7 @@ export async function open(ix, _args, ctx, notice = null) {
       row(
         button(id('rps', 'open'), 'じゃんけん', { emoji: '✊', style: ButtonStyle.SUCCESS }),
         button(id('cc', 'open'), 'チンチロ', { emoji: '🎲', style: ButtonStyle.SUCCESS }),
+        button(id('poll', 'open'), '予想大会', { emoji: '🗳️', style: ButtonStyle.SUCCESS }),
       ),
       row(backButton()),
     ],
