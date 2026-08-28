@@ -6,7 +6,6 @@ import {
   MAX_STEPS,
   canChoose,
   cardLabel,
-  chances,
   drawCard,
   judge,
   multiply,
@@ -138,7 +137,6 @@ function toRow(game) {
 async function table(ix, ctx, game, notice = null) {
   const settings = await ctx.settings(ix.guildId);
   const card = { rank: game.card_rank, suit: game.card_suit };
-  const chance = chances(card.rank);
   const highMultiplier = stepMultiplier(card.rank, 'high');
   const lowMultiplier = stepMultiplier(card.rank, 'low');
   const current = payout(game.bet, game.multiplier);
@@ -154,16 +152,12 @@ async function table(ix, ctx, game, notice = null) {
           fields: [
             {
               name: '⬆️ HIGH',
-              value: canChoose(card.rank, 'high')
-                ? `×${highMultiplier}（当たる確率 ${Math.round(chance.high * 100)}%）`
-                : '選べません',
+              value: canChoose(card.rank, 'high') ? `×${highMultiplier}` : '選べません',
               inline: true,
             },
             {
               name: '⬇️ LOW',
-              value: canChoose(card.rank, 'low')
-                ? `×${lowMultiplier}（当たる確率 ${Math.round(chance.low * 100)}%）`
-                : '選べません',
+              value: canChoose(card.rank, 'low') ? `×${lowMultiplier}` : '選べません',
               inline: true,
             },
             { name: '賭け金', value: `${game.bet.toLocaleString('ja-JP')}`, inline: true },
@@ -293,7 +287,6 @@ export async function pick(ix, [choice], ctx) {
 /** めくったあとの場（次の予想を選べる状態）を、演出の最終コマとして作る。 */
 async function drawFrame(ix, ctx, previous, next, game, headline) {
   const settings = await ctx.settings(ix.guildId);
-  const chance = chances(next.rank);
   const current = payout(game.bet, game.multiplier);
 
   return {
@@ -305,16 +298,12 @@ async function drawFrame(ix, ctx, previous, next, game, headline) {
         fields: [
           {
             name: '⬆️ HIGH',
-            value: canChoose(next.rank, 'high')
-              ? `×${stepMultiplier(next.rank, 'high')}（${Math.round(chance.high * 100)}%）`
-              : '選べません',
+            value: canChoose(next.rank, 'high') ? `×${stepMultiplier(next.rank, 'high')}` : '選べません',
             inline: true,
           },
           {
             name: '⬇️ LOW',
-            value: canChoose(next.rank, 'low')
-              ? `×${stepMultiplier(next.rank, 'low')}（${Math.round(chance.low * 100)}%）`
-              : '選べません',
+            value: canChoose(next.rank, 'low') ? `×${stepMultiplier(next.rank, 'low')}` : '選べません',
             inline: true,
           },
           { name: 'いまの倍率', value: `×${game.multiplier}（${game.steps}連勝）`, inline: true },

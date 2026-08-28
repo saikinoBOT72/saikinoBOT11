@@ -10,13 +10,13 @@ export const SUITS = ['♠️', '♥️', '♦️', '♣️'];
  * 1回の予想あたりの還元率。
  * 連勝を狙うと掛け算で効いてくるので、1回あたりは高めにしてある。
  * 1回で降りれば約97%、3連勝を狙うと約91%（スロットと同水準）、
- * 8連勝まで粘ると約78%。「どこで降りるか」が損得を決める。
+ * 10連勝まで粘ると約74%、20連勝なら約54%。「どこで降りるか」が損得を決める。
  */
 export const RETURN_RATE = 0.97;
 
 /** 連勝の上限と、累積倍率の上限。青天井にしないための歯止め。 */
-export const MAX_STEPS = 8;
-export const MAX_MULTIPLIER = 100;
+export const MAX_STEPS = 20;
+export const MAX_MULTIPLIER = 1000;
 
 export function drawCard() {
   return { rank: 1 + Math.floor(Math.random() * 13), suit: SUITS[Math.floor(Math.random() * SUITS.length)] };

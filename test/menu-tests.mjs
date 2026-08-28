@@ -301,7 +301,8 @@ await test('予想すると勝ち負けが決まり、外れると勝負が終�
     const chance = (13 - game.card_rank) / 12;
     await press(chance >= 0.5 ? 'm:hl:pick:high' : 'm:hl:pick:low');
     const after = await db.get('SELECT * FROM highlow_games WHERE guild_id = ?1 AND user_id = ?2', GUILD, ME);
-    if (after && after.steps > 0) won = true;
+    // 確率100%の予想（Aで HIGH）は倍率が 0.97 なので、伸びるまで続ける
+    if (after && after.steps > 0 && after.multiplier > 1) won = true;
   }
   assert.ok(won, '当たれば連勝数が増えて勝負が続く');
 
@@ -408,6 +409,62 @@ await test('断ると預かりは発生しない', async () => {
   assert.equal(await eco.getBalance(db, GUILD, ME), 1000);
   assert.equal(await eco.getBalance(db, GUILD, OTHER), 1000);
   assert.equal((await db.get('SELECT * FROM chinchiro_matches WHERE id = ?1', match.id)).status, 'cancelled');
+});
+
+await test('強い役を出した方が勝ち、その人にコインが入る', async () => {
+  // compare() の勝者と settle() の受取人が食い違うと、負けた側に払ってしまう。
+  // 出目を固定して「誰が勝ちと表示され、誰にいくら入るか」まで確かめる。
+  const settings = await ctx.settings(GUILD);
+
+  async function playFixed(id, challengerDice, opponentDice) {
+    await eco.setBalance(db, GUILD, ME, 1000, 'test');
+    await eco.setBalance(db, GUILD, OTHER, 1000, 'test');
+    await chinchiroLib.createMatch(db, {
+      id,
+      guildId: GUILD,
+      channelId: 'c1',
+      challengerId: ME,
+      opponentId: OTHER,
+      bet: 100,
+    });
+    await chinchiroLib.markPlaying(db, id);
+    await eco.withdraw(db, GUILD, ME, 500, 'chinchiro:escrow', id);
+    await eco.withdraw(db, GUILD, OTHER, 500, 'chinchiro:escrow', id);
+    await chinchiroLib.recordRoll(db, id, 'challenger', [challengerDice]);
+    await chinchiroLib.recordRoll(db, id, 'opponent', [opponentDice]);
+
+    const payload = await chinchiroMatch.resolveMatch(ctx, await chinchiroLib.getMatch(db, id), settings);
+    return {
+      text: payload.embeds[0].description,
+      me: await eco.getBalance(db, GUILD, ME),
+      other: await eco.getBalance(db, GUILD, OTHER),
+    };
+  }
+
+  const pinzoro = await playFixed('ccfix1', [1, 1, 1], [2, 2, 3]);
+  assert.match(pinzoro.text, new RegExp(`<@${ME}> の勝ち`), '挑戦者のピンゾロが勝ち');
+  assert.equal(pinzoro.me, 1500, '×5 の 500 を受け取る');
+  assert.equal(pinzoro.other, 500, '負けた側が 500 払う');
+
+  const zorome = await playFixed('ccfix2', [2, 2, 3], [5, 5, 5]);
+  assert.match(zorome.text, new RegExp(`<@${OTHER}> の勝ち`), '受け手のゾロ目が勝ち');
+  assert.equal(zorome.other, 1300, '×3 の 300 を受け取る');
+  assert.equal(zorome.me, 700);
+
+  const me6 = await playFixed('ccfix3', [2, 2, 6], [3, 3, 4]);
+  assert.match(me6.text, new RegExp(`<@${ME}> の勝ち`), '出目が大きい方が勝ち');
+  assert.equal(me6.me, 1100);
+  assert.equal(me6.other, 900);
+
+  const hifumi = await playFixed('ccfix4', [1, 2, 3], [2, 4, 6]);
+  assert.match(hifumi.text, new RegExp(`<@${OTHER}> の勝ち`), 'ヒフミを出した挑戦者の負け');
+  assert.equal(hifumi.other, 1200, 'ヒフミは2倍払い');
+  assert.equal(hifumi.me, 800);
+
+  const draw = await playFixed('ccfix5', [4, 4, 2], [5, 5, 2]);
+  assert.match(draw.text, /引き分け/);
+  assert.equal(draw.me, 1000, '預かった分がそのまま戻る');
+  assert.equal(draw.other, 1000);
 });
 
 section('[予想大会]');

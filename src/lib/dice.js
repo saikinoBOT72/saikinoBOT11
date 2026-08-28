@@ -58,25 +58,33 @@ export function rollHand() {
 }
 
 /**
- * 2つの役を比べる。
+ * 挑戦者と受け手の役を比べる。
  * ヒフミを出した側は、相手の役に関係なく負けて2倍払う。
  * それ以外は格の高い方が勝ち、勝った側の役で倍率が決まる。
- * @returns {{winner: 'a'|'b'|'draw', multiplier: number, reason: string}}
+ *
+ * 戻り値の winner は精算側（chinchiro.settle）と同じ言葉にしてある。
+ * ここを 'a'/'b' のような別の言葉にすると、取り違えても型では気づけない。
+ * @returns {{winner: 'challenger'|'opponent'|'draw', multiplier: number, reason: string}}
  */
-export function compare(handA, handB) {
-  const aHifumi = handA.kind === 'hifumi';
-  const bHifumi = handB.kind === 'hifumi';
-  if (aHifumi && bHifumi) return { winner: 'draw', multiplier: 0, reason: 'どちらもヒフミ' };
-  if (aHifumi) return { winner: 'b', multiplier: 2, reason: 'ヒフミは2倍払い' };
-  if (bHifumi) return { winner: 'a', multiplier: 2, reason: 'ヒフミは2倍払い' };
-
-  if (handA.rank !== handB.rank) {
-    const winner = handA.rank > handB.rank ? 'a' : 'b';
-    return { winner, multiplier: (winner === 'a' ? handA : handB).multiplier, reason: '役の格' };
+export function compare(challengerHand, opponentHand) {
+  const challengerHifumi = challengerHand.kind === 'hifumi';
+  const opponentHifumi = opponentHand.kind === 'hifumi';
+  if (challengerHifumi && opponentHifumi) {
+    return { winner: 'draw', multiplier: 0, reason: 'どちらもヒフミ' };
   }
-  if (handA.value !== handB.value) {
-    const winner = handA.value > handB.value ? 'a' : 'b';
-    return { winner, multiplier: (winner === 'a' ? handA : handB).multiplier, reason: '出目の大きさ' };
+  if (challengerHifumi) return { winner: 'opponent', multiplier: 2, reason: 'ヒフミは2倍払い' };
+  if (opponentHifumi) return { winner: 'challenger', multiplier: 2, reason: 'ヒフミは2倍払い' };
+
+  const decide = (challengerWins, reason) => {
+    const winner = challengerWins ? 'challenger' : 'opponent';
+    const hand = challengerWins ? challengerHand : opponentHand;
+    return { winner, multiplier: hand.multiplier, reason };
+  };
+  if (challengerHand.rank !== opponentHand.rank) {
+    return decide(challengerHand.rank > opponentHand.rank, '役の格');
+  }
+  if (challengerHand.value !== opponentHand.value) {
+    return decide(challengerHand.value > opponentHand.value, '出目の大きさ');
   }
   return { winner: 'draw', multiplier: 0, reason: '同じ役' };
 }

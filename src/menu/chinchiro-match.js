@@ -158,7 +158,7 @@ async function handleRoll(ix, ctx, match) {
 
   // 両者が振り終えていれば決着、まだなら手番を渡す
   if (updated.challenger_dice && updated.opponent_dice) {
-    frames.push({ after: 900, payload: await settleFrames(ctx, updated, settings) });
+    frames.push({ after: 900, payload: await resolveMatch(ctx, updated, settings) });
   } else {
     frames.push({
       after: 900,
@@ -184,8 +184,11 @@ async function handleRoll(ix, ctx, match) {
   });
 }
 
-/** 両者の出目から勝敗を決めて精算し、最後のコマを作る。 */
-async function settleFrames(ctx, match, settings) {
+/**
+ * 両者の出目から勝敗を決めて精算し、最後のコマを作る。
+ * compare() と settle() は同じ 'challenger'|'opponent' で話す。テストから直接呼べるように公開している。
+ */
+export async function resolveMatch(ctx, match, settings) {
   const challengerHand = evaluate(lastThrow(match.challenger_dice));
   const opponentHand = evaluate(lastThrow(match.opponent_dice));
   const result = compare(challengerHand, opponentHand);

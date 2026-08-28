@@ -718,7 +718,7 @@ await test('倍率は掛け算で伸び、上限で頭打ちになる', () => {
   assert.equal(hl.multiply(1, 1.84), 1.84);
   assert.equal(hl.multiply(1.84, 2), 3.68);
   assert.equal(hl.payout(100, 3.68), 368);
-  assert.equal(hl.payout(100, 999), 100 * hl.MAX_MULTIPLIER, '上限を超えて払わない');
+  assert.equal(hl.payout(100, hl.MAX_MULTIPLIER * 2), 100 * hl.MAX_MULTIPLIER, '上限を超えて払わない');
 });
 
 await test('還元率は「1回で降りると約97%、粘るほど下がる」', () => {
@@ -776,10 +776,11 @@ await test('役の格で勝敗と倍率が決まる', () => {
 
   assert.deepEqual(
     { winner: dice.compare(pinzoro, zorome).winner, multiplier: dice.compare(pinzoro, zorome).multiplier },
-    { winner: 'a', multiplier: 5 },
+    { winner: 'challenger', multiplier: 5 },
   );
   assert.equal(dice.compare(zorome, me6).multiplier, 3);
-  assert.equal(dice.compare(me6, me3).winner, 'a', '出目が大きい方が勝ち');
+  assert.equal(dice.compare(me6, me3).winner, 'challenger', '出目が大きい方が勝ち');
+  assert.equal(dice.compare(me3, me6).winner, 'opponent', '弱い方が挑戦者なら受け手の勝ち');
   assert.equal(dice.compare(me6, me3).multiplier, 1);
   assert.equal(dice.compare(me6, dice.evaluate([3, 3, 6])).winner, 'draw', '同じ出目は引き分け');
 });
@@ -789,8 +790,8 @@ await test('ヒフミは相手の役に関係なく負けて2倍払い', () => {
   const none = dice.evaluate([2, 4, 6]);
   const pinzoro = dice.evaluate([1, 1, 1]);
 
-  assert.deepEqual(dice.compare(hifumi, none), { winner: 'b', multiplier: 2, reason: 'ヒフミは2倍払い' });
-  assert.equal(dice.compare(pinzoro, hifumi).winner, 'a');
+  assert.deepEqual(dice.compare(hifumi, none), { winner: 'opponent', multiplier: 2, reason: 'ヒフミは2倍払い' });
+  assert.equal(dice.compare(pinzoro, hifumi).winner, 'challenger');
   assert.equal(dice.compare(pinzoro, hifumi).multiplier, 2, 'ヒフミ相手は2倍（ピンゾロの5倍ではない）');
   assert.equal(dice.compare(hifumi, hifumi).winner, 'draw');
 });
