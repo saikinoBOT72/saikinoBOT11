@@ -1,4 +1,5 @@
 import { getBalance } from '../lib/economy.js';
+import { equippedTitle, titleTag } from '../lib/achievements.js';
 import { coins, truncate } from '../lib/format.js';
 import {
   ShopError,
@@ -272,7 +273,37 @@ export async function create(ix, _args, ctx) {
     stock,
   });
 
-  return manage(ix, [String(item.id)], ctx, '出品しました！');
+  await announceListing(ix, ctx, item);
+  return manage(ix, [String(item.id)], ctx, '出品しました！ チャンネルにも知らせました');
+}
+
+/** 新しい出品をみんなに知らせる。 */
+async function announceListing(ix, ctx, item) {
+  const settings = await ctx.settings(ix.guildId);
+  const title = await equippedTitle(ctx.db, ix.guildId, ix.userId);
+  const tag = titleTag(title);
+
+  const fields = [
+    { name: '価格', value: coins(item.price, settings), inline: true },
+    { name: '在庫', value: item.stock < 0 ? '無制限' : `${item.stock} 個`, inline: true },
+    { name: '商品番号', value: `#${item.id}`, inline: true },
+  ];
+  if (item.description) fields.push({ name: '説明', value: truncate(item.description, 400) });
+
+  ctx.announce(ix.channelId, {
+    embeds: [
+      embed({
+        color: 0x1abc9c,
+        author: { name: `${tag ? `【${tag}】` : ''}${ix.displayName}`, icon_url: ix.avatar },
+        title: `🆕 ${truncate(item.name, 80)} が出品されました！`,
+        description: `<@${ix.userId}> が出品しました。`,
+        image: item.image_url ?? undefined,
+        fields,
+        footer: { text: '/menu → 🛍️ ショップ から買えます' },
+      }),
+    ],
+    allowed_mentions: { parse: [] },
+  });
 }
 
 /* ------------------------------------------------------------------ 自分の出品 */

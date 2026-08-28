@@ -217,7 +217,8 @@ await test('確認してから購入され、代金が出品者に渡る', async
   assert.equal(ctx.sent.length, sentBefore + 1, '購入をチャンネルに告知');
 });
 
-await test('入力フォームから出品できる', async () => {
+await test('入力フォームから出品でき、チャンネルにも知らせる', async () => {
+  const sentBefore = ctx.sent.length;
   const payload = await press('m:shop:create', {
     type: 5,
     fields: { name: '手作りクッキー', price: '250', description: '10枚入り', stock: '3', image_url: '' },
@@ -227,6 +228,41 @@ await test('入力フォームから出品できる', async () => {
   assert.equal(created.price, 250);
   assert.equal(created.stock, 3);
   assert.match(firstEmbed(payload).title, /手作りクッキー/);
+
+  assert.equal(ctx.sent.length, sentBefore + 1, '出品のお知らせが1件');
+  const announced = ctx.sent.at(-1).payload.embeds[0];
+  assert.match(announced.title, /手作りクッキー/);
+  assert.match(announced.title, /出品されました/);
+  const fields = Object.fromEntries(announced.fields.map((field) => [field.name, field.value]));
+  assert.match(fields['価格'], /250/);
+  assert.equal(fields['在庫'], '3 個');
+  assert.equal(fields['商品番号'], `#${created.id}`);
+  assert.equal(fields['説明'], '10枚入り');
+});
+
+await test('画像URLを付けるとお知らせにも載る', async () => {
+  await press('m:shop:create', {
+    type: 5,
+    fields: {
+      name: '写真つき商品',
+      price: '10',
+      description: '',
+      stock: '',
+      image_url: 'https://example.invalid/a.png',
+    },
+  });
+  const announced = ctx.sent.at(-1).payload.embeds[0];
+  assert.equal(announced.image.url, 'https://example.invalid/a.png');
+  assert.equal(Object.fromEntries(announced.fields.map((f) => [f.name, f.value]))['在庫'], '無制限');
+});
+
+await test('出品に失敗したときはお知らせを出さない', async () => {
+  const sentBefore = ctx.sent.length;
+  await press('m:shop:create', {
+    type: 5,
+    fields: { name: 'だめな出品', price: 'たかい', description: '', stock: '', image_url: '' },
+  });
+  assert.equal(ctx.sent.length, sentBefore, 'お知らせは出ない');
 });
 
 await test('価格に数字以外を入れると出品されない', async () => {
