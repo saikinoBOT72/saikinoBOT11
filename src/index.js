@@ -10,7 +10,11 @@ import {
   cancelEmbed as chinchiroCancelEmbed,
 } from './menu/chinchiro-match.js';
 import { cancelExpired as cancelExpiredChinchiro } from './lib/chinchiro.js';
-import { handleComponent as handlePoll, boardPayload } from './menu/poll-board.js';
+import {
+  handleComponent as handlePoll,
+  boardPayload,
+  cancelledPayload as pollCancelledPayload,
+} from './menu/poll-board.js';
 import { abandonedPolls, cancelPoll, closePoll, duePolls, getPollById } from './lib/polls.js';
 import { findCommand } from './commands.js';
 import { cancelExpired } from './lib/rps.js';
@@ -109,17 +113,15 @@ async function sweepPolls(ctx) {
     if (!(await cancelPoll(ctx.db, poll))) continue;
     if (!poll.message_id) continue;
     await ctx.rest
-      .editMessage(poll.channel_id, poll.message_id, {
-        content: '',
-        embeds: [
-          {
-            color: 0x95a5a6,
-            title: '🗳️ 予想大会は取り消されました',
-            description: '正解が決まらないまま日が経ったので、賭けた額は全員に返しました。',
-          },
-        ],
-        components: [],
-      })
+      .editMessage(
+        poll.channel_id,
+        poll.message_id,
+        pollCancelledPayload(
+          poll,
+          '正解が決まらないまま日が経ったので、賭けた額は全員に返しました。' +
+            (poll.bonus > 0 ? '出題者の上乗せも戻しました。' : ''),
+        ),
+      )
       .catch((error) => console.error('予想大会の取り消し表示に失敗:', error));
   }
 }

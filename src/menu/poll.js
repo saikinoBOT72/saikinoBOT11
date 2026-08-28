@@ -35,7 +35,9 @@ export async function open(ix, _args, ctx, notice = null) {
   for (const poll of polls) {
     const counts = await tally(ctx.db, poll.id);
     const state = poll.status === 'open' ? `締切 <t:${Math.floor(poll.closes_at / 1000)}:R>` : '締切済み・正解待ち';
-    lines.push(`🗳️ **${truncate(poll.question, 60)}** — ${counts.players}人 / ${coins(counts.total, settings)}（${state}）`);
+    const pot = counts.total + (poll.bonus ?? 0);
+    const boost = poll.bonus > 0 ? `（うち上乗せ ${poll.bonus}）` : '';
+    lines.push(`🗳️ **${truncate(poll.question, 60)}** — ${counts.players}人 / ${coins(pot, settings)}${boost}（${state}）`);
   }
 
   return show(ix, {
@@ -54,9 +56,12 @@ export async function open(ix, _args, ctx, notice = null) {
               name: '決まりごと',
               value: [
                 '・1人1つ、あとから選び直せません',
+                `・選択肢は ${MIN_OPTIONS}〜${MAX_OPTIONS} 個`,
                 '・正解者がいなければ全員に返金',
                 '・参加者が1人だけなら不成立で返金',
                 '・出題者も賭けられます',
+                '・出題者は **自腹で賞金を上乗せ**できます（不成立・中止なら戻ります）',
+                '・出題者はいつでも **中止**できます（全額返金）',
               ].join('\n'),
             },
           ],
@@ -79,7 +84,7 @@ export function newPoll() {
         style: TextInputStyle.PARAGRAPH,
         placeholder: '来る\n来ない\n遅れて来る',
         required: true,
-        max: 300,
+        max: 600,
       }),
       textInput('minutes', '締切まで何分か', { placeholder: '例: 60', required: true, max: 6 }),
       textInput('stake', '参加費（空欄なら好きな額を賭けられる）', { placeholder: '例: 100', max: 12 }),
@@ -138,7 +143,8 @@ export async function create(ix, _args, ctx) {
         description:
           `**${truncate(question, 80)}**\n\nチャンネルに投稿しました。締切は <t:${Math.floor(poll.closes_at / 1000)}:R> です。\n` +
           `${MODES[poll.mode].label}（${MODES[poll.mode].hint}）\n\n` +
-          '締切がきたら、投稿の **✅ 正解を決める** から正解を選んでください。',
+          '締切がきたら、投稿の **✅ 正解を決める** から正解を選んでください。\n' +
+          '**💰 賞金を上乗せ** で自腹を切って盛り上げたり、**🚫 中止** で取りやめたりもできます。',
       }),
     ],
     components: [row(button(id('poll', 'open'), '予想大会へ', { emoji: '🗳️' }), homeButton())],

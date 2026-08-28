@@ -7,7 +7,7 @@ export const MODES = {
 };
 
 export const MIN_OPTIONS = 2;
-export const MAX_OPTIONS = 5;
+export const MAX_OPTIONS = 10;
 export const MIN_MINUTES = 5;
 export const MAX_MINUTES = 60 * 24 * 7;
 
@@ -105,6 +105,34 @@ export async function placeBet(db, poll, userId, optionIdx, amount) {
   return { ok: true };
 }
 
+/**
+ * 出題者が自腹で賞金を上乗せする。
+ * 先にプールへ積んでから引き落とし、払えなければ積んだぶんを戻す。
+ * こうしておけば「取られたのに増えていない」が起きない。
+ * @returns {Promise<{ok: true, bonus: number} | {ok: false, reason: 'closed'|'insufficient'}>}
+ */
+export async function addBonus(db, poll, amount) {
+  const claimed = await db.run(
+    "UPDATE polls SET bonus = bonus + ?2 WHERE id = ?1 AND status IN ('open', 'closed')",
+    poll.id,
+    amount,
+  );
+  if (claimed.changes !== 1) return { ok: false, reason: 'closed' };
+
+  if (!(await withdraw(db, poll.guild_id, poll.owner_id, amount, 'poll:bonus', `poll:${poll.id}`))) {
+    await db.run('UPDATE polls SET bonus = bonus - ?2 WHERE id = ?1', poll.id, amount);
+    return { ok: false, reason: 'insufficient' };
+  }
+  const fresh = await getPollById(db, poll.id);
+  return { ok: true, bonus: fresh.bonus };
+}
+
+/** 上乗せぶんを出題者に返す。 */
+async function refundBonus(db, poll) {
+  if (!poll.bonus) return;
+  await deposit(db, poll.guild_id, poll.owner_id, poll.bonus, 'poll:refund', `poll:${poll.id}`);
+}
+
 /** 締め切る。取れた1つだけが成功する。 */
 export async function closePoll(db, id) {
   const result = await db.run("UPDATE polls SET status = 'closed' WHERE id = ?1 AND status = 'open'", id);
@@ -123,16 +151,20 @@ export async function settlePoll(db, poll, answerIdx) {
   );
   if (claimed.changes !== 1) return { settled: false };
 
+  const fresh = await getPollById(db, poll.id);
+  const bonus = fresh?.bonus ?? 0;
   const bets = await betsOf(db, poll.id);
-  const total = bets.reduce((sum, bet) => sum + bet.amount, 0);
+  const staked = bets.reduce((sum, bet) => sum + bet.amount, 0);
+  const total = staked + bonus;
   const winners = bets.filter((bet) => bet.option_idx === answerIdx);
 
-  // 正解者がいない・参加者が1人だけなら成立させず返す
+  // 正解者がいない・参加者が1人だけなら成立させず返す（上乗せも出題者に戻す）
   if (winners.length === 0 || bets.length < 2) {
     for (const bet of bets) {
       await deposit(db, poll.guild_id, bet.user_id, bet.amount, 'poll:refund', `poll:${poll.id}`);
     }
-    return { settled: true, refunded: true, total, payouts: [] };
+    await refundBonus(db, fresh ?? poll);
+    return { settled: true, refunded: true, total, staked, bonus, payouts: [] };
   }
 
   const winnersTotal = winners.reduce((sum, bet) => sum + bet.amount, 0);
@@ -152,7 +184,7 @@ export async function settlePoll(db, poll, answerIdx) {
   for (const payout of payouts) {
     await deposit(db, poll.guild_id, payout.userId, payout.amount, 'poll:win', `poll:${poll.id}`);
   }
-  return { settled: true, refunded: false, total, payouts };
+  return { settled: true, refunded: false, total, staked, bonus, payouts };
 }
 
 /** 締切が来た大会。 */
@@ -165,7 +197,7 @@ export async function abandonedPolls(db, now = Date.now()) {
   return db.all("SELECT * FROM polls WHERE status = 'closed' AND closes_at <= ?1 LIMIT 25", now - ABANDON_MS);
 }
 
-/** 放置された大会を取り消して全額返す。 */
+/** 大会を取り消して全額返す（出題者が中止したとき・放置されたとき）。 */
 export async function cancelPoll(db, poll) {
   const claimed = await db.run(
     "UPDATE polls SET status = 'cancelled' WHERE id = ?1 AND status IN ('open', 'closed')",
@@ -175,5 +207,7 @@ export async function cancelPoll(db, poll) {
   for (const bet of await betsOf(db, poll.id)) {
     await deposit(db, poll.guild_id, bet.user_id, bet.amount, 'poll:refund', `poll:${poll.id}`);
   }
+  // 取り消しの直前に積まれたぶんも取りこぼさないよう、いまの値を読み直す
+  await refundBonus(db, (await getPollById(db, poll.id)) ?? poll);
   return true;
 }

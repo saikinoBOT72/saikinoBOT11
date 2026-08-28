@@ -1053,6 +1053,74 @@ await test('山分けは一度だけ', async () => {
   assert.equal(await eco.getBalance(db, G, 'j'), balance);
 });
 
+await test('上乗せは払えたぶんだけ積まれる', async () => {
+  const poll = await makePoll();
+  await eco.setBalance(db, G, 'owner', 1000, 'test');
+
+  const ok = await polls.addBonus(db, poll, 400);
+  assert.deepEqual(ok, { ok: true, bonus: 400 });
+  assert.equal(await eco.getBalance(db, G, 'owner'), 600);
+
+  const more = await polls.addBonus(db, await polls.getPollById(db, poll.id), 100);
+  assert.equal(more.bonus, 500, '積み増しできる');
+
+  const broke = await polls.addBonus(db, await polls.getPollById(db, poll.id), 9999);
+  assert.deepEqual(broke, { ok: false, reason: 'insufficient' });
+  assert.equal((await polls.getPollById(db, poll.id)).bonus, 500, '払えなければ積まない');
+  assert.equal(await eco.getBalance(db, G, 'owner'), 500);
+});
+
+await test('終わった大会には上乗せできない', async () => {
+  const poll = await makePoll();
+  await eco.setBalance(db, G, 'owner', 1000, 'test');
+  await polls.cancelPoll(db, poll);
+
+  const result = await polls.addBonus(db, await polls.getPollById(db, poll.id), 100);
+  assert.deepEqual(result, { ok: false, reason: 'closed' });
+  assert.equal(await eco.getBalance(db, G, 'owner'), 1000);
+});
+
+await test('上乗せは正解者に渡り、不成立なら出題者に戻る', async () => {
+  const poll = await makePoll();
+  await eco.setBalance(db, G, 'owner', 1000, 'test');
+  await polls.addBonus(db, poll, 600);
+  for (const name of ['p', 'q']) {
+    await eco.setBalance(db, G, name, 1000, 'test');
+    await polls.placeBet(db, poll, name, name === 'p' ? 0 : 1, 200);
+  }
+
+  const result = await polls.settlePoll(db, await polls.getPollById(db, poll.id), 0);
+  assert.equal(result.total, 1000, '賭け金400＋上乗せ600');
+  assert.equal(result.bonus, 600);
+  assert.equal(await eco.getBalance(db, G, 'p'), 1800, '正解者が総取り');
+  assert.equal(await eco.getBalance(db, G, 'owner'), 400, '出題者の上乗せは戻らない');
+
+  const dud = await makePoll();
+  await polls.addBonus(db, dud, 400);
+  for (const name of ['r', 's']) {
+    await eco.setBalance(db, G, name, 1000, 'test');
+    await polls.placeBet(db, dud, name, 0, 100);
+  }
+  await polls.settlePoll(db, await polls.getPollById(db, dud.id), 2);
+  assert.equal(await eco.getBalance(db, G, 'owner'), 400, '正解者がいなければ上乗せが戻る');
+  assert.equal(await eco.getBalance(db, G, 'r'), 1000);
+});
+
+await test('中止すると賭け金も上乗せも返る', async () => {
+  const poll = await makePoll();
+  await eco.setBalance(db, G, 'owner', 1000, 'test');
+  await eco.setBalance(db, G, 't', 1000, 'test');
+  await polls.addBonus(db, poll, 300);
+  await polls.placeBet(db, poll, 't', 0, 200);
+
+  assert.equal(await polls.cancelPoll(db, await polls.getPollById(db, poll.id)), true);
+  assert.equal(await eco.getBalance(db, G, 'owner'), 1000);
+  assert.equal(await eco.getBalance(db, G, 't'), 1000);
+
+  assert.equal(await polls.cancelPoll(db, await polls.getPollById(db, poll.id)), false, '二重に返さない');
+  assert.equal(await eco.getBalance(db, G, 'owner'), 1000);
+});
+
 await test('締切が来た大会を拾える', async () => {
   const poll = await makePoll();
   assert.equal((await polls.duePolls(db)).some((row) => row.id === poll.id), false, 'まだ締切前');
