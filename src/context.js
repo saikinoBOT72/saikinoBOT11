@@ -1,6 +1,7 @@
 import { wrapD1 } from './lib/sql.js';
 import { createRest } from './discord/rest.js';
 import { getSettings } from './lib/economy.js';
+import { clampHour } from './lib/calendar.js';
 
 /**
  * 1リクエストぶんの道具箱。DB・Discord API・サーバー設定をまとめて持ち回る。
@@ -15,6 +16,15 @@ export function createContext(env, executionCtx) {
     env,
     rest,
     timezone: env.TIMEZONE ?? 'Asia/Tokyo',
+
+    /**
+     * 「1日」の数え方。DAY_START_HOUR に 4 を入れると 4:00〜翌3:59 が同じ日になる。
+     * 連続記録・1日の回数制限・今日/今週の集計は、すべてこの区切りで数える。
+     */
+    calendar: {
+      timezone: env.TIMEZONE ?? 'Asia/Tokyo',
+      dayStartHour: clampHour(env.DAY_START_HOUR ?? 0),
+    },
 
     async settings(guildId) {
       if (!settingsCache.has(guildId)) settingsCache.set(guildId, await getSettings(db, guildId));

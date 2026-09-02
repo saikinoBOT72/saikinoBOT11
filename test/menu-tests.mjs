@@ -134,6 +134,19 @@ await test('未知のボタンでもメニューに戻すだけで落ちない',
 
 section('[報告]');
 
+await test('1日の区切りをずらすと、報告画面と使い方に出る', async () => {
+  const original = ctx.calendar;
+  ctx.calendar = { timezone: 'Asia/Tokyo', dayStartHour: 4 };
+  try {
+    assert.match(firstEmbed(await press('m:report:open')).footer.text, /1日の区切りは 4:00/);
+    assert.match(screenText(await press('m:home:help')), /1日の区切りは 4:00/);
+  } finally {
+    ctx.calendar = original;
+  }
+
+  assert.doesNotMatch(firstEmbed(await press('m:report:open')).footer.text, /区切り/, '0時始まりなら出さない');
+});
+
 await test('選ぶだけで報告が成立し、チャンネルにも投稿される', async () => {
   const before = await eco.getBalance(db, GUILD, ME);
   const activity = await act.getActivity(db, GUILD, '早起き');

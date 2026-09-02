@@ -5,6 +5,7 @@ import { countItems } from '../lib/shop.js';
 import { coins } from '../lib/format.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { button, embed, homeButton, id, row, show, withNotice } from './common.js';
+import { describeDayStart } from '../lib/calendar.js';
 
 export async function open(ix, _args, ctx, notice = null) {
   const settings = await ctx.settings(ix.guildId);
@@ -13,7 +14,7 @@ export async function open(ix, _args, ctx, notice = null) {
     rankOf(ctx.db, ix.guildId, ix.userId),
     listActivities(ctx.db, ix.guildId),
     countItems(ctx.db, ix.guildId),
-    allStreaks(ctx.db, ix.guildId, ix.userId, ctx.timezone),
+    allStreaks(ctx.db, ix.guildId, ix.userId, ctx.calendar),
   ]);
 
   const main = embed({
@@ -71,7 +72,8 @@ export async function help(ix, _args, ctx) {
           {
             name: '🔥 連日ボーナス・🏅 称号',
             value:
-              '連続日数はアクションごとに数えます。決められた日数に届くとボーナスが出て、条件を満たすと称号も自動で贈られます。**お財布 → 🏅 称号・連続記録** から、持っている称号を1つ選んで名前の横に表示できます。',
+              '連続日数はアクションごとに数えます。決められた日数に届くとボーナスが出て、条件を満たすと称号も自動で贈られます。**お財布 → 🏅 称号・連続記録** から、持っている称号を1つ選んで名前の横に表示できます。' +
+              (describeDayStart(ctx.calendar) ? `\n**${describeDayStart(ctx.calendar)}。** 深夜に報告しても前の日の続きとして数えます。` : ''),
           },
           {
             name: '🎮 あそぶ',

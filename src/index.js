@@ -146,15 +146,15 @@ async function sweepPolls(ctx) {
 }
 
 async function postDueAnnouncements(ctx) {
-  const due = await dueAnnouncements(ctx.db, ctx.timezone);
-  const today = dateKey(ctx.timezone);
+  const due = await dueAnnouncements(ctx.db, ctx.calendar);
+  const today = dateKey(ctx.calendar);
 
   for (const announcement of due) {
     // 先に「発表済み」にしてから作る（失敗しても同じ日に二重投稿しない）
     await markAnnounced(ctx.db, announcement.id, today);
     try {
       const settings = await ctx.settings(announcement.guild_id);
-      const built = await buildAnnouncement(ctx.db, announcement, { settings, timezone: ctx.timezone });
+      const built = await buildAnnouncement(ctx.db, announcement, { settings, calendar: ctx.calendar });
       if (!built) continue;
       await ctx.rest.createMessage(announcement.channel_id, {
         embeds: [built.embed],

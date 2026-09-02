@@ -8,12 +8,12 @@ import { backButton, button, embed, homeButton, id, row, show, withNotice } from
 export async function open(ix, _args, ctx, notice = null) {
   const settings = await ctx.settings(ix.guildId);
   // 画面を開いたときにも条件を見直す（報告以外で満たした場合の拾い上げ）
-  const justUnlocked = await evaluate(ctx.db, { guildId: ix.guildId, userId: ix.userId, timezone: ctx.timezone });
+  const justUnlocked = await evaluate(ctx.db, { guildId: ix.guildId, userId: ix.userId, calendar: ctx.calendar });
 
   const [all, earned, streaks, rewards, equipped] = await Promise.all([
     listAchievements(ctx.db, ix.guildId),
     earnedBy(ctx.db, ix.guildId, ix.userId),
-    allStreaks(ctx.db, ix.guildId, ix.userId, ctx.timezone),
+    allStreaks(ctx.db, ix.guildId, ix.userId, ctx.calendar),
     listStreakRewards(ctx.db, ix.guildId),
     equippedTitle(ctx.db, ix.guildId, ix.userId),
   ]);

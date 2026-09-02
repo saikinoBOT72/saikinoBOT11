@@ -20,6 +20,8 @@
     "crons": ["* * * * *"]
   },
   "vars": {
-    "TIMEZONE": "Asia/Tokyo"
+    "TIMEZONE": "Asia/Tokyo",
+    // 1日の区切り。4 なら 4:00〜翌3:59 が同じ「1日」（連続記録・回数制限・今日/今週の集計）
+    "DAY_START_HOUR": "4"
   }
 }

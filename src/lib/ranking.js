@@ -1,4 +1,6 @@
-import { dateKey, previousDay } from './streak.js';
+import { dateKey, previousDay, startOfDay } from './calendar.js';
+
+export { startOfDay };
 
 /** ランキングの集計対象。 */
 export const METRICS = {
@@ -9,34 +11,17 @@ export const METRICS = {
   activity_streak: { label: 'アクションの連続記録', unit: '日', needsActivity: true, usesPeriod: false },
 };
 
-/** 指定タイムゾーンでの今日 0:00（epoch ms）。 */
-export function startOfDay(timezone, now = new Date()) {
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat('en-CA', {
-      timeZone: timezone,
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    })
-      .formatToParts(now)
-      .map((part) => [part.type, part.value]),
-  );
-  const intoDay = (Number(parts.hour) % 24) * 3600 + Number(parts.minute) * 60 + Number(parts.second);
-  return now.getTime() - intoDay * 1000 - now.getMilliseconds();
-}
-
-/** 指定タイムゾーンでの今週（月曜始まり）0:00。 */
-export function startOfWeek(timezone, now = new Date()) {
-  const today = startOfDay(timezone, now);
-  const weekday = new Date(`${dateKey(timezone, now)}T00:00:00Z`).getUTCDay(); // 0=日曜
+/** 今週（月曜始まり）の始まり。日の区切りは calendar.js に合わせる。 */
+export function startOfWeek(calendar, now = new Date()) {
+  const today = startOfDay(calendar, now);
+  const weekday = new Date(`${dateKey(calendar, now)}T00:00:00Z`).getUTCDay(); // 0=日曜
   const daysSinceMonday = (weekday + 6) % 7;
   return today - daysSinceMonday * 86400 * 1000;
 }
 
-export function periodStart(period, timezone, now = new Date()) {
-  if (period === 'day') return startOfDay(timezone, now);
-  if (period === 'week') return startOfWeek(timezone, now);
+export function periodStart(period, calendar, now = new Date()) {
+  if (period === 'day') return startOfDay(calendar, now);
+  if (period === 'week') return startOfWeek(calendar, now);
   return 0;
 }
 
@@ -48,7 +33,7 @@ export function periodLabel(period) {
  * ランキングを計算する。
  * @returns {Promise<Array<{user_id: string, value: number}>>}
  */
-export async function computeRanking(db, { guildId, metric, activityName = null, since = 0, limit = 10, timezone }) {
+export async function computeRanking(db, { guildId, metric, activityName = null, since = 0, limit = 10, calendar }) {
   switch (metric) {
     case 'balance':
       return db.all(
@@ -92,10 +77,11 @@ export async function computeRanking(db, { guildId, metric, activityName = null,
     }
 
     case 'activity_streak': {
-      const today = dateKey(timezone);
+      // 生死の判定は streak.isAlive と同じ（区切りを変えた直後の「先の日付」も続いている扱い）
+      const today = dateKey(calendar);
       const rows = await db.all(
         `SELECT user_id, current AS value FROM streaks
-          WHERE guild_id = ?1 AND activity = ?2 AND (last_date = ?3 OR last_date = ?4) AND current > 0
+          WHERE guild_id = ?1 AND activity = ?2 AND (last_date >= ?3 OR last_date = ?4) AND current > 0
           ORDER BY value DESC, user_id ASC LIMIT ?5`,
         guildId,
         activityName,

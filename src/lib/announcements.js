@@ -1,7 +1,9 @@
 import { deposit } from './economy.js';
 import { equippedTitles, titleTag } from './achievements.js';
 import { METRICS, computeRanking, formatValue, periodStart, rankingTitle } from './ranking.js';
-import { dateKey } from './streak.js';
+import { currentHour, dateKey } from './calendar.js';
+
+export { currentHour };
 import { embed } from '../discord/builders.js';
 
 export const WEEKDAYS = ['日曜', '月曜', '火曜', '水曜', '木曜', '金曜', '土曜'];
@@ -61,19 +63,14 @@ export function describeAnnouncement(announcement) {
   return `${title}　*(${describeSchedule(announcement)}・上位${announcement.top_n}人${prize})*`;
 }
 
-/** 設定タイムゾーンでの現在の「時」（0-23）。 */
-export function currentHour(timezone, now = new Date()) {
-  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, hour: '2-digit', hour12: false }).formatToParts(now);
-  return Number(parts.find((part) => part.type === 'hour').value) % 24;
-}
-
 /**
  * いま発表すべきものを探す。
  * 1分ごとに呼ばれるので、時が一致していてその日まだ出していないものを対象にする。
  */
-export async function dueAnnouncements(db, timezone, now = new Date()) {
-  const today = dateKey(timezone, now);
-  const hour = currentHour(timezone, now);
+export async function dueAnnouncements(db, calendar, now = new Date()) {
+  // 「何時に出すか」は時計どおり。「その日もう出したか」は区切りに合わせた日付で見る
+  const today = dateKey(calendar, now);
+  const hour = currentHour(calendar, now);
   const weekday = new Date(`${today}T00:00:00Z`).getUTCDay();
 
   const rows = await db.all(
@@ -93,15 +90,15 @@ export async function markAnnounced(db, id, dateString) {
  * 発表用の Embed を組み立て、必要なら1位へ賞金を渡す。
  * @returns {Promise<{embed: object, winners: string[]} | null>} 対象がいなければ null
  */
-export async function buildAnnouncement(db, announcement, { settings, timezone }) {
+export async function buildAnnouncement(db, announcement, { settings, calendar }) {
   const period = announcement.frequency === 'weekly' ? 'week' : 'day';
   const rows = await computeRanking(db, {
     guildId: announcement.guild_id,
     metric: announcement.metric,
     activityName: announcement.activity_name,
-    since: periodStart(METRICS[announcement.metric]?.usesPeriod ? period : 'all', timezone),
+    since: periodStart(METRICS[announcement.metric]?.usesPeriod ? period : 'all', calendar),
     limit: announcement.top_n,
-    timezone,
+    calendar,
   });
   if (rows.length === 0) return null;
 

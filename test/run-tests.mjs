@@ -286,10 +286,10 @@ await test('アクションの回数で贈られ、ボーナスが入る', async
   const before = await eco.getBalance(db, G, ACH_USER);
 
   await act.logReport(db, G, ACH_USER, '筋トレ', 80);
-  assert.deepEqual(await ach.evaluate(db, { guildId: G, userId: ACH_USER, timezone: 'Asia/Tokyo' }), [], '1回では足りない');
+  assert.deepEqual(await ach.evaluate(db, { guildId: G, userId: ACH_USER, calendar: 'Asia/Tokyo' }), [], '1回では足りない');
 
   await act.logReport(db, G, ACH_USER, '筋トレ', 80);
-  const unlocked = await ach.evaluate(db, { guildId: G, userId: ACH_USER, timezone: 'Asia/Tokyo' });
+  const unlocked = await ach.evaluate(db, { guildId: G, userId: ACH_USER, calendar: 'Asia/Tokyo' });
   assert.deepEqual(unlocked.map((a) => a.name), ['筋トレ王']);
   assert.equal(await eco.getBalance(db, G, ACH_USER), before + 1000);
 });
@@ -304,12 +304,12 @@ await test('別のアクションの回数は数えない', async () => {
   });
   await act.logReport(db, G, ACH_USER, '早起き', 10);
   await act.logReport(db, G, ACH_USER, '早起き', 10);
-  assert.deepEqual(await ach.evaluate(db, { guildId: G, userId: ACH_USER, timezone: 'Asia/Tokyo' }), []);
+  assert.deepEqual(await ach.evaluate(db, { guildId: G, userId: ACH_USER, calendar: 'Asia/Tokyo' }), []);
 });
 
 await test('同じ称号は二度もらえない', async () => {
   const before = await eco.getBalance(db, G, ACH_USER);
-  assert.deepEqual(await ach.evaluate(db, { guildId: G, userId: ACH_USER, timezone: 'Asia/Tokyo' }), []);
+  assert.deepEqual(await ach.evaluate(db, { guildId: G, userId: ACH_USER, calendar: 'Asia/Tokyo' }), []);
   assert.equal(await eco.getBalance(db, G, ACH_USER), before);
   assert.equal((await ach.earnedBy(db, G, ACH_USER)).length, 1);
 });
@@ -322,22 +322,22 @@ await test('アクションの連続日数でも贈れる', async () => {
     activity_name: '筋トレ',
     reward: 0,
   });
-  const unlocked = await ach.evaluate(db, { guildId: G, userId: A, timezone: 'Asia/Tokyo' });
+  const unlocked = await ach.evaluate(db, { guildId: G, userId: A, calendar: 'Asia/Tokyo' });
   assert.ok(unlocked.map((a) => a.name).includes('鉄の意志'), '筋トレの最高記録が3日');
 
-  const other = await ach.evaluate(db, { guildId: G, userId: ACH_USER, timezone: 'Asia/Tokyo' });
+  const other = await ach.evaluate(db, { guildId: G, userId: ACH_USER, calendar: 'Asia/Tokyo' });
   assert.equal(other.map((a) => a.name).includes('鉄の意志'), false, '連続していない人はもらえない');
 });
 
 await test('合計回数と所持金でも贈れる', async () => {
   await ach.createAchievement(db, G, { name: '富豪', condition_type: 'balance', threshold: 100000, reward: 0 });
   assert.equal(
-    (await ach.evaluate(db, { guildId: G, userId: A, timezone: 'Asia/Tokyo' })).length,
+    (await ach.evaluate(db, { guildId: G, userId: A, calendar: 'Asia/Tokyo' })).length,
     0,
     '所持金が足りない',
   );
   await eco.setBalance(db, G, A, 100000, 'test');
-  const rich = await ach.evaluate(db, { guildId: G, userId: A, timezone: 'Asia/Tokyo' });
+  const rich = await ach.evaluate(db, { guildId: G, userId: A, calendar: 'Asia/Tokyo' });
   assert.deepEqual(rich.map((a) => a.name), ['富豪']);
 });
 
@@ -392,7 +392,7 @@ await test('報告すると連続日数・ボーナス・称号がまとめて�
   });
 
   const activity = await act.getActivity(db, G, 'ランニング');
-  const result = await reporting.attemptReport(db, { guildId: G, userId: C, activity, timezone: 'Asia/Tokyo' });
+  const result = await reporting.attemptReport(db, { guildId: G, userId: C, activity, calendar: 'Asia/Tokyo' });
 
   assert.equal(result.ok, true);
   assert.equal(result.streak.current, 1);
@@ -406,14 +406,14 @@ section('[ランキングの集計]');
 const ranking = await import(src('lib/ranking.js'));
 
 await test('総コイン数で並ぶ', async () => {
-  const rows = await ranking.computeRanking(db, { guildId: G, metric: 'balance', limit: 3, timezone: 'Asia/Tokyo' });
+  const rows = await ranking.computeRanking(db, { guildId: G, metric: 'balance', limit: 3, calendar: 'Asia/Tokyo' });
   assert.ok(rows.length > 0);
   for (let i = 1; i < rows.length; i++) assert.ok(rows[i - 1].value >= rows[i].value, '降順');
 });
 
 await test('期間内に稼いだコインで並ぶ', async () => {
   const since = ranking.startOfDay('Asia/Tokyo');
-  const rows = await ranking.computeRanking(db, { guildId: G, metric: 'earned', since, limit: 5, timezone: 'Asia/Tokyo' });
+  const rows = await ranking.computeRanking(db, { guildId: G, metric: 'earned', since, limit: 5, calendar: 'Asia/Tokyo' });
   assert.ok(rows.every((row) => row.value > 0), '増えた分だけを数える');
 });
 
@@ -422,14 +422,14 @@ await test('アクションの回数で並ぶ（対象を絞れる）', async ()
     guildId: G,
     metric: 'activity_total',
     limit: 10,
-    timezone: 'Asia/Tokyo',
+    calendar: 'Asia/Tokyo',
   });
   const onlyMuscle = await ranking.computeRanking(db, {
     guildId: G,
     metric: 'activity_total',
     activityName: '筋トレ',
     limit: 10,
-    timezone: 'Asia/Tokyo',
+    calendar: 'Asia/Tokyo',
   });
   const totalAll = all.reduce((sum, row) => sum + row.value, 0);
   const totalMuscle = onlyMuscle.reduce((sum, row) => sum + row.value, 0);
@@ -443,7 +443,7 @@ await test('連続記録は続いている人だけ並ぶ', async () => {
     metric: 'activity_streak',
     activityName: '筋トレ',
     limit: 10,
-    timezone: 'Asia/Tokyo',
+    calendar: 'Asia/Tokyo',
   });
   assert.ok(rows.every((row) => row.value > 0));
   assert.ok(rows.some((row) => row.user_id === A));
@@ -528,10 +528,10 @@ await test('発表の内容が作られ、1位に賞金が渡る', async () => {
     channelId: 'chan1', metric: 'balance', frequency: 'daily', hour: 9, topN: 3, prize: 500,
   });
   const settings = await eco.getSettings(db, G);
-  const top = (await ranking.computeRanking(db, { guildId: G, metric: 'balance', limit: 1, timezone: 'Asia/Tokyo' }))[0];
+  const top = (await ranking.computeRanking(db, { guildId: G, metric: 'balance', limit: 1, calendar: 'Asia/Tokyo' }))[0];
   const before = await eco.getBalance(db, G, top.user_id);
 
-  const built = await announcements.buildAnnouncement(db, announcement, { settings, timezone: 'Asia/Tokyo' });
+  const built = await announcements.buildAnnouncement(db, announcement, { settings, calendar: 'Asia/Tokyo' });
   assert.match(built.embed.title, /総コイン数ランキング/);
   assert.match(built.embed.description, /🥇/);
   assert.deepEqual(built.winners, [top.user_id]);
@@ -544,7 +544,7 @@ await test('対象が誰もいなければ何も作らない', async () => {
     channelId: 'chan1', metric: 'activity_streak', activityName: '存在しない', frequency: 'daily', hour: 9, topN: 3, prize: 0,
   });
   const settings = await eco.getSettings(db, G);
-  assert.equal(await announcements.buildAnnouncement(db, announcement, { settings, timezone: 'Asia/Tokyo' }), null);
+  assert.equal(await announcements.buildAnnouncement(db, announcement, { settings, calendar: 'Asia/Tokyo' }), null);
   await announcements.removeAnnouncement(db, G, announcement.id);
 });
 
@@ -1195,6 +1195,73 @@ await test('正解が決まらないまま放置された大会は返金して�
   assert.equal(await polls.cancelPoll(db, await polls.getPollById(db, poll.id)), true);
   assert.equal(await eco.getBalance(db, G, 'm'), 1000, '返金される');
   assert.equal(await polls.cancelPoll(db, await polls.getPollById(db, poll.id)), false, '二重返金しない');
+});
+
+section('[1日の区切り]');
+
+const cal = await import(src('lib/calendar.js'));
+const at = (text) => new Date(text);
+const FOUR = { timezone: 'Asia/Tokyo', dayStartHour: 4 };
+
+await test('4時始まりだと、深夜0〜4時は前の日に入る', () => {
+  assert.equal(cal.dateKey(FOUR, at('2026-09-01T22:00:00+09:00')), '2026-09-01');
+  assert.equal(cal.dateKey(FOUR, at('2026-09-02T00:30:00+09:00')), '2026-09-01', '日付が変わってもまだ前日');
+  assert.equal(cal.dateKey(FOUR, at('2026-09-02T03:59:59+09:00')), '2026-09-01');
+  assert.equal(cal.dateKey(FOUR, at('2026-09-02T04:00:00+09:00')), '2026-09-02', 'ここから新しい日');
+  assert.equal(cal.dateKey(FOUR, at('2026-09-02T23:59:00+09:00')), '2026-09-02');
+});
+
+await test('その日の始まりは4:00になる', () => {
+  const start = cal.startOfDay(FOUR, at('2026-09-02T10:00:00+09:00'));
+  assert.equal(new Date(start).toISOString(), '2026-09-01T19:00:00.000Z', '9/2 4:00 JST');
+  assert.equal(cal.startOfDay(FOUR, at('2026-09-02T02:00:00+09:00')), start - 86400000, '深夜2時は前の日の枠');
+  assert.equal(cal.startOfDay(FOUR, at('2026-09-02T04:00:00+09:00')), start);
+});
+
+await test('タイムゾーン名だけを渡すと、これまでどおり0時始まり', () => {
+  assert.equal(cal.dateKey('Asia/Tokyo', at('2026-09-02T02:00:00+09:00')), '2026-09-02');
+  assert.equal(
+    cal.startOfDay('Asia/Tokyo', at('2026-09-02T10:00:00+09:00')),
+    at('2026-09-02T00:00:00+09:00').getTime(),
+  );
+  assert.equal(cal.clampHour('4'), 4);
+  assert.equal(cal.clampHour(undefined), 0, '未設定なら0時始まり');
+  assert.equal(cal.clampHour(99), 23);
+});
+
+await test('発表の「何時に出すか」は時計どおりのまま', () => {
+  assert.equal(cal.currentHour('Asia/Tokyo', at('2026-09-02T02:00:00+09:00')), 2);
+  assert.equal(cal.currentHour(FOUR, at('2026-09-02T02:00:00+09:00')), 2, '区切りをずらしても時刻は動かさない');
+});
+
+await test('4時始まりなら、深夜2時の報告は前日の続きとして数える', async () => {
+  const run = (when) => streak.touchStreak(db, G, 'night', '筋トレ', FOUR, at(when));
+
+  assert.deepEqual(await run('2026-09-01T22:00:00+09:00'), { current: 1, best: 1, isNewDay: true });
+  const sameDay = await run('2026-09-02T02:00:00+09:00');
+  assert.equal(sameDay.isNewDay, false, '日付は変わったが同じ「1日」');
+  assert.equal(sameDay.current, 1);
+
+  assert.equal((await run('2026-09-02T05:00:00+09:00')).current, 2, '4時を過ぎたら次の日');
+  assert.equal((await run('2026-09-03T03:00:00+09:00')).isNewDay, false, '9/3の3時はまだ9/2');
+  assert.equal((await run('2026-09-03T04:00:00+09:00')).current, 3);
+});
+
+await test('区切りを0時から4時に変えても、連続記録は途切れない', async () => {
+  // 0時始まりのころ、9/2 の 1:00 に報告していた（当時の記録は「9/2」）
+  const before = await streak.touchStreak(db, G, 'shift', '筋トレ', 'Asia/Tokyo', at('2026-09-02T01:00:00+09:00'));
+  assert.equal(before.current, 1);
+
+  // ここで4時始まりに変更。同じ瞬間は「9/1」になるので、記録のほうが1日先に見える
+  const justAfter = await streak.getStreak(db, G, 'shift', '筋トレ', FOUR, at('2026-09-02T01:00:00+09:00'));
+  assert.equal(justAfter.alive, true, '先の日付でも途切れた扱いにしない');
+  assert.equal(justAfter.current, 1);
+
+  const sameDay = await streak.touchStreak(db, G, 'shift', '筋トレ', FOUR, at('2026-09-02T12:00:00+09:00'));
+  assert.equal(sameDay.isNewDay, false, '同じ日なので二重に進まない');
+
+  const next = await streak.touchStreak(db, G, 'shift', '筋トレ', FOUR, at('2026-09-03T12:00:00+09:00'));
+  assert.equal(next.current, 2, 'そのまま続く');
 });
 
 section('[表示ヘルパー]');

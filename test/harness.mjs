@@ -24,6 +24,7 @@ export function createTestContext() {
     animated,
     env: { TIMEZONE: 'Asia/Tokyo' },
     timezone: 'Asia/Tokyo',
+    calendar: { timezone: 'Asia/Tokyo', dayStartHour: 0 },
     rest: {
       async createMessage(channelId, payload) {
         sent.push({ channelId, payload });

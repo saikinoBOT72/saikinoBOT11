@@ -1,23 +1,20 @@
 import { deposit } from './economy.js';
+import { dateKey, previousDay } from './calendar.js';
 
-/** 設定タイムゾーンでの「今日」を 'YYYY-MM-DD' で返す。 */
-export function dateKey(timezone, now = new Date()) {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: timezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(now);
-}
+// 「1日」の区切りは calendar.js が決める。ここではその日付文字列だけを見る。
+export { dateKey, previousDay };
 
-export function previousDay(key) {
-  const date = new Date(`${key}T00:00:00Z`);
-  date.setUTCDate(date.getUTCDate() - 1);
-  return date.toISOString().slice(0, 10);
+/**
+ * 連続記録が続いているか。今日か昨日の報告なら生きている。
+ * 1日の区切りをずらした直後は、記録のほうが「未来の日付」になることがある。
+ * それは記録が新しいだけなので、途切れた扱いにはしない。
+ */
+export function isAlive(lastDate, today) {
+  return Boolean(lastDate) && (lastDate >= today || lastDate === previousDay(today));
 }
 
 /** そのアクションの連続記録。今日か昨日の報告があれば「生きている」。 */
-export async function getStreak(db, guildId, userId, activity, timezone) {
+export async function getStreak(db, guildId, userId, activity, calendar, now = new Date()) {
   const row = await db.get(
     'SELECT * FROM streaks WHERE guild_id = ?1 AND user_id = ?2 AND activity = ?3',
     guildId,
@@ -25,22 +22,20 @@ export async function getStreak(db, guildId, userId, activity, timezone) {
     activity,
   );
   if (!row) return { activity, current: 0, best: 0, alive: false };
-  const today = dateKey(timezone);
-  const alive = row.last_date === today || row.last_date === previousDay(today);
+  const alive = isAlive(row.last_date, dateKey(calendar, now));
   return { activity, current: alive ? row.current : 0, best: row.best, alive, lastDate: row.last_date };
 }
 
 /** その人の全アクションの連続記録（続いているものを長い順に）。 */
-export async function allStreaks(db, guildId, userId, timezone) {
+export async function allStreaks(db, guildId, userId, calendar, now = new Date()) {
   const rows = await db.all('SELECT * FROM streaks WHERE guild_id = ?1 AND user_id = ?2', guildId, userId);
-  const today = dateKey(timezone);
-  const yesterday = previousDay(today);
+  const today = dateKey(calendar, now);
   return rows
     .map((row) => ({
       activity: row.activity,
-      current: row.last_date === today || row.last_date === yesterday ? row.current : 0,
+      current: isAlive(row.last_date, today) ? row.current : 0,
       best: row.best,
-      alive: row.last_date === today || row.last_date === yesterday,
+      alive: isAlive(row.last_date, today),
     }))
     .sort((a, b) => b.current - a.current || b.best - a.best);
 }
@@ -49,8 +44,8 @@ export async function allStreaks(db, guildId, userId, timezone) {
  * そのアクションを報告したので連続日数を進める。
  * @returns {Promise<{current: number, best: number, isNewDay: boolean}>}
  */
-export async function touchStreak(db, guildId, userId, activity, timezone) {
-  const today = dateKey(timezone);
+export async function touchStreak(db, guildId, userId, activity, calendar, now = new Date()) {
+  const today = dateKey(calendar, now);
   const row = await db.get(
     'SELECT * FROM streaks WHERE guild_id = ?1 AND user_id = ?2 AND activity = ?3',
     guildId,

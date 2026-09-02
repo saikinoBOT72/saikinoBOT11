@@ -133,7 +133,7 @@ export function titleTag(title) {
 
 /* ------------------------------------------------------------------ 判定 */
 
-async function collectStats(db, { guildId, userId, timezone }, pending) {
+async function collectStats(db, { guildId, userId, calendar }, pending) {
   const types = new Set(pending.map((achievement) => achievement.condition_type));
   const stats = { counts: new Map(), streaks: new Map() };
 
@@ -157,7 +157,7 @@ async function collectStats(db, { guildId, userId, timezone }, pending) {
       stats.counts.set(name, row?.n ?? 0);
     }
     if (achievement.condition_type === 'activity_streak' && !stats.streaks.has(name)) {
-      stats.streaks.set(name, (await getStreak(db, guildId, userId, name, timezone)).best);
+      stats.streaks.set(name, (await getStreak(db, guildId, userId, name, calendar)).best);
     }
   }
   return stats;
@@ -182,7 +182,7 @@ function meets(achievement, stats) {
  * まだ持っていない称号の条件を満たしたか調べ、満たしていれば付与する。
  * @returns {Promise<Array<object>>} 新しく獲得した称号
  */
-export async function evaluate(db, { guildId, userId, timezone }) {
+export async function evaluate(db, { guildId, userId, calendar }) {
   const all = await listAchievements(db, guildId);
   if (all.length === 0) return [];
 
@@ -191,7 +191,7 @@ export async function evaluate(db, { guildId, userId, timezone }) {
   const pending = all.filter((achievement) => !ownedIds.has(achievement.id));
   if (pending.length === 0) return [];
 
-  const stats = await collectStats(db, { guildId, userId, timezone }, pending);
+  const stats = await collectStats(db, { guildId, userId, calendar }, pending);
   const unlocked = [];
 
   for (const achievement of pending) {

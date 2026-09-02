@@ -1,6 +1,7 @@
 import { canReport, getActivity, listActivities, reportStats } from '../lib/activities.js';
 import { attemptReport, gateMessage, reportEmbed } from '../lib/reporting.js';
 import { coins, duration, truncate } from '../lib/format.js';
+import { describeDayStart } from '../lib/calendar.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { stringSelect } from '../discord/builders.js';
 import { backButton, button, embed, homeButton, id, row, show, withNotice } from './common.js';
@@ -29,7 +30,7 @@ export async function open(ix, _args, ctx, notice = null) {
   const lines = [];
   const options = [];
   for (const activity of activities.slice(0, 25)) {
-    const gate = await canReport(ctx.db, ix.guildId, ix.userId, activity, ctx.timezone);
+    const gate = await canReport(ctx.db, ix.guildId, ix.userId, activity, ctx.calendar);
     const limits = [];
     if (activity.cooldown_sec > 0) limits.push(`${duration(activity.cooldown_sec)}おき`);
     if (activity.daily_limit > 0) limits.push(`1日${activity.daily_limit}回`);
@@ -54,7 +55,7 @@ export async function open(ix, _args, ctx, notice = null) {
           color: 0x2ecc71,
           title: '💪 報告してかせぐ',
           description: lines.join('\n'),
-          footer: { text: '下のリストから選ぶだけで報告できます' },
+          footer: { text: [describeDayStart(ctx.calendar), '下のリストから選ぶだけで報告できます'].filter(Boolean).join(' ／ ') },
         }),
         notice,
       ),
@@ -82,7 +83,7 @@ export async function pick(ix, _args, ctx) {
     guildId: ix.guildId,
     userId: ix.userId,
     activity,
-    timezone: ctx.timezone,
+    calendar: ctx.calendar,
   });
   if (!result.ok) return open(ix, [], ctx, result.message);
 

@@ -19,25 +19,25 @@ export function gateMessage(gate, activity) {
  * @returns {Promise<{ok: true, balance: number, count: number, streak: object,
  *   streakBonus: {days: number, reward: number}|null, unlocked: object[]} | {ok: false, message: string}>}
  */
-export async function attemptReport(db, { guildId, userId, activity, timezone, note = null }) {
-  const gate = await canReport(db, guildId, userId, activity, timezone);
+export async function attemptReport(db, { guildId, userId, activity, calendar, note = null }) {
+  const gate = await canReport(db, guildId, userId, activity, calendar);
   if (!gate.ok) return { ok: false, message: gateMessage(gate, activity) };
 
   await logReport(db, guildId, userId, activity.name, activity.reward, note);
   await deposit(db, guildId, userId, activity.reward, 'report', activity.name);
 
   // 連続記録はアクションごとに数える
-  const streak = await touchStreak(db, guildId, userId, activity.name, timezone);
+  const streak = await touchStreak(db, guildId, userId, activity.name, calendar);
   const streakBonus = streak.isNewDay
     ? await payStreakBonus(db, guildId, userId, activity.name, streak.current)
     : null;
-  const unlocked = await evaluate(db, { guildId, userId, timezone });
+  const unlocked = await evaluate(db, { guildId, userId, calendar });
   const title = await equippedTitle(db, guildId, userId);
 
   return {
     ok: true,
     balance: await getBalance(db, guildId, userId),
-    count: await countToday(db, guildId, userId, activity.name, timezone),
+    count: await countToday(db, guildId, userId, activity.name, calendar),
     streak,
     streakBonus,
     unlocked,

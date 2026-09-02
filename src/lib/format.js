@@ -1,3 +1,5 @@
+import { startOfDay } from './calendar.js';
+
 /** 「🪙 1,234 コイン」の形に整える。 */
 export function coins(amount, settings) {
   return `${settings.currency_emoji} **${Number(amount).toLocaleString('ja-JP')}** ${settings.currency_name}`;
@@ -18,18 +20,9 @@ export function duration(seconds) {
   return parts.length > 0 ? parts.join('') : '0秒';
 }
 
-/** 指定タイムゾーンでの「今日 0:00」を epoch ms で返す。 */
-export function startOfToday(timezone = 'Asia/Tokyo', now = new Date()) {
-  const formatter = new Intl.DateTimeFormat('en-CA', {
-    timeZone: timezone,
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
-  const parts = Object.fromEntries(formatter.formatToParts(now).map((part) => [part.type, part.value]));
-  const intoDay = (Number(parts.hour) % 24) * 3600 + Number(parts.minute) * 60 + Number(parts.second);
-  return now.getTime() - intoDay * 1000 - now.getMilliseconds();
+/** その瞬間が属する「日」の始まりを epoch ms で返す（区切りは calendar.js が決める）。 */
+export function startOfToday(calendar = 'Asia/Tokyo', now = new Date()) {
+  return startOfDay(calendar, now);
 }
 
 /** Discord の相対時刻表記。 */

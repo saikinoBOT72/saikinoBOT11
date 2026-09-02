@@ -49,13 +49,13 @@ export async function removeActivity(db, guildId, name) {
   return result.changes > 0;
 }
 
-export async function countToday(db, guildId, userId, name, timezone) {
+export async function countToday(db, guildId, userId, name, calendar) {
   const row = await db.get(
     'SELECT COUNT(*) AS n FROM activity_logs WHERE guild_id = ?1 AND user_id = ?2 AND activity = ?3 AND created_at >= ?4',
     guildId,
     userId,
     name,
-    startOfToday(timezone),
+    startOfToday(calendar),
   );
   return row?.n ?? 0;
 }
@@ -64,9 +64,9 @@ export async function countToday(db, guildId, userId, name, timezone) {
  * 報告できる状態か判定する。
  * @returns {{ok: true} | {ok: false, reason: 'cooldown', retryAtMs: number} | {ok: false, reason: 'daily', limit: number}}
  */
-export async function canReport(db, guildId, userId, activity, timezone) {
+export async function canReport(db, guildId, userId, activity, calendar) {
   if (activity.daily_limit > 0) {
-    const today = await countToday(db, guildId, userId, activity.name, timezone);
+    const today = await countToday(db, guildId, userId, activity.name, calendar);
     if (today >= activity.daily_limit) return { ok: false, reason: 'daily', limit: activity.daily_limit };
   }
   if (activity.cooldown_sec > 0) {
