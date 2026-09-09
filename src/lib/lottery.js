@@ -10,6 +10,13 @@ import { deposit, withdraw } from './economy.js';
 import { dateKey, previousDay } from './calendar.js';
 
 export const TICKET_PRICE = 100;
+
+/**
+ * 最初から積んである元金。
+ * 誰も買っていなくても賞金がこの額から始まるので、1枚目を買う気になる。
+ * 当たって払い出したあとも、またここから積み直す。
+ */
+export const SEED_POOL = 2000;
 export const MAX_TICKETS_PER_USER = 10;
 export const MAX_NUMBER = 999;
 
@@ -84,8 +91,9 @@ export async function getLottery(db, guildId) {
   const row = await db.get('SELECT * FROM lottery WHERE guild_id = ?1', guildId);
   if (row) return row;
   await db.run(
-    'INSERT OR IGNORE INTO lottery (guild_id, enabled, carryover, created_at) VALUES (?1, 1, 0, ?2)',
+    'INSERT OR IGNORE INTO lottery (guild_id, enabled, carryover, created_at) VALUES (?1, 1, ?2, ?3)',
     guildId,
+    SEED_POOL,
     Date.now(),
   );
   return db.get('SELECT * FROM lottery WHERE guild_id = ?1', guildId);
@@ -199,7 +207,8 @@ export async function drawLottery(db, lottery, drawKey, number = drawNumber()) {
   const prize = hit ? pool + carryover : 0;
   if (hit) {
     await deposit(db, lottery.guild_id, hit.user_id, prize, 'lottery:win', `${drawKey} ${formatNumber(number)}`);
-    await db.run('UPDATE lottery SET carryover = 0 WHERE guild_id = ?1', lottery.guild_id);
+    // 払い出したら、また元金から積み直す
+    await db.run('UPDATE lottery SET carryover = ?2 WHERE guild_id = ?1', lottery.guild_id, SEED_POOL);
   } else {
     await db.run('UPDATE lottery SET carryover = ?2 WHERE guild_id = ?1', lottery.guild_id, carryover + pool);
   }

@@ -778,10 +778,14 @@ async function startDuelBetween(screen, bet = 100) {
 await test('あそぶ画面から新しいゲームを開ける', async () => {
   const payload = await press('m:games:open');
   const ids = customIds(payload);
-  for (const screen of ['doors', 'rr', 'cs', 'mine']) {
+  for (const screen of ['dd', 'rr', 'cs', 'mine']) {
     assert.ok(ids.includes(`m:${screen}:open`), `${screen} のボタンがある`);
   }
   assertAllButtonsWork(payload, 'あそぶ');
+
+  // 運命の扉は2人用として並べつつ、1人でも遊べる導線を残す
+  const versus = await press('m:dd:open');
+  assert.ok(customIds(versus).includes('m:doors:open'), '1人で遊ぶボタンがある');
 });
 
 /* --- ロシアンルーレット --- */
@@ -847,23 +851,34 @@ await test('二人そろうまで結果は出ない', async () => {
   globalThis.__csId = duel.id;
 });
 
-await test('エネルギーが足りない手は選べない', async () => {
-  const payload = await pressDuel(`d:move:${globalThis.__csId}:big`, { userId: ME });
+await test('ためていないとシュートは選べない', async () => {
+  const duel = await startDuelBetween('cs');
+  const payload = await pressDuel(`d:move:${duel.id}:shoot`, { userId: ME });
   assert.match(screenText(payload), /エネルギーが足りません/);
+
+  const unknown = await pressDuel(`d:move:${duel.id}:big`, { userId: ME });
+  assert.match(screenText(unknown), /不明な手/, 'ビッグシュートは無くなった');
 });
 
-await test('撃ち抜けば決着し、勝った側が総取り', async () => {
+await test('2回撃ち抜けば決着し、勝った側が総取り', async () => {
   const duel = await startDuelBetween('cs');
-  // 1ラウンド目: 二人ともためる
-  await pressDuel(`d:move:${duel.id}:charge`, { userId: ME });
-  await pressDuel(`d:move:${duel.id}:charge`, { userId: OTHER });
+  const round = async (mine, theirs) => {
+    await pressDuel(`d:move:${duel.id}:${mine}`, { userId: ME });
+    await pressDuel(`d:move:${duel.id}:${theirs}`, { userId: OTHER });
+    return duelLib.stateOf(await db.get('SELECT * FROM duels WHERE id = ?1', duel.id));
+  };
 
-  // 2ラウンド目: 挑戦者がシュート、相手はためる → 挑戦者の勝ち
-  await pressDuel(`d:move:${duel.id}:shoot`, { userId: ME });
-  await pressDuel(`d:move:${duel.id}:charge`, { userId: OTHER });
+  await round('charge', 'charge');
+  const hit = await round('shoot', 'charge');
+  assert.deepEqual(hit.hp, { challenger: 2, opponent: 1 }, '1回目は当たっても終わらない');
+  assert.equal((await db.get('SELECT status FROM duels WHERE id = ?1', duel.id)).status, 'playing');
+
+  await round('charge', 'guard');
+  await round('shoot', 'charge');
 
   const done = await db.get('SELECT * FROM duels WHERE id = ?1', duel.id);
-  assert.equal(done.status, 'done');
+  assert.equal(done.status, 'done', '2回当てたら決着');
+  assert.equal(duelLib.stateOf(done).hp.opponent, 0);
   assert.equal(await eco.getBalance(db, GUILD, ME), 1100, '総取り');
   assert.equal(await eco.getBalance(db, GUILD, OTHER), 900);
 });
@@ -933,19 +948,24 @@ await test('1人プレイ: 当たれば倍率が伸び、持ち帰れる', async
       await press('m:doors:bet:100');
       continue;
     }
-    await press('m:doors:pick:red');
+    const payload = await press('m:doors:pick:red');
     const after = await db.get('SELECT * FROM doors_games WHERE guild_id = ?1 AND user_id = ?2', GUILD, ME);
-    if (after && after.steps > 0) won = true;
+    if (after && after.steps > 0) {
+      won = true;
+      assert.match(JSON.stringify(ctx.animated.at(-1)), /あたり/, '結果が大きく出る');
+    } else {
+      assert.match(JSON.stringify(ctx.animated.at(-1)), /はずれ/, '外れも大きく出る');
+    }
   }
   assert.ok(won, '当たれば勝負が続く');
 
   const game = await db.get('SELECT * FROM doors_games WHERE guild_id = ?1 AND user_id = ?2', GUILD, ME);
-  assert.equal(game.multiplier, 1.9);
+  assert.equal(game.multiplier, 2);
 
   const balanceBefore = await eco.getBalance(db, GUILD, ME);
   const payload = await press('m:doors:stop');
   assert.match(firstEmbed(payload).title, /持ち帰り/);
-  assert.equal(await eco.getBalance(db, GUILD, ME), balanceBefore + 190);
+  assert.equal(await eco.getBalance(db, GUILD, ME), balanceBefore + 200);
   assert.equal(await db.get('SELECT * FROM doors_games WHERE guild_id = ?1 AND user_id = ?2', GUILD, ME), null);
 });
 
@@ -971,6 +991,8 @@ await test('2人プレイ: 山分けを選ぶと半分ずつ', async () => {
       continue;
     }
     await pressDuel(`d:door:${current.id}:red`, { userId: ME });
+    const shown = JSON.stringify(ctx.animated.at(-1));
+    assert.match(shown, /あたり|はずれ/, '結果が大きく出る');
     current = await db.get('SELECT * FROM duels WHERE id = ?1', current.id);
     state = duelLib.stateOf(current);
   }
@@ -988,6 +1010,7 @@ await test('2人プレイ: 山分けを選ぶと半分ずつ', async () => {
   const done = await db.get('SELECT * FROM duels WHERE id = ?1', current.id);
   assert.equal(done.status, 'done');
   const prize = Math.floor(200 * sharing.multiplier);
+  assert.equal(sharing.multiplier, 2 ** sharing.steps, '1枚ごとに2倍');
   const gained =
     (await eco.getBalance(db, GUILD, ME)) - meBefore + ((await eco.getBalance(db, GUILD, OTHER)) - otherBefore);
   assert.equal(gained, prize, '取り分がそのまま二人に渡る');

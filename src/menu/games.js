@@ -45,7 +45,7 @@ export async function open(ix, _args, ctx, notice = null) {
             { name: `${em.rps} じゃんけん`, value: '1対1。勝てば総取り', inline: true },
             { name: `${em.chinchiro} チンチロ`, value: '1対1。役で倍率が変わる', inline: true },
             { name: `${em.poll} 予想大会`, value: 'みんなで賭けて、正解者で山分け', inline: true },
-            { name: `${em.doors} 運命の扉`, value: '赤か青。当て続けて倍率を伸ばす', inline: true },
+            { name: `${em.doors} 運命の扉`, value: '**2人用**。当て続けて倍率を伸ばし、最後は山分けか裏切りか（1人でも可）', inline: true },
             { name: `${em.roulette} ロシアンルーレット`, value: '1対1。引くほど当たる確率が上がる', inline: true },
             { name: `${em.charge} チャージ＆シュート`, value: '1対1。ためて撃つ読み合い', inline: true },
             { name: `${em.mines} 地雷＆陣取り`, value: '1対1。3×3のマスを取り合う', inline: true },
@@ -62,15 +62,17 @@ export async function open(ix, _args, ctx, notice = null) {
         button(id('hl', 'open'), 'ハイ&ロー', { emoji: em.highlow, style: ButtonStyle.PRIMARY }),
       ),
       row(
-        button(id('doors', 'open'), '運命の扉', { emoji: em.doors, style: ButtonStyle.PRIMARY }),
         button(id('lot', 'open'), '宝くじ', { emoji: em.lottery, style: ButtonStyle.PRIMARY }),
         button(id('poll', 'open'), '予想大会', { emoji: em.poll, style: ButtonStyle.SUCCESS }),
       ),
       row(
+        button(id('dd', 'open'), '運命の扉', { emoji: em.doors, style: ButtonStyle.SUCCESS }),
         button(id('rps', 'open'), 'じゃんけん', { emoji: em.rps, style: ButtonStyle.SUCCESS }),
         button(id('cc', 'open'), 'チンチロ', { emoji: em.chinchiro, style: ButtonStyle.SUCCESS }),
         button(id('rr', 'open'), 'ロシアンルーレット', { emoji: em.roulette, style: ButtonStyle.SUCCESS }),
         button(id('cs', 'open'), 'チャージ＆シュート', { emoji: em.charge, style: ButtonStyle.SUCCESS }),
+      ),
+      row(
         button(id('mine', 'open'), '地雷＆陣取り', { emoji: em.mines, style: ButtonStyle.SUCCESS }),
       ),
       row(backButton()),
@@ -564,7 +566,7 @@ export const cc = { open: ccOpen, user: ccUser, custom: ccCustom, amount: ccAmou
  * 「相手を選ぶ → 賭け金を決める → 挑戦状を送る」までが同じなので、
  * ここでまとめて画面を作る。ルールの説明だけを各ゲームから受け取る。
  */
-function duelScreens(gameKey, { screen, lead }) {
+function duelScreens(gameKey, { screen, lead, extra = null }) {
   const rules = findGame(gameKey);
 
   async function open(ix, _args, ctx, notice = null) {
@@ -580,7 +582,10 @@ function duelScreens(gameKey, { screen, lead }) {
           notice,
         ),
       ],
-      components: [userSelect(id(screen, 'user'), '対戦相手を選ぶ'), row(backButton('games'), homeButton())],
+      components: [
+        userSelect(id(screen, 'user'), '対戦相手を選ぶ'),
+        row(...(extra ? extra() : []), backButton('games'), homeButton()),
+      ],
     });
   }
 
@@ -680,4 +685,5 @@ export const mine = duelScreens('mine', {
 export const dd = duelScreens('doors', {
   screen: 'dd',
   lead: '二人で同じ額を出し合い、当たり続けるかぎり倍率が伸びます。最後は山分けか、ひとりじめか。',
+  extra: () => [button(id('doors', 'open'), '1人で遊ぶ', { emoji: '👤' })],
 });

@@ -7,8 +7,11 @@
  */
 import {
   DOORS,
+  HIT_HEADLINE,
   MAX_STEPS,
+  MISS_HEADLINE,
   SHARE,
+  STEP_MULTIPLIER,
   isCapped,
   multiply,
   openDoor,
@@ -27,12 +30,12 @@ export const title = '運命の扉';
 export const emojiSlot = 'doors';
 export const color = 0x8e44ad;
 
-export function inviteFields({ settings }) {
+export function inviteFields() {
   return [{ name: 'ルール', value: RULES }];
 }
 
 const RULES = [
-  '赤と青の扉、当たりはどちらか一方。**当たれば倍率が伸びて次の扉へ**、外れたらそこで終わりです。',
+  `赤と青の扉、当たりはどちらか一方。**当たるたび ×${STEP_MULTIPLIER}** で次の扉へ、外れたらそこで終わりです。`,
   `**どちらが押してもかまいません。**最大 ${MAX_STEPS} 回まで進めます。`,
   '',
   'いつでも「持ち帰る」を選べます。持ち帰ると最後に、二人が同時に選びます:',
@@ -107,8 +110,8 @@ async function handleDoor(ix, ctx, duel, choice, settings) {
     after: 1000,
     payload:
       state.phase === 'share'
-        ? sharePayload(opened.duel, state, settings, `🎉 **${state.steps}枚目の扉まで到達！** ここで打ち止めです。`)
-        : board(opened.duel, state, settings, `${DOORS[choice].emoji} **当たり！** 扉が開きました。`),
+        ? sharePayload(opened.duel, state, settings, `${HIT_HEADLINE}\n**${state.steps}枚目の扉まで到達！** ここで打ち止めです。`)
+        : board(opened.duel, state, settings, `${HIT_HEADLINE}\n${DOORS[choice].emoji} の扉が開きました。`),
   });
   ctx.animate(ix, frames);
   return update(openingFrame(duel, ix.userId, choice));
@@ -205,7 +208,7 @@ export function board(duel, state, settings, headline = null) {
         title: `${em[emojiSlot]} ${title}`,
         description:
           (headline ? `${headline}\n\n` : '') +
-          `# ${DOORS.red.emoji} 　 ${DOORS.blue.emoji}\n` +
+          `${DOORS.red.emoji} 　 ${DOORS.blue.emoji}\n` +
           `**${state.steps + 1}枚目の扉**。当たりはどちらか一方です。\n` +
           (history ? `\nここまで: ${history}` : ''),
         fields: [
@@ -285,6 +288,7 @@ function lostPayload(duel, state, settings) {
         color: 0x95a5a6,
         title: `${em[emojiSlot]} ${title} — 終了`,
         description:
+          `${MISS_HEADLINE}\n` +
           `選んだのは ${DOORS[choice].emoji}、当たりは ${DOORS[winning].emoji} でした。\n\n` +
           `**${state.steps}枚**まで進みましたが、ここで終わりです。\n` +
           `${coins(duel.escrow * 2, settings)} は消えました。`,

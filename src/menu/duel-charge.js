@@ -2,8 +2,8 @@
  * チャージ＆シュート（1対1）。
  * 二人が同時に手を選び、そろったところで結果を出す。
  */
-import { MAX_ROUNDS, MOVES, canUse, playRound } from '../lib/charge.js';
-import { finishDuel, mutate, refundDuel, settleDuel, userIdOf } from '../lib/duel.js';
+import { MAX_HP, MAX_ROUNDS, MOVES, canUse, hearts, playRound } from '../lib/charge.js';
+import { finishDuel, mutate, otherRole, refundDuel, settleDuel, userIdOf } from '../lib/duel.js';
 import { coins } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
@@ -20,18 +20,18 @@ export function inviteFields() {
 }
 
 const RULES = [
-  '二人**同時**に手を選びます。そろったら結果が出ます。',
+  `二人**同時**に手を選びます。体力は **${MAX_HP}**、**${MAX_HP}回撃たれたら負け**です。`,
   '',
   `${MOVES.charge.emoji} **ためる** — エネルギー+1。ただし無防備`,
-  `${MOVES.guard.emoji} **ガード** — シュートを防ぐ。何度でも使える`,
-  `${MOVES.shoot.emoji} **シュート** — エネルギー1。ためている相手に当たれば勝ち`,
-  `${MOVES.big.emoji} **ビッグシュート** — エネルギー3。**ガードごと撃ち抜く**`,
+  `${MOVES.guard.emoji} **ガード** — シュートを防ぐ`,
+  `${MOVES.shoot.emoji} **シュート** — エネルギー1。ためている相手に当たる`,
   '',
-  '同じ手どうしは相殺。ビッグはシュートも押し切ります。',
+  'シュートどうしは相殺。ガードにも防がれます。',
 ].join('\n');
 
 export async function start(ctx, { duel, settings }) {
   const state = {
+    hp: { challenger: MAX_HP, opponent: MAX_HP },
     energy: { challenger: 0, opponent: 0 },
     choice: { challenger: null, opponent: null },
     round: 1,
@@ -79,26 +79,28 @@ export async function handle(ix, ctx, { duel, role, action, args }) {
 
 /** 二人そろったので、1ラウンド進める。 */
 async function resolveRound(ix, ctx, duel, state, settings) {
-  const round = playRound(state.energy, state.choice);
+  const round = playRound(state.hp, state.energy, state.choice);
   const entry = {
     round: state.round,
     moves: { ...state.choice },
     reason: round.reason,
-    winner: round.winner,
+    damaged: round.damaged,
   };
   const log = [...state.log, entry].slice(-6);
+  const winner = round.loser ? otherRole(round.loser) : null;
 
-  if (round.winner) {
-    const next = { ...state, energy: round.energy, choice: { challenger: null, opponent: null }, log };
+  if (winner) {
+    const next = { ...state, hp: round.hp, energy: round.energy, choice: { challenger: null, opponent: null }, log };
     if (!(await finishDuel(ctx.db, duel, next))) return reply({ content: 'この勝負はもう終わっています。' });
-    const { pot } = await settleDuel(ctx.db, duel, round.winner);
-    ctx.animate(ix, [{ after: 1000, payload: resultPayload(duel, entry, settings, round.winner, pot) }]);
+    const { pot } = await settleDuel(ctx.db, duel, winner);
+    ctx.animate(ix, [{ after: 1000, payload: resultPayload(duel, entry, next, settings, winner, pot) }]);
     return update(revealFrame(duel, entry));
   }
 
   const drawn = state.round >= MAX_ROUNDS;
   const next = {
     ...state,
+    hp: round.hp,
     energy: round.energy,
     choice: { challenger: null, opponent: null },
     round: state.round + 1,
@@ -115,7 +117,10 @@ async function resolveRound(ix, ctx, duel, state, settings) {
   const moved = await mutate(ctx.db, duel.id, () => ({ state: next }));
   if (!moved.ok) return reply({ content: 'この勝負はもう終わっています。' });
 
-  ctx.animate(ix, [{ after: 1000, payload: board(moved.duel, next, settings, `**${round.reason}**`) }]);
+  const headline = round.damaged
+    ? `💥 **${round.reason}！** <@${userIdOf(duel, round.damaged)}> に命中！`
+    : `**${round.reason}**`;
+  ctx.animate(ix, [{ after: 1000, payload: board(moved.duel, next, settings, headline) }]);
   return update(revealFrame(duel, entry));
 }
 
@@ -145,7 +150,7 @@ export function board(duel, state, settings, headline = null) {
   const history = state.log
     .slice(-4)
     .map((entry) => {
-      const mark = entry.winner ? '💥' : '・';
+      const mark = entry.damaged ? '💥' : '・';
       return `${mark} 第${entry.round}R ${MOVES[entry.moves.challenger].emoji} vs ${MOVES[entry.moves.opponent].emoji} — ${entry.reason}`;
     })
     .join('\n');
@@ -161,8 +166,16 @@ export function board(duel, state, settings, headline = null) {
           `**第${state.round}ラウンド** — 二人とも手を選んでください。\n` +
           (history ? `\n${history}` : ''),
         fields: [
-          { name: '挑戦者', value: energyBar(duel.challenger_id, state.energy.challenger, state.choice.challenger), inline: true },
-          { name: '相手', value: energyBar(duel.opponent_id, state.energy.opponent, state.choice.opponent), inline: true },
+          {
+            name: '挑戦者',
+            value: fighter(duel.challenger_id, state.hp.challenger, state.energy.challenger, state.choice.challenger),
+            inline: true,
+          },
+          {
+            name: '相手',
+            value: fighter(duel.opponent_id, state.hp.opponent, state.energy.opponent, state.choice.opponent),
+            inline: true,
+          },
           { name: '勝てば', value: coins(duel.escrow * 2, settings), inline: true },
         ],
         footer: { text: `${MAX_ROUNDS}ラウンドで決着がつかなければ引き分け（返金）` },
@@ -173,9 +186,9 @@ export function board(duel, state, settings, headline = null) {
   };
 }
 
-function energyBar(userId, energy, chosen) {
+function fighter(userId, hp, energy, chosen) {
   const bar = energy > 0 ? '⚡'.repeat(Math.min(energy, 6)) : '—';
-  return `<@${userId}>\n${bar} (${energy})${chosen ? '\n✅ 手を選びました' : ''}`;
+  return `<@${userId}>\n${hearts(hp)}\n${bar} (${energy})${chosen ? '\n✅ 手を選びました' : ''}`;
 }
 
 /**
@@ -189,16 +202,16 @@ function moveRows(duel) {
       ...Object.entries(MOVES).map(([move, meta]) =>
         button(`d:move:${duel.id}:${move}`, meta.label, {
           emoji: meta.emoji,
-          style: move === 'big' ? ButtonStyle.DANGER : move === 'shoot' ? ButtonStyle.PRIMARY : ButtonStyle.SECONDARY,
+          style: move === 'shoot' ? ButtonStyle.DANGER : ButtonStyle.SECONDARY,
         }),
       ),
     ),
   ];
 }
 
-function resultPayload(duel, entry, settings, winner, pot) {
+function resultPayload(duel, entry, state, settings, winner, pot) {
   const winnerId = userIdOf(duel, winner);
-  const loserId = userIdOf(duel, winner === 'challenger' ? 'opponent' : 'challenger');
+  const loserId = userIdOf(duel, otherRole(winner));
   return {
     content: '',
     embeds: [
@@ -209,6 +222,7 @@ function resultPayload(duel, entry, settings, winner, pot) {
           `<@${duel.challenger_id}>　${MOVES[entry.moves.challenger].emoji} ${MOVES[entry.moves.challenger].label}\n` +
           `<@${duel.opponent_id}>　${MOVES[entry.moves.opponent].emoji} ${MOVES[entry.moves.opponent].label}\n\n` +
           `**${entry.reason}**\n\n` +
+          `<@${duel.challenger_id}> ${hearts(state.hp.challenger)}　/　<@${duel.opponent_id}> ${hearts(state.hp.opponent)}\n\n` +
           `🏆 **<@${winnerId}> の勝ち！** ${coins(pot, settings)} を総取りしました。`,
       }),
     ],

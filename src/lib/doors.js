@@ -13,28 +13,29 @@ export const DOORS = {
   blue: { label: '青の扉', emoji: '🟦' },
 };
 
-/** 1回の選択あたりの還元率。1回で降りれば95%。 */
-export const RETURN_RATE = 0.95;
-
-/** 1回当てるごとに倍率が何倍になるか（0.95 / 0.5 = 1.9）。 */
-export const STEP_MULTIPLIER = Math.round((RETURN_RATE / 0.5) * 100) / 100;
+/**
+ * 1回当てるごとに倍率が何倍になるか。
+ * 当たる確率は 1/2 ちょうどなので、×2 は取り分ゼロ＝完全に五分の賭け。
+ * 胴元の取り分が無いぶん、粘っても期待値は減らない（そのかわり当たり外れの振れ幅は大きい）。
+ */
+export const STEP_MULTIPLIER = 2;
 
 /**
  * 進める回数の上限と、累積倍率の上限。
- * 20回すべて当てると約 ×37万。20連続で当たる確率は約100万分の1なので、
- * 倍率の上限は「20回まで行ける」ことを邪魔しない位置に置いてある。
- * 大きすぎると感じたら MAX_MULTIPLIER を下げれば、そこで自動確定になる。
+ * 20回すべて当てると ×1,048,576（2の20乗）。そこまで当たる確率も
+ * 約100万分の1なので、期待値としては釣り合っている。
+ * 振れ幅が大きすぎると感じたら MAX_MULTIPLIER を下げれば、そこで自動確定になる。
  */
 export const MAX_STEPS = 20;
-export const MAX_MULTIPLIER = 400_000;
+export const MAX_MULTIPLIER = 2 ** MAX_STEPS;
 
 export function openDoor() {
   return Math.random() < 0.5 ? 'red' : 'blue';
 }
 
-/** 累積倍率を掛け合わせる（小数の誤差を溜めないよう都度丸める）。 */
+/** 累積倍率を掛け合わせる。 */
 export function multiply(total) {
-  return Math.round(total * STEP_MULTIPLIER * 100) / 100;
+  return total * STEP_MULTIPLIER;
 }
 
 export function payout(bet, multiplier) {
@@ -45,6 +46,10 @@ export function payout(bet, multiplier) {
 export function isCapped(steps, multiplier) {
   return steps >= MAX_STEPS || multiplier >= MAX_MULTIPLIER;
 }
+
+/** 結果を大きく出すための見出し。 */
+export const HIT_HEADLINE = '# ⭕ あたり！';
+export const MISS_HEADLINE = '# ❌ はずれ';
 
 /* ------------------------------------------------------------------ 山分けか、裏切りか */
 

@@ -1,16 +1,18 @@
 /**
  * チャージ＆シュート。
  *
- * 二人が同時に「ためる・ガード・シュート・ビッグシュート」から選び、いっせいに出す。
- * ためないと撃てないが、ためている間は撃たれる。ガードはタダだがビッグには貫かれる。
- * 「読み合い」で決まる、じゃんけんの発展形。
+ * 二人が同時に「ためる・ガード・シュート」から選び、いっせいに出す。
+ * ためないと撃てないが、ためている間は無防備。ガードはシュートを防ぐ。
+ * 体力は2。2回撃たれたら負け。
  */
 export const MOVES = {
   charge: { label: 'ためる', emoji: '⚡', cost: -1, hint: 'エネルギーを1ためる。無防備' },
-  guard: { label: 'ガード', emoji: '🛡️', cost: 0, hint: 'シュートを防ぐ。ビッグは防げない' },
+  guard: { label: 'ガード', emoji: '🛡️', cost: 0, hint: 'シュートを防ぐ' },
   shoot: { label: 'シュート', emoji: '🔵', cost: 1, hint: 'エネルギー1。ためている相手に当たる' },
-  big: { label: 'ビッグシュート', emoji: '🔴', cost: 3, hint: 'エネルギー3。ガードごと撃ち抜く' },
 };
+
+/** 体力。これが0になったら負け。 */
+export const MAX_HP = 2;
 
 export const MAX_ROUNDS = 30;
 
@@ -28,51 +30,47 @@ export function nextEnergy(move, energy) {
 }
 
 /**
- * 二人の手を突き合わせる。
- * @returns {{winner: 'a'|'b'|null, reason: string}} winner が null なら決着なし
+ * 二人の手を突き合わせて、誰に当たったかを出す。
+ * @returns {{hit: 'a'|'b'|null, reason: string}} hit は「当てられた側」
  */
 export function resolve(moveA, moveB) {
-  if (moveA === moveB) return { winner: null, reason: SAME[moveA] };
+  const shootA = moveA === 'shoot';
+  const shootB = moveB === 'shoot';
 
-  const beats = (attacker, defender) => {
-    if (attacker === 'big') return defender !== 'big';
-    if (attacker === 'shoot') return defender === 'charge';
-    return false;
-  };
-  if (beats(moveA, moveB)) return { winner: 'a', reason: why(moveA, moveB) };
-  if (beats(moveB, moveA)) return { winner: 'b', reason: why(moveB, moveA) };
+  if (shootA && shootB) return { hit: null, reason: 'シュートが相殺' };
+  if (shootA && moveB === 'charge') return { hit: 'b', reason: 'ためているところにシュート' };
+  if (shootB && moveA === 'charge') return { hit: 'a', reason: 'ためているところにシュート' };
+  if (shootA || shootB) return { hit: null, reason: 'シュートはガードに防がれた' };
 
-  const pair = [moveA, moveB];
-  if (pair.includes('guard') && pair.includes('shoot')) {
-    return { winner: null, reason: 'シュートはガードに防がれた' };
-  }
-  return { winner: null, reason: '何も起きなかった' };
+  if (moveA === 'charge' && moveB === 'charge') return { hit: null, reason: 'どちらもためた' };
+  if (moveA === 'guard' && moveB === 'guard') return { hit: null, reason: 'どちらもガード' };
+  return { hit: null, reason: '何も起きなかった' };
 }
 
-const SAME = {
-  charge: 'どちらもためた',
-  guard: 'どちらもガード',
-  shoot: 'シュートが相殺',
-  big: 'ビッグシュートが相殺',
-};
-
-function why(attacker, defender) {
-  if (attacker === 'big' && defender === 'guard') return 'ビッグシュートがガードを撃ち抜いた';
-  if (attacker === 'big' && defender === 'shoot') return 'ビッグシュートがシュートを押し切った';
-  if (attacker === 'big') return 'ためているところにビッグシュート';
-  return 'ためているところにシュート';
-}
-
-/** 1ラウンド進める。 */
-export function playRound(energy, moves) {
+/**
+ * 1ラウンド進める。
+ * @returns {{damaged: 'challenger'|'opponent'|null, reason: string, hp: object, energy: object, loser: string|null}}
+ */
+export function playRound(hp, energy, moves) {
   const outcome = resolve(moves.challenger, moves.opponent);
-  const winner = outcome.winner === 'a' ? 'challenger' : outcome.winner === 'b' ? 'opponent' : null;
+  const damaged = outcome.hit === 'a' ? 'challenger' : outcome.hit === 'b' ? 'opponent' : null;
+
+  const nextHp = { ...hp };
+  if (damaged) nextHp[damaged] = Math.max(0, nextHp[damaged] - 1);
+
   return {
-    winner,
+    damaged,
     reason: outcome.reason,
+    hp: nextHp,
     energy: {
       challenger: nextEnergy(moves.challenger, energy.challenger),
       opponent: nextEnergy(moves.opponent, energy.opponent),
     },
+    loser: damaged && nextHp[damaged] === 0 ? damaged : null,
   };
+}
+
+/** ❤️❤️ のような体力の表示。 */
+export function hearts(value) {
+  return '❤️'.repeat(Math.max(0, value)) + '🖤'.repeat(Math.max(0, MAX_HP - value));
 }

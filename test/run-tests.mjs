@@ -1305,15 +1305,14 @@ section('[チャージ＆シュート]');
 const charge = await import(src('lib/charge.js'));
 
 await test('手の相性', () => {
-  assert.equal(charge.resolve('shoot', 'charge').winner, 'a', 'ためている相手には当たる');
-  assert.equal(charge.resolve('charge', 'shoot').winner, 'b');
-  assert.equal(charge.resolve('shoot', 'guard').winner, null, 'ガードは防ぐ');
-  assert.equal(charge.resolve('big', 'guard').winner, 'a', 'ビッグはガードを貫く');
-  assert.equal(charge.resolve('big', 'shoot').winner, 'a', 'ビッグはシュートを押し切る');
-  assert.equal(charge.resolve('big', 'big').winner, null);
-  assert.equal(charge.resolve('shoot', 'shoot').winner, null);
-  assert.equal(charge.resolve('charge', 'charge').winner, null);
-  assert.equal(charge.resolve('guard', 'guard').winner, null);
+  assert.equal(charge.resolve('shoot', 'charge').hit, 'b', 'ためている相手に当たる');
+  assert.equal(charge.resolve('charge', 'shoot').hit, 'a');
+  assert.equal(charge.resolve('shoot', 'guard').hit, null, 'ガードは防ぐ');
+  assert.equal(charge.resolve('shoot', 'shoot').hit, null, 'シュートは相殺');
+  assert.equal(charge.resolve('charge', 'charge').hit, null);
+  assert.equal(charge.resolve('guard', 'guard').hit, null);
+  assert.equal(charge.resolve('guard', 'charge').hit, null);
+  assert.equal(charge.MOVES.big, undefined, 'ビッグシュートは廃止');
 });
 
 await test('エネルギーが足りない手は出せない', () => {
@@ -1321,19 +1320,38 @@ await test('エネルギーが足りない手は出せない', () => {
   assert.equal(charge.canUse('guard', 0), true);
   assert.equal(charge.canUse('shoot', 0), false);
   assert.equal(charge.canUse('shoot', 1), true);
-  assert.equal(charge.canUse('big', 2), false);
-  assert.equal(charge.canUse('big', 3), true);
+  assert.equal(charge.canUse('big', 9), false, '無い手は出せない');
 });
 
 await test('エネルギーの増減', () => {
   assert.equal(charge.nextEnergy('charge', 2), 3);
   assert.equal(charge.nextEnergy('guard', 2), 2);
   assert.equal(charge.nextEnergy('shoot', 2), 1);
-  assert.equal(charge.nextEnergy('big', 3), 0);
+});
 
-  const round = charge.playRound({ challenger: 1, opponent: 0 }, { challenger: 'shoot', opponent: 'charge' });
-  assert.equal(round.winner, 'challenger');
-  assert.deepEqual(round.energy, { challenger: 0, opponent: 1 });
+await test('体力は2、2回撃たれたら負け', () => {
+  assert.equal(charge.MAX_HP, 2);
+
+  const hp = { challenger: 2, opponent: 2 };
+  const first = charge.playRound(hp, { challenger: 1, opponent: 0 }, { challenger: 'shoot', opponent: 'charge' });
+  assert.equal(first.damaged, 'opponent');
+  assert.deepEqual(first.hp, { challenger: 2, opponent: 1 });
+  assert.equal(first.loser, null, '1回では終わらない');
+  assert.deepEqual(first.energy, { challenger: 0, opponent: 1 });
+
+  const second = charge.playRound(first.hp, { challenger: 1, opponent: 1 }, { challenger: 'shoot', opponent: 'charge' });
+  assert.deepEqual(second.hp, { challenger: 2, opponent: 0 });
+  assert.equal(second.loser, 'opponent', '2回目で決着');
+
+  const blocked = charge.playRound(hp, { challenger: 1, opponent: 0 }, { challenger: 'shoot', opponent: 'guard' });
+  assert.equal(blocked.damaged, null);
+  assert.deepEqual(blocked.hp, hp, 'ガードすれば減らない');
+});
+
+await test('体力の表示', () => {
+  assert.equal(charge.hearts(2), '❤️❤️');
+  assert.equal(charge.hearts(1), '❤️🖤');
+  assert.equal(charge.hearts(0), '🖤🖤');
 });
 
 section('[地雷＆陣取り]');
@@ -1373,15 +1391,16 @@ section('[運命の扉]');
 
 const doorsLib = await import(src('lib/doors.js'));
 
-await test('1回あたり×1.9、還元率は95%', () => {
-  assert.equal(doorsLib.STEP_MULTIPLIER, 1.9);
-  assert.equal(doorsLib.multiply(1), 1.9);
-  assert.equal(doorsLib.multiply(1.9), 3.61);
-  assert.equal(doorsLib.payout(100, 3.61), 361);
+await test('1枚当てるごとに2倍（取り分なしの五分）', () => {
+  assert.equal(doorsLib.STEP_MULTIPLIER, 2);
+  assert.equal(doorsLib.multiply(1), 2);
+  assert.equal(doorsLib.multiply(2), 4);
+  assert.equal(doorsLib.payout(100, 4), 400);
 
   let multiplier = 1;
   for (let i = 0; i < doorsLib.MAX_STEPS; i++) multiplier = doorsLib.multiply(multiplier);
-  assert.ok(multiplier < doorsLib.MAX_MULTIPLIER, '20枚まで上限に当たらない');
+  assert.equal(multiplier, 2 ** 20, '20枚で2の20乗');
+  assert.equal(multiplier, doorsLib.MAX_MULTIPLIER, '20枚がちょうど上限');
 });
 
 await test('20枚で打ち止め', () => {
@@ -1544,6 +1563,12 @@ await test('払えなければ番号は押さえられない', async () => {
   assert.deepEqual(free, { ok: true }, '押さえた番号が解放されている');
 });
 
+await test('最初から元金が積んである', async () => {
+  const fresh = await lottery.getLottery(db, 'lot-fresh');
+  assert.equal(fresh.carryover, lottery.SEED_POOL, '誰も買っていなくても賞金がある');
+  assert.equal(lottery.SEED_POOL, 2000);
+});
+
 await test('当たりが出なければ次の回に持ち越す', async () => {
   const before = await lottery.getLottery(db, LG);
   const { pool } = await lottery.poolOf(db, LG, '2026-09-13');
@@ -1574,7 +1599,11 @@ await test('当たれば持ち越しごと総取りし、持ち越しは0に戻�
   assert.equal(result.winnerId, 'p3');
   assert.equal(result.prize, carried + lottery.TICKET_PRICE, '売上＋持ち越し');
   assert.equal(await eco.getBalance(db, LG, 'p3'), before + result.prize);
-  assert.equal((await lottery.getLottery(db, LG)).carryover, 0, '持ち越しは使い切る');
+  assert.equal(
+    (await lottery.getLottery(db, LG)).carryover,
+    lottery.SEED_POOL,
+    '払い出したあとは元金から積み直す',
+  );
 
   const history = await lottery.recentDraws(db, LG, 5);
   assert.equal(history[0].draw_key, '2026-09-20');

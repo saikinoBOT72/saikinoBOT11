@@ -19,16 +19,14 @@ export const color = 0x992d22;
 export const firstTurn = randomFirst;
 
 export function inviteFields() {
-  return [
-    { name: 'ルール', value: RULES, inline: false },
-    { name: '先攻', value: '受けたらコインで決めます', inline: true },
-  ];
+  return [{ name: 'ルール', value: RULES }];
 }
 
 const RULES = [
   `弾倉は **${CHAMBERS}つ**、実弾は **1発**。回転させずに順番に引きます。`,
   '1回目は **1/6**、外れたら次は **1/5**、その次は **1/4** …と上がっていきます。',
   '引き金を引いて当たった人の**負け**。相手が賭け金を総取りします。',
+  '**先攻はランダム**に決まります。',
 ].join('\n');
 
 /** 勝負が始まるとき。実弾の位置をここで決める（state はプレイヤーには見えない）。 */

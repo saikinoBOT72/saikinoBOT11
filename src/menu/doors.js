@@ -5,7 +5,17 @@
 import { deposit, getBalance, withdraw } from '../lib/economy.js';
 import { checkBet } from '../lib/wager.js';
 import { coins } from '../lib/format.js';
-import { DOORS, MAX_MULTIPLIER, MAX_STEPS, STEP_MULTIPLIER, isCapped, multiply, openDoor, payout } from '../lib/doors.js';
+import {
+  DOORS,
+  HIT_HEADLINE,
+  MAX_STEPS,
+  MISS_HEADLINE,
+  STEP_MULTIPLIER,
+  isCapped,
+  multiply,
+  openDoor,
+  payout,
+} from '../lib/doors.js';
 import { modal, textInput } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import {
@@ -70,10 +80,10 @@ export async function open(ix, _args, ctx, notice = null) {
             '**いつでも持ち帰って確定**できます。どこで止めるかがすべてです。\n\n' +
             '**👥 2人で遊ぶ** を選ぶと、二人で同じ額を出し合って、最後に山分けかひとりじめかを決める勝負になります。',
           fields: [
-            { name: '1枚あたり', value: `当たる確率 50%・×${STEP_MULTIPLIER}`, inline: true },
+            { name: '1枚あたり', value: `当たる確率 50%・**×${STEP_MULTIPLIER}**`, inline: true },
             { name: '上限', value: `${MAX_STEPS}枚まで`, inline: true },
           ],
-          footer: { text: '1枚で降りれば還元率は約95%。粘るほど下がります' },
+          footer: { text: '当たる確率どおりの×2。粘っても損得は変わりませんが、外せば全部消えます' },
         }),
         notice,
       ),
@@ -184,6 +194,7 @@ export async function pick(ix, [choice], ctx) {
               color: 0x95a5a6,
               title: `${em.doors} 運命の扉`,
               description:
+                `${MISS_HEADLINE}\n` +
                 `選んだのは ${DOORS[choice].emoji}、当たりは ${DOORS[winning].emoji} でした。\n` +
                 `${coins(game.bet, settings)} を失いました。`,
               fields: [
@@ -216,7 +227,7 @@ export async function pick(ix, [choice], ctx) {
               color: 0xf1c40f,
               title: `${em.doors} 運命の扉 — 最後の扉！`,
               description:
-                `${DOORS[choice].emoji} **当たり！**\n\n` +
+                `${HIT_HEADLINE}\n` +
                 `🎉 **${steps}枚・×${multiplier}**！ ここが終点です。\n${coins(won, settings)} を持ち帰りました！`,
               fields: [{ name: '所持金', value: coins(balance, settings), inline: true }],
             }),
@@ -255,8 +266,9 @@ async function openedFrame(ix, ctx, choice, game) {
         color: 0x2ecc71,
         title: `${em.doors} 運命の扉`,
         description:
-          `${DOORS[choice].emoji} **当たり！** 扉が開きました。\n\n` +
-          `# ${DOORS.red.emoji} 　 ${DOORS.blue.emoji}\n` +
+          `${HIT_HEADLINE}\n` +
+          `${DOORS[choice].emoji} の扉が開きました。\n\n` +
+          `${DOORS.red.emoji} 　 ${DOORS.blue.emoji}\n` +
           `**${game.steps + 1}枚目の扉**。次はどちら？`,
         fields: [
           { name: 'いまの倍率', value: `×${game.multiplier}（${game.steps}枚）`, inline: true },
