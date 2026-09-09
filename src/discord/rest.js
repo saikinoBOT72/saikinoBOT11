@@ -34,6 +34,16 @@ export function createRest(token) {
       return call('PATCH', `/webhooks/${applicationId}/${interactionToken}/messages/@original`, payload);
     },
 
+    /**
+     * このアプリ自身が持っている絵文字（アプリケーション絵文字）の一覧。
+     * サーバーに属さないので、Bot はどこでもこれを使える。
+     */
+    async listApplicationEmojis(applicationId) {
+      const result = await call('GET', `/applications/${applicationId}/emojis`);
+      // 返り値は { items: [...] } の形だが、配列で返る場合にも備えておく
+      return Array.isArray(result) ? result : (result?.items ?? []);
+    },
+
     /** スラッシュコマンドの登録。 */
     putCommands(applicationId, guildId, commands) {
       const path = guildId

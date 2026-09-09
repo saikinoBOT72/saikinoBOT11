@@ -16,12 +16,14 @@ export function createTestContext() {
   const animated = [];
   const settingsCache = new Map();
   const pending = [];
+  const applicationEmojis = { items: [], error: false };
 
   return {
     db,
     sent,
     edited,
     animated,
+    applicationEmojis,
     env: { TIMEZONE: 'Asia/Tokyo' },
     timezone: 'Asia/Tokyo',
     calendar: { timezone: 'Asia/Tokyo', dayStartHour: 0 },
@@ -33,6 +35,11 @@ export function createTestContext() {
       async editMessage(channelId, messageId, payload) {
         edited.push({ channelId, messageId, payload });
         return {};
+      },
+      /** テストからは applicationEmojis に入れたものを返す。 */
+      async listApplicationEmojis() {
+        if (applicationEmojis.error) throw new Error('取得できません');
+        return applicationEmojis.items;
       },
     },
     async settings(guildId) {

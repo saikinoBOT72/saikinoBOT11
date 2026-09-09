@@ -96,6 +96,7 @@ export async function open(ix, _args, ctx, notice = null) {
       ),
       row(
         button(id('admin', 'lot'), '宝くじ', { emoji: '🎫' }),
+        button(id('admin', 'emoji'), '絵文字を確認', { emoji: '😀' }),
         backButton(),
       ),
     ],
@@ -993,6 +994,87 @@ export async function anndel(ix, [rawId], ctx) {
   return ann(ix, [], ctx, '設定を削除しました');
 }
 
+/* ------------------------------------------------------------------ 絵文字の確認 */
+
+/** 1画面に出す数。多すぎると Discord の文字数上限に当たる。 */
+const EMOJI_PER_PAGE = 20;
+
+/**
+ * アプリケーション絵文字の一覧。
+ * 絵文字そのものを並べて「ちゃんと表示されるか」を目で確かめられるようにし、
+ * あわせて `名前 = <:名前:数字>` をコピーしやすい形で出す。
+ */
+export async function emoji(ix, [rawPage], ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+
+  let all;
+  try {
+    all = await ctx.rest.listApplicationEmojis(ix.raw.application_id);
+  } catch (error) {
+    console.error('アプリケーション絵文字の取得に失敗:', error);
+    return show(ix, {
+      embeds: [
+        embed({
+          color: 0xe74c3c,
+          title: '😀 絵文字の確認',
+          description:
+            '絵文字の一覧を取得できませんでした。\n' +
+            'Developer Portal の **Emojis** タブにアップロードされているか確認してください。',
+        }),
+      ],
+      components: [row(backButton('admin'), homeButton())],
+    });
+  }
+
+  if (all.length === 0) {
+    return show(ix, {
+      embeds: [
+        embed({
+          color: 0x95a5a6,
+          title: '😀 絵文字の確認',
+          description:
+            'このアプリにはまだ絵文字が登録されていません。\n' +
+            'Developer Portal → このアプリ → **Emojis** からアップロードしてください。',
+        }),
+      ],
+      components: [row(backButton('admin'), homeButton())],
+    });
+  }
+
+  const sorted = [...all].sort((a, b) => a.name.localeCompare(b.name));
+  const pages = Math.ceil(sorted.length / EMOJI_PER_PAGE);
+  const page = Math.min(Math.max(Number(rawPage) || 0, 0), pages - 1);
+  const slice = sorted.slice(page * EMOJI_PER_PAGE, (page + 1) * EMOJI_PER_PAGE);
+
+  const codeOf = (item) => `<${item.animated ? 'a' : ''}:${item.name}:${item.id}>`;
+  const preview = slice.map((item) => codeOf(item)).join(' ');
+  const codes = slice.map((item) => `${item.name} = ${codeOf(item)}`).join('\n');
+
+  return show(ix, {
+    embeds: [
+      embed({
+        color: 0x9b59b6,
+        title: '😀 絵文字の確認',
+        description:
+          `このアプリに **${sorted.length} 個** 登録されています（${page + 1}/${pages} ページ）。\n\n` +
+          `${preview}\n\n` +
+          'ここに絵柄が並んでいれば、Bot から問題なく使えます。\n' +
+          '下のコードをそのままコピーして渡してください。',
+        fields: [{ name: 'コード', value: `\`\`\`\n${truncate(codes, 1000)}\n\`\`\`` }],
+        footer: { text: 'Developer Portal の Emojis タブに入れたものが出ます' },
+      }),
+    ],
+    components: [
+      row(
+        button(id('admin', 'emoji', String(page - 1)), '前へ', { emoji: '◀️', disabled: page === 0 }),
+        button(id('admin', 'emoji', String(page + 1)), '次へ', { emoji: '▶️', disabled: page >= pages - 1 }),
+        backButton('admin'),
+        homeButton(),
+      ),
+    ],
+  });
+}
+
 /* ------------------------------------------------------------------ 宝くじ */
 
 export async function lot(ix, _args, ctx, notice = null) {
@@ -1053,6 +1135,7 @@ export async function lottoggle(ix, _args, ctx) {
 
 export const actions = {
   open,
+  emoji,
   lot,
   lotch,
   lottoggle,

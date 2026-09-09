@@ -1382,6 +1382,56 @@ await test('履歴が日本語のラベルで出る', async () => {
 
 section('[管理メニュー]');
 
+await test('アプリの絵文字を一覧できる', async () => {
+  ctx.applicationEmojis.items = [
+    { id: '111111111111111111', name: 'dice1', animated: false },
+    { id: '222222222222222222', name: 'spade_a', animated: false },
+    { id: '333333333333333333', name: 'dice_roll', animated: true },
+  ];
+
+  const payload = await press('m:admin:emoji', { admin: true });
+  const text = screenText(payload);
+  assert.match(text, /3 個/, '個数が出る');
+  assert.match(text, /<:dice1:111111111111111111>/, '絵柄が並ぶ');
+  assert.match(text, /dice1 = <:dice1:111111111111111111>/, 'コードが出る');
+  assert.match(text, /<a:dice_roll:333333333333333333>/, 'アニメーションは a: が付く');
+});
+
+await test('絵文字が多いとページに分かれる', async () => {
+  ctx.applicationEmojis.items = Array.from({ length: 58 }, (_, index) => ({
+    id: String(100000000000000000 + index),
+    name: `card${String(index).padStart(2, '0')}`,
+    animated: false,
+  }));
+
+  const first = await press('m:admin:emoji', { admin: true });
+  assert.match(screenText(first), /58 個/);
+  assert.match(screenText(first), /1\/3 ページ/);
+  const buttons = first.data.components[0].components;
+  assert.equal(buttons.find((b) => b.custom_id === 'm:admin:emoji:-1').disabled, true, '1ページ目に前へは無い');
+
+  const last = await press('m:admin:emoji:2', { admin: true });
+  assert.match(screenText(last), /3\/3 ページ/);
+  assert.equal(
+    last.data.components[0].components.find((b) => b.custom_id === 'm:admin:emoji:3').disabled,
+    true,
+    '最終ページに次へは無い',
+  );
+});
+
+await test('絵文字が無いとき・取れないときも画面が壊れない', async () => {
+  ctx.applicationEmojis.items = [];
+  assert.match(screenText(await press('m:admin:emoji', { admin: true })), /まだ絵文字が登録されていません/);
+
+  ctx.applicationEmojis.error = true;
+  assert.match(screenText(await press('m:admin:emoji', { admin: true })), /取得できませんでした/);
+  ctx.applicationEmojis.error = false;
+});
+
+await test('絵文字の確認は管理者だけ', async () => {
+  assert.match(screenText(await press('m:admin:emoji', { admin: false })), /権限/);
+});
+
 await test('権限が無ければ管理画面を開けない', async () => {
   const payload = await press('m:admin:open', { admin: false });
   assert.match(firstEmbed(payload).description, /権限/);
