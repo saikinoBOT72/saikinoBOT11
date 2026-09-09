@@ -754,6 +754,291 @@ await test('締切を空欄にすると出題者が締め切るまで受け付�
   assert.equal((await pollLib.getPollById(db, poll.id)).status, 'closed');
 });
 
+section('[新しいゲーム]');
+
+const duelBoard = await import(src('menu/duel-board.js'));
+const duelLib = await import(src('lib/duel.js'));
+
+async function pressDuel(customId, options = {}) {
+  const ix = new Ix(rawInteraction({ customId, ...options }));
+  const response = await duelBoard.handleComponent(ix, ctx);
+  await ctx.settle();
+  return response.json();
+}
+
+/** 挑戦状を出して承諾させ、始まった対戦を返す。 */
+async function startDuelBetween(screen, bet = 100) {
+  await eco.setBalance(db, GUILD, ME, 1000, 'test');
+  await eco.setBalance(db, GUILD, OTHER, 1000, 'test');
+  await press(`m:${screen}:go:${OTHER}:${bet}`);
+  const duel = await db.get('SELECT * FROM duels ORDER BY created_at DESC, rowid DESC');
+  await pressDuel(`d:accept:${duel.id}`, { userId: OTHER });
+  return db.get('SELECT * FROM duels WHERE id = ?1', duel.id);
+}
+
+await test('あそぶ画面から新しいゲームを開ける', async () => {
+  const payload = await press('m:games:open');
+  const ids = customIds(payload);
+  for (const screen of ['doors', 'rr', 'cs', 'mine']) {
+    assert.ok(ids.includes(`m:${screen}:open`), `${screen} のボタンがある`);
+  }
+  assertAllButtonsWork(payload, 'あそぶ');
+});
+
+/* --- ロシアンルーレット --- */
+
+await test('挑戦を受けると両者から賭け金を預かり、先攻が決まる', async () => {
+  const duel = await startDuelBetween('rr');
+  assert.equal(duel.status, 'playing');
+  assert.equal(duel.game, 'rr');
+  assert.ok(['challenger', 'opponent'].includes(duel.turn), '先攻はランダム');
+  assert.equal(await eco.getBalance(db, GUILD, ME), 900);
+  assert.equal(await eco.getBalance(db, GUILD, OTHER), 900);
+
+  const state = duelLib.stateOf(duel);
+  assert.ok(state.bulletAt >= 1 && state.bulletAt <= 6);
+  assert.equal(state.pulled, 0);
+});
+
+await test('手番でない人は引けない', async () => {
+  const duel = await startDuelBetween('rr');
+  const wrong = duel.turn === 'challenger' ? OTHER : ME;
+  const payload = await pressDuel(`d:pull:${duel.id}`, { userId: wrong });
+  assert.match(screenText(payload), /あなたの番ではありません/);
+
+  const outsider = await pressDuel(`d:pull:${duel.id}`, { userId: 'u9' });
+  assert.match(screenText(outsider), /参加者ではありません/);
+});
+
+await test('引き金を引き続けると必ず決着し、コインの総量は変わらない', async () => {
+  const duel = await startDuelBetween('rr');
+  const before = (await eco.getBalance(db, GUILD, ME)) + (await eco.getBalance(db, GUILD, OTHER));
+
+  let current = duel;
+  for (let i = 0; i < 6 && current.status === 'playing'; i++) {
+    const userId = current.turn === 'challenger' ? ME : OTHER;
+    await pressDuel(`d:pull:${current.id}`, { userId });
+    current = await db.get('SELECT * FROM duels WHERE id = ?1', duel.id);
+  }
+  assert.equal(current.status, 'done', '6回以内に必ず終わる');
+
+  const after = (await eco.getBalance(db, GUILD, ME)) + (await eco.getBalance(db, GUILD, OTHER));
+  assert.equal(after, before + 200, '預かった200が勝った側に渡る');
+  const me = await eco.getBalance(db, GUILD, ME);
+  const other = await eco.getBalance(db, GUILD, OTHER);
+  assert.ok((me === 1100 && other === 900) || (me === 900 && other === 1100), 'どちらかが総取り');
+});
+
+/* --- チャージ＆シュート --- */
+
+await test('二人そろうまで結果は出ない', async () => {
+  const duel = await startDuelBetween('cs');
+  const first = await pressDuel(`d:move:${duel.id}:charge`, { userId: ME });
+  assert.match(screenText(first), /相手を待って/);
+
+  const again = await pressDuel(`d:move:${duel.id}:guard`, { userId: ME });
+  assert.match(screenText(again), /もう手を選んでいます/);
+
+  const second = await pressDuel(`d:move:${duel.id}:charge`, { userId: OTHER });
+  assert.equal(second.type, 7, '二人そろったら盤面が動く');
+
+  const after = duelLib.stateOf(await db.get('SELECT * FROM duels WHERE id = ?1', duel.id));
+  assert.deepEqual(after.energy, { challenger: 1, opponent: 1 }, 'ためた分が入る');
+  assert.equal(after.round, 2);
+  globalThis.__csId = duel.id;
+});
+
+await test('エネルギーが足りない手は選べない', async () => {
+  const payload = await pressDuel(`d:move:${globalThis.__csId}:big`, { userId: ME });
+  assert.match(screenText(payload), /エネルギーが足りません/);
+});
+
+await test('撃ち抜けば決着し、勝った側が総取り', async () => {
+  const duel = await startDuelBetween('cs');
+  // 1ラウンド目: 二人ともためる
+  await pressDuel(`d:move:${duel.id}:charge`, { userId: ME });
+  await pressDuel(`d:move:${duel.id}:charge`, { userId: OTHER });
+
+  // 2ラウンド目: 挑戦者がシュート、相手はためる → 挑戦者の勝ち
+  await pressDuel(`d:move:${duel.id}:shoot`, { userId: ME });
+  await pressDuel(`d:move:${duel.id}:charge`, { userId: OTHER });
+
+  const done = await db.get('SELECT * FROM duels WHERE id = ?1', duel.id);
+  assert.equal(done.status, 'done');
+  assert.equal(await eco.getBalance(db, GUILD, ME), 1100, '総取り');
+  assert.equal(await eco.getBalance(db, GUILD, OTHER), 900);
+});
+
+/* --- 地雷＆陣取り --- */
+
+await test('地雷を埋め終わるまでマスは取れない', async () => {
+  const duel = await startDuelBetween('mine');
+  const state = duelLib.stateOf(duel);
+  assert.equal(state.phase, 'place');
+
+  const first = await pressDuel(`d:cell:${duel.id}:0`, { userId: ME });
+  assert.match(screenText(first), /地雷を埋めました/);
+  assert.match(screenText(first), /もう1つ/);
+
+  const same = await pressDuel(`d:cell:${duel.id}:0`, { userId: ME });
+  assert.match(screenText(same), /もう埋めています/);
+
+  await pressDuel(`d:cell:${duel.id}:1`, { userId: ME });
+  const tooMany = await pressDuel(`d:cell:${duel.id}:2`, { userId: ME });
+  assert.match(screenText(tooMany), /2つまで/);
+
+  await pressDuel(`d:cell:${duel.id}:4`, { userId: OTHER });
+  await pressDuel(`d:cell:${duel.id}:5`, { userId: OTHER });
+
+  const ready = duelLib.stateOf(await db.get('SELECT * FROM duels WHERE id = ?1', duel.id));
+  assert.equal(ready.phase, 'claim');
+  assert.ok(['challenger', 'opponent'].includes(ready.turn));
+  globalThis.__mineId = duel.id;
+});
+
+await test('9マス埋まると決着し、多く取った側が総取り', async () => {
+  const id = globalThis.__mineId;
+  const before = (await eco.getBalance(db, GUILD, ME)) + (await eco.getBalance(db, GUILD, OTHER));
+
+  let current = await db.get('SELECT * FROM duels WHERE id = ?1', id);
+  for (let i = 0; i < 12 && current.status === 'playing'; i++) {
+    const state = duelLib.stateOf(current);
+    const cell = state.board.findIndex((owner) => owner === null);
+    if (cell < 0) break;
+    const userId = state.turn === 'challenger' ? ME : OTHER;
+    await pressDuel(`d:cell:${id}:${cell}`, { userId });
+    current = await db.get('SELECT * FROM duels WHERE id = ?1', id);
+  }
+
+  assert.equal(current.status, 'done');
+  const state = duelLib.stateOf(current);
+  assert.equal(state.board.filter(Boolean).length, 9, '9マスすべて埋まる');
+
+  const after = (await eco.getBalance(db, GUILD, ME)) + (await eco.getBalance(db, GUILD, OTHER));
+  assert.equal(after, before + 200, '預かりがそのまま勝者へ');
+});
+
+/* --- 運命の扉 --- */
+
+await test('1人プレイ: 当たれば倍率が伸び、持ち帰れる', async () => {
+  await eco.setBalance(db, GUILD, ME, 1000, 'test');
+  await press('m:doors:bet:100');
+  assert.equal(await eco.getBalance(db, GUILD, ME), 900, '賭け金を預ける');
+
+  // 当たるまで押す（外れたら賭け直す）
+  let won = false;
+  for (let i = 0; i < 40 && !won; i++) {
+    const game = await db.get('SELECT * FROM doors_games WHERE guild_id = ?1 AND user_id = ?2', GUILD, ME);
+    if (!game) {
+      await eco.setBalance(db, GUILD, ME, 1000, 'test');
+      await press('m:doors:bet:100');
+      continue;
+    }
+    await press('m:doors:pick:red');
+    const after = await db.get('SELECT * FROM doors_games WHERE guild_id = ?1 AND user_id = ?2', GUILD, ME);
+    if (after && after.steps > 0) won = true;
+  }
+  assert.ok(won, '当たれば勝負が続く');
+
+  const game = await db.get('SELECT * FROM doors_games WHERE guild_id = ?1 AND user_id = ?2', GUILD, ME);
+  assert.equal(game.multiplier, 1.9);
+
+  const balanceBefore = await eco.getBalance(db, GUILD, ME);
+  const payload = await press('m:doors:stop');
+  assert.match(firstEmbed(payload).title, /持ち帰り/);
+  assert.equal(await eco.getBalance(db, GUILD, ME), balanceBefore + 190);
+  assert.equal(await db.get('SELECT * FROM doors_games WHERE guild_id = ?1 AND user_id = ?2', GUILD, ME), null);
+});
+
+await test('1人プレイ: 1枚も開けずには持ち帰れない', async () => {
+  await eco.setBalance(db, GUILD, ME, 1000, 'test');
+  await press('m:doors:bet:100');
+  const payload = await press('m:doors:stop');
+  assert.match(screenText(payload), /まだ持ち帰れません/);
+  await db.run('DELETE FROM doors_games WHERE guild_id = ?1 AND user_id = ?2', GUILD, ME);
+});
+
+await test('2人プレイ: 山分けを選ぶと半分ずつ', async () => {
+  const duel = await startDuelBetween('dd');
+  assert.equal(duel.game, 'doors');
+
+  // 当たるまで扉を押す（外れたらその勝負は終わるので、新しく始め直す）
+  let current = duel;
+  let state = duelLib.stateOf(current);
+  for (let i = 0; i < 30 && state.steps === 0; i++) {
+    if (current.status !== 'playing') {
+      current = await startDuelBetween('dd');
+      state = duelLib.stateOf(current);
+      continue;
+    }
+    await pressDuel(`d:door:${current.id}:red`, { userId: ME });
+    current = await db.get('SELECT * FROM duels WHERE id = ?1', current.id);
+    state = duelLib.stateOf(current);
+  }
+  assert.ok(state.steps > 0, '1枚は突破できる');
+
+  await pressDuel(`d:take:${current.id}`, { userId: OTHER });
+  const sharing = duelLib.stateOf(await db.get('SELECT * FROM duels WHERE id = ?1', current.id));
+  assert.equal(sharing.phase, 'share');
+
+  const meBefore = await eco.getBalance(db, GUILD, ME);
+  const otherBefore = await eco.getBalance(db, GUILD, OTHER);
+  await pressDuel(`d:share:${current.id}:split`, { userId: ME });
+  await pressDuel(`d:share:${current.id}:split`, { userId: OTHER });
+
+  const done = await db.get('SELECT * FROM duels WHERE id = ?1', current.id);
+  assert.equal(done.status, 'done');
+  const prize = Math.floor(200 * sharing.multiplier);
+  const gained =
+    (await eco.getBalance(db, GUILD, ME)) - meBefore + ((await eco.getBalance(db, GUILD, OTHER)) - otherBefore);
+  assert.equal(gained, prize, '取り分がそのまま二人に渡る');
+});
+
+await test('2人プレイ: 二人ともひとりじめなら誰ももらえない', async () => {
+  let current = await startDuelBetween('dd');
+  let state = duelLib.stateOf(current);
+  for (let i = 0; i < 30 && state.steps === 0; i++) {
+    if (current.status !== 'playing') {
+      current = await startDuelBetween('dd');
+      state = duelLib.stateOf(current);
+      continue;
+    }
+    await pressDuel(`d:door:${current.id}:blue`, { userId: OTHER });
+    current = await db.get('SELECT * FROM duels WHERE id = ?1', current.id);
+    state = duelLib.stateOf(current);
+  }
+  await pressDuel(`d:take:${current.id}`, { userId: ME });
+
+  const meBefore = await eco.getBalance(db, GUILD, ME);
+  const otherBefore = await eco.getBalance(db, GUILD, OTHER);
+  await pressDuel(`d:share:${current.id}:steal`, { userId: ME });
+  const payload = await pressDuel(`d:share:${current.id}:steal`, { userId: OTHER });
+
+  assert.match(JSON.stringify(payload), /誰の手にも渡りませんでした/);
+  assert.equal(await eco.getBalance(db, GUILD, ME), meBefore, '増えない');
+  assert.equal(await eco.getBalance(db, GUILD, OTHER), otherBefore);
+});
+
+await test('断ると預かりは発生せず、終わった勝負は動かない', async () => {
+  await eco.setBalance(db, GUILD, ME, 1000, 'test');
+  await eco.setBalance(db, GUILD, OTHER, 1000, 'test');
+  await press(`m:rr:go:${OTHER}:100`);
+  const duel = await db.get('SELECT * FROM duels ORDER BY created_at DESC, rowid DESC');
+
+  await pressDuel(`d:decline:${duel.id}`, { userId: OTHER });
+  assert.equal(await eco.getBalance(db, GUILD, ME), 1000);
+  assert.equal((await db.get('SELECT * FROM duels WHERE id = ?1', duel.id)).status, 'cancelled');
+
+  const payload = await pressDuel(`d:pull:${duel.id}`, { userId: ME });
+  assert.match(screenText(payload), /終了しています/);
+});
+
+await test('残高が足りなければ挑戦できない', async () => {
+  await eco.setBalance(db, GUILD, ME, 50, 'test');
+  const payload = await press(`m:rr:go:${OTHER}:1000`);
+  assert.match(firstEmbed(payload).description, /残高|上限/);
+});
+
 section('[ショップ]');
 
 await test('一覧から詳細を開ける', async () => {

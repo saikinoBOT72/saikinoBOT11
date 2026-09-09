@@ -7,6 +7,7 @@ import * as admin from './admin.js';
 import * as privacy from './privacy.js';
 import * as titles from './titles.js';
 import * as highlow from './highlow.js';
+import * as doors from './doors.js';
 import * as poll from './poll.js';
 import { MENU_PREFIX } from './common.js';
 
@@ -26,6 +27,11 @@ export const screens = {
   titles: titles.actions,
   hl: highlow.actions,
   poll: poll.actions,
+  doors: doors.actions,
+  rr: games.rr,
+  cs: games.cs,
+  mine: games.mine,
+  dd: games.dd,
 };
 
 export const namespace = MENU_PREFIX;

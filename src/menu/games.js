@@ -3,6 +3,7 @@ import { checkBet } from '../lib/wager.js';
 import { coins } from '../lib/format.js';
 import { payoutTable, spin } from '../lib/slot.js';
 import { startChallenge } from './rps-challenge.js';
+import { startChallenge as startDuel, findGame } from './duel-board.js';
 import { startChallenge as startChinchiro } from './chinchiro-match.js';
 import { escrowFor } from '../lib/chinchiro.js';
 import { MAX_MULTIPLIER as DICE_MAX } from '../lib/dice.js';
@@ -44,6 +45,10 @@ export async function open(ix, _args, ctx, notice = null) {
             { name: `${em.rps} じゃんけん`, value: '1対1。勝てば総取り', inline: true },
             { name: `${em.chinchiro} チンチロ`, value: '1対1。役で倍率が変わる', inline: true },
             { name: `${em.poll} 予想大会`, value: 'みんなで賭けて、正解者で山分け', inline: true },
+            { name: `${em.doors} 運命の扉`, value: '赤か青。当て続けて倍率を伸ばす', inline: true },
+            { name: `${em.roulette} ロシアンルーレット`, value: '1対1。引くほど当たる確率が上がる', inline: true },
+            { name: `${em.charge} チャージ＆シュート`, value: '1対1。ためて撃つ読み合い', inline: true },
+            { name: `${em.mines} 地雷＆陣取り`, value: '1対1。3×3のマスを取り合う', inline: true },
           ],
         }),
         notice,
@@ -56,9 +61,15 @@ export async function open(ix, _args, ctx, notice = null) {
         button(id('hl', 'open'), 'ハイ&ロー', { emoji: em.highlow, style: ButtonStyle.PRIMARY }),
       ),
       row(
+        button(id('doors', 'open'), '運命の扉', { emoji: em.doors, style: ButtonStyle.PRIMARY }),
+        button(id('poll', 'open'), '予想大会', { emoji: em.poll, style: ButtonStyle.SUCCESS }),
+      ),
+      row(
         button(id('rps', 'open'), 'じゃんけん', { emoji: em.rps, style: ButtonStyle.SUCCESS }),
         button(id('cc', 'open'), 'チンチロ', { emoji: em.chinchiro, style: ButtonStyle.SUCCESS }),
-        button(id('poll', 'open'), '予想大会', { emoji: em.poll, style: ButtonStyle.SUCCESS }),
+        button(id('rr', 'open'), 'ロシアンルーレット', { emoji: em.roulette, style: ButtonStyle.SUCCESS }),
+        button(id('cs', 'open'), 'チャージ＆シュート', { emoji: em.charge, style: ButtonStyle.SUCCESS }),
+        button(id('mine', 'open'), '地雷＆陣取り', { emoji: em.mines, style: ButtonStyle.SUCCESS }),
       ),
       row(backButton()),
     ],
@@ -543,3 +554,130 @@ async function ccGo(ix, [opponentId, rawBet], ctx) {
 }
 
 export const cc = { open: ccOpen, user: ccUser, custom: ccCustom, amount: ccAmount, go: ccGo };
+
+/* ------------------------------------------------------------------ 1対1の対戦ゲーム（共通） */
+
+/**
+ * ロシアンルーレット・チャージ＆シュート・地雷＆陣取り・運命の扉（2人）は
+ * 「相手を選ぶ → 賭け金を決める → 挑戦状を送る」までが同じなので、
+ * ここでまとめて画面を作る。ルールの説明だけを各ゲームから受け取る。
+ */
+function duelScreens(gameKey, { screen, lead }) {
+  const rules = findGame(gameKey);
+
+  async function open(ix, _args, ctx, notice = null) {
+    const em = await ctx.emoji(ix.guildId);
+    return show(ix, {
+      embeds: [
+        withNotice(
+          embed({
+            color: rules.color,
+            title: `${em[rules.emojiSlot]} ${rules.title}`,
+            description: `${lead}\n\n対戦したい相手を選んでください。相手が承諾すると勝負開始です。`,
+            fields: rules.inviteFields ? rules.inviteFields({ em }) : [],
+          }),
+          notice,
+        ),
+      ],
+      components: [userSelect(id(screen, 'user'), '対戦相手を選ぶ'), row(backButton('games'), homeButton())],
+    });
+  }
+
+  async function user(ix, _args, ctx) {
+    const opponentId = ix.values[0];
+    if (opponentId === ix.userId) return open(ix, [], ctx, '自分自身とは対戦できません。');
+    if (ix.raw.data?.resolved?.users?.[opponentId]?.bot) return open(ix, [], ctx, 'Botとは対戦できません。');
+    return betScreen(ix, ctx, opponentId);
+  }
+
+  async function betScreen(ix, ctx, opponentId, notice = null) {
+    const settings = await ctx.settings(ix.guildId);
+    const em = await ctx.emoji(ix.guildId);
+    const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
+    const rows = amountRows([screen, 'go', opponentId], balance, {
+      maxBet: settings.max_bet,
+      customId: id(screen, 'custom', opponentId),
+      extra: [backButton(screen, '相手を選び直す')],
+    });
+
+    return show(ix, {
+      embeds: [
+        withNotice(
+          embed({
+            color: rules.color,
+            title: `${em[rules.emojiSlot]} ${rules.title}`,
+            description:
+              `相手: <@${opponentId}>\n所持金 ${coins(balance, settings)}\n\n` +
+              '賭け金を選んでください。**勝った方が両方の賭け金を総取り**します。',
+          }),
+          notice,
+        ),
+      ],
+      components: rows,
+    });
+  }
+
+  function custom(ix, [opponentId]) {
+    return openModal(amountModal(id(screen, 'amount', opponentId), `${rules.title}の賭け金`));
+  }
+
+  async function amount(ix, [opponentId], ctx) {
+    const value = readInt(ix, 'amount', { min: 1 });
+    if (isError(value)) return betScreen(ix, ctx, opponentId, value.error);
+    if (value === null) return betScreen(ix, ctx, opponentId, '賭け金を入力してください。');
+    return go(ix, [opponentId, String(value)], ctx);
+  }
+
+  async function go(ix, [opponentId, rawBet], ctx) {
+    const bet = Number(rawBet);
+    const settings = await ctx.settings(ix.guildId);
+    const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
+
+    const check = checkBet(bet, balance, settings);
+    if (!check.ok) return betScreen(ix, ctx, opponentId, check.message);
+
+    const sent = await startDuel(ctx, {
+      game: gameKey,
+      guildId: ix.guildId,
+      channelId: ix.channelId,
+      challengerId: ix.userId,
+      opponentId,
+      bet,
+      settings,
+    });
+    if (!sent) return betScreen(ix, ctx, opponentId, 'このチャンネルに挑戦状を送れませんでした。');
+
+    return show(ix, {
+      embeds: [
+        embed({
+          color: rules.color,
+          title: '挑戦状を送りました',
+          description: `<@${opponentId}> に ${rules.title} を申し込みました。チャンネルの投稿から応答してもらってください。`,
+        }),
+      ],
+      components: [row(backButton('games'), homeButton())],
+    });
+  }
+
+  return { open, user, custom, amount, go };
+}
+
+export const rr = duelScreens('rr', {
+  screen: 'rr',
+  lead: '弾倉6つ、実弾は1発。引くたびに当たる確率が上がっていきます。',
+});
+
+export const cs = duelScreens('cs', {
+  screen: 'cs',
+  lead: 'ためて、守って、撃つ。二人同時に手を選ぶ読み合いです。',
+});
+
+export const mine = duelScreens('mine', {
+  screen: 'mine',
+  lead: '3×3のマスに地雷を埋め合い、交互にマスを取り合います。',
+});
+
+export const dd = duelScreens('doors', {
+  screen: 'dd',
+  lead: '二人で同じ額を出し合い、当たり続けるかぎり倍率が伸びます。最後は山分けか、ひとりじめか。',
+});

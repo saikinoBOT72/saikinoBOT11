@@ -1266,6 +1266,231 @@ await test('区切りを0時から4時に変えても、連続記録は途切れ
   assert.equal(next.current, 2, 'そのまま続く');
 });
 
+section('[ロシアンルーレット]');
+
+const roulette = await import(src('lib/roulette.js'));
+
+await test('引くたびに当たる確率が上がる', () => {
+  assert.equal(roulette.chanceAt(1), 1 / 6);
+  assert.equal(roulette.chanceAt(2), 1 / 5);
+  assert.equal(roulette.chanceAt(6), 1, '最後は必ず当たる');
+  assert.equal(roulette.chambersLeft(2), 4);
+});
+
+await test('実弾は必ず1発だけ、どこかに入っている', () => {
+  const counts = new Map();
+  for (let i = 0; i < 6000; i++) {
+    const at = roulette.loadBullet();
+    assert.ok(at >= 1 && at <= 6);
+    counts.set(at, (counts.get(at) ?? 0) + 1);
+  }
+  assert.equal(counts.size, 6, '6か所すべてに入りうる');
+  for (const count of counts.values()) {
+    assert.ok(count > 600 && count < 1400, `かたよりすぎ: ${count}`);
+  }
+});
+
+await test('全体では二人の勝率が偏らない', () => {
+  // 先攻は1・3・5発目を引く。実弾が均等なら勝率は五分
+  let firstLoses = 0;
+  for (let i = 0; i < 6000; i++) {
+    if (roulette.loadBullet() % 2 === 1) firstLoses++;
+  }
+  const rate = firstLoses / 6000;
+  assert.ok(rate > 0.45 && rate < 0.55, `先攻が負ける割合が偏っている: ${rate}`);
+});
+
+section('[チャージ＆シュート]');
+
+const charge = await import(src('lib/charge.js'));
+
+await test('手の相性', () => {
+  assert.equal(charge.resolve('shoot', 'charge').winner, 'a', 'ためている相手には当たる');
+  assert.equal(charge.resolve('charge', 'shoot').winner, 'b');
+  assert.equal(charge.resolve('shoot', 'guard').winner, null, 'ガードは防ぐ');
+  assert.equal(charge.resolve('big', 'guard').winner, 'a', 'ビッグはガードを貫く');
+  assert.equal(charge.resolve('big', 'shoot').winner, 'a', 'ビッグはシュートを押し切る');
+  assert.equal(charge.resolve('big', 'big').winner, null);
+  assert.equal(charge.resolve('shoot', 'shoot').winner, null);
+  assert.equal(charge.resolve('charge', 'charge').winner, null);
+  assert.equal(charge.resolve('guard', 'guard').winner, null);
+});
+
+await test('エネルギーが足りない手は出せない', () => {
+  assert.equal(charge.canUse('charge', 0), true);
+  assert.equal(charge.canUse('guard', 0), true);
+  assert.equal(charge.canUse('shoot', 0), false);
+  assert.equal(charge.canUse('shoot', 1), true);
+  assert.equal(charge.canUse('big', 2), false);
+  assert.equal(charge.canUse('big', 3), true);
+});
+
+await test('エネルギーの増減', () => {
+  assert.equal(charge.nextEnergy('charge', 2), 3);
+  assert.equal(charge.nextEnergy('guard', 2), 2);
+  assert.equal(charge.nextEnergy('shoot', 2), 1);
+  assert.equal(charge.nextEnergy('big', 3), 0);
+
+  const round = charge.playRound({ challenger: 1, opponent: 0 }, { challenger: 'shoot', opponent: 'charge' });
+  assert.equal(round.winner, 'challenger');
+  assert.deepEqual(round.energy, { challenger: 0, opponent: 1 });
+});
+
+section('[地雷＆陣取り]');
+
+const mines = await import(src('lib/mines.js'));
+
+await test('地雷は2つまで、同じマスには置けない', () => {
+  let placed = [];
+  ({ mines: placed } = mines.placeMine(placed, 0));
+  assert.deepEqual(placed, [0]);
+  assert.equal(mines.placeMine(placed, 0).reason, 'duplicate');
+
+  ({ mines: placed } = mines.placeMine(placed, 4));
+  assert.equal(mines.placeMine(placed, 8).reason, 'full', '3つ目は置けない');
+  assert.equal(mines.placeMine([], 9).reason, 'range');
+});
+
+await test('相手の地雷を踏むと、そのマスは相手のものになる', () => {
+  const laid = { challenger: [0, 1], opponent: [4, 5] };
+  assert.deepEqual(mines.claim(4, 'challenger', laid), { owner: 'opponent', exploded: true });
+  assert.deepEqual(mines.claim(0, 'challenger', laid), { owner: 'challenger', exploded: false }, '自分の地雷は不発');
+  assert.deepEqual(mines.claim(8, 'challenger', laid), { owner: 'challenger', exploded: false });
+});
+
+await test('9マス埋まったら多いほうの勝ち', () => {
+  const board = mines.emptyBoard();
+  assert.equal(mines.isOver(board), false);
+
+  for (let i = 0; i < 9; i++) board[i] = i < 5 ? 'challenger' : 'opponent';
+  assert.equal(mines.isOver(board), true);
+  assert.equal(mines.countOwned(board, 'challenger'), 5);
+  assert.equal(mines.leader(board), 'challenger');
+  assert.equal(mines.leader(board.map(() => 'opponent')), 'opponent');
+});
+
+section('[運命の扉]');
+
+const doorsLib = await import(src('lib/doors.js'));
+
+await test('1回あたり×1.9、還元率は95%', () => {
+  assert.equal(doorsLib.STEP_MULTIPLIER, 1.9);
+  assert.equal(doorsLib.multiply(1), 1.9);
+  assert.equal(doorsLib.multiply(1.9), 3.61);
+  assert.equal(doorsLib.payout(100, 3.61), 361);
+
+  let multiplier = 1;
+  for (let i = 0; i < doorsLib.MAX_STEPS; i++) multiplier = doorsLib.multiply(multiplier);
+  assert.ok(multiplier < doorsLib.MAX_MULTIPLIER, '20枚まで上限に当たらない');
+});
+
+await test('20枚で打ち止め', () => {
+  assert.equal(doorsLib.isCapped(19, 100), false);
+  assert.equal(doorsLib.isCapped(20, 100), true);
+  assert.equal(doorsLib.isCapped(3, doorsLib.MAX_MULTIPLIER), true, '倍率の上限でも止まる');
+});
+
+await test('扉は赤と青が半々', () => {
+  let red = 0;
+  for (let i = 0; i < 4000; i++) if (doorsLib.openDoor() === 'red') red++;
+  assert.ok(red > 1800 && red < 2200, `かたよりすぎ: ${red}`);
+});
+
+await test('山分けとひとりじめ', () => {
+  const both = doorsLib.splitOrSteal(1000, { challenger: 'split', opponent: 'split' });
+  assert.deepEqual(both, { challenger: 500, opponent: 500, kind: 'split' });
+
+  const odd = doorsLib.splitOrSteal(101, { challenger: 'split', opponent: 'split' });
+  assert.equal(odd.challenger + odd.opponent, 101, '端数でコインを消さない');
+
+  assert.deepEqual(doorsLib.splitOrSteal(1000, { challenger: 'steal', opponent: 'split' }), {
+    challenger: 1000, opponent: 0, kind: 'challenger-steal',
+  });
+  assert.deepEqual(doorsLib.splitOrSteal(1000, { challenger: 'steal', opponent: 'steal' }), {
+    challenger: 0, opponent: 0, kind: 'both-steal',
+  });
+});
+
+section('[1対1の共通部分]');
+
+const duel = await import(src('lib/duel.js'));
+
+async function makeDuel(overrides = {}) {
+  return duel.createDuel(db, {
+    id: overrides.id ?? `duel${Math.random().toString(36).slice(2, 8)}`,
+    guildId: G,
+    channelId: 'c1',
+    game: 'rr',
+    challengerId: 'd1',
+    opponentId: 'd2',
+    bet: 100,
+    escrow: 100,
+    state: {},
+    ...overrides,
+  });
+}
+
+await test('開始は一度だけ、勝った側が総取り', async () => {
+  const match = await makeDuel({ id: 'duelA' });
+  assert.equal(match.status, 'pending');
+  assert.ok(['challenger', 'opponent'].includes(await duel.startDuel(db, 'duelA', { first: 'opponent' })));
+  assert.equal(await duel.startDuel(db, 'duelA', { first: 'opponent' }), null, '二重開始できない');
+
+  await eco.setBalance(db, G, 'd1', 0, 'test');
+  await eco.setBalance(db, G, 'd2', 0, 'test');
+  const started = await duel.getDuel(db, 'duelA');
+  const { pot } = await duel.settleDuel(db, started, 'challenger');
+  assert.equal(pot, 200);
+  assert.equal(await eco.getBalance(db, G, 'd1'), 200);
+  assert.equal(await eco.getBalance(db, G, 'd2'), 0);
+});
+
+await test('同時に書き込んでも、状態がすり替わらない', async () => {
+  await makeDuel({ id: 'duelB' });
+  await duel.startDuel(db, 'duelB', { first: 'challenger' });
+
+  // 二人が同時に「自分の手を入れる」。やり直しが効くので両方入る
+  const before = await duel.getDuel(db, 'duelB');
+  await duel.advance(db, before, { state: { choice: { challenger: null, opponent: null } } });
+
+  const results = await Promise.all([
+    duel.mutate(db, 'duelB', ({ state }) => ({
+      state: { ...state, choice: { ...state.choice, challenger: 'shoot' } },
+    })),
+    duel.mutate(db, 'duelB', ({ state }) => ({
+      state: { ...state, choice: { ...state.choice, opponent: 'guard' } },
+    })),
+  ]);
+  assert.ok(results.every((result) => result.ok), '両方とも書き込める');
+
+  const after = duel.stateOf(await duel.getDuel(db, 'duelB'));
+  assert.deepEqual(after.choice, { challenger: 'shoot', opponent: 'guard' }, '片方が消えない');
+});
+
+await test('決着を確定できるのは一度だけ', async () => {
+  await makeDuel({ id: 'duelC' });
+  await duel.startDuel(db, 'duelC', { first: 'challenger' });
+  const current = await duel.getDuel(db, 'duelC');
+
+  assert.equal(await duel.finishDuel(db, current), true);
+  assert.equal(await duel.finishDuel(db, current), false, '二重に精算しない');
+});
+
+await test('時間切れの対戦は返金して片付ける', async () => {
+  await eco.setBalance(db, G, 'd1', 0, 'test');
+  await eco.setBalance(db, G, 'd2', 0, 'test');
+  await makeDuel({ id: 'duelD' });
+  await duel.startDuel(db, 'duelD', { first: 'challenger' });
+  await db.run('UPDATE duels SET expires_at = ?2 WHERE id = ?1', 'duelD', Date.now() - 1000);
+
+  const handled = await duel.cancelExpired(db);
+  assert.equal(handled.some((row) => row.duel.id === 'duelD'), true);
+  assert.equal(await eco.getBalance(db, G, 'd1'), 100, '預かりが戻る');
+  assert.equal(await eco.getBalance(db, G, 'd2'), 100);
+
+  assert.equal((await duel.cancelExpired(db)).length, 0, '二重返金しない');
+});
+
 section('[定期処理（1分ごと）]');
 
 const cron = await import(src('cron.js'));

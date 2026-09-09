@@ -7,6 +7,7 @@ import { handleComponent as handleMenu } from './menu/router.js';
 import { handleComponent as handleRps } from './menu/rps-challenge.js';
 import { handleComponent as handleChinchiro } from './menu/chinchiro-match.js';
 import { handleComponent as handlePoll } from './menu/poll-board.js';
+import { handleComponent as handleDuel } from './menu/duel-board.js';
 import { findCommand } from './commands.js';
 import { runScheduled } from './cron.js';
 
@@ -63,6 +64,7 @@ async function dispatch(ix, ctx) {
     if (namespace === 'rps') return handleRps(ix, ctx);
     if (namespace === 'cc') return handleChinchiro(ix, ctx);
     if (namespace === 'pl') return handlePoll(ix, ctx);
+    if (namespace === 'd') return handleDuel(ix, ctx);
     return reply({ content: 'この操作はもう使えません。`/menu` を開き直してください。' });
   }
 

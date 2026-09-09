@@ -8,6 +8,7 @@ import { cancelEmbed } from './menu/rps-challenge.js';
 import { cancelExpired } from './lib/rps.js';
 import { cancelEmbed as chinchiroCancelEmbed } from './menu/chinchiro-match.js';
 import { cancelExpired as cancelExpiredChinchiro } from './lib/chinchiro.js';
+import { cancelExpired as cancelExpiredDuels, findGame } from './menu/duel-board.js';
 import { boardPayload, cancelledPayload as pollCancelledPayload } from './menu/poll-board.js';
 import {
   abandonedPolls,
@@ -23,7 +24,7 @@ import { dateKey } from './lib/calendar.js';
 import { embed } from './discord/builders.js';
 
 /** 定期処理の一覧。増えたらここに足す。 */
-export const STEPS = [sweepExpiredMatches, sweepExpiredChinchiro, sweepPolls, postDueAnnouncements];
+export const STEPS = [sweepExpiredMatches, sweepExpiredChinchiro, sweepExpiredDuels, sweepPolls, postDueAnnouncements];
 
 export async function runScheduled(ctx) {
   for (const step of STEPS) {
@@ -71,6 +72,31 @@ export async function sweepExpiredChinchiro(ctx) {
 }
 
 /** 締切が来た予想大会を締め、放置されたものは返金して片付ける。 */
+/** 時間切れの1対1ゲーム（ロシアンルーレット・チャージ＆シュートなど）を片付ける。 */
+export async function sweepExpiredDuels(ctx) {
+  const handled = await cancelExpiredDuels(ctx.db);
+  for (const { duel, refunded } of handled) {
+    if (!duel.message_id) continue;
+    const rules = findGame(duel.game);
+    await ctx.rest
+      .editMessage(duel.channel_id, duel.message_id, {
+        content: '',
+        embeds: [
+          embed({
+            color: 0xe74c3c,
+            title: `${rules?.title ?? '勝負'} 中止`,
+            description: refunded
+              ? '時間切れのため中止しました。賭け金は返しました。'
+              : '時間切れのため勝負は流れました。',
+          }),
+        ],
+        components: [],
+      })
+      .catch((error) => console.error('時間切れメッセージの更新に失敗:', error));
+  }
+  if (handled.length > 0) console.log(`時間切れの対戦を ${handled.length} 件片付けました`);
+}
+
 export async function sweepPolls(ctx) {
   for (const poll of await duePolls(ctx.db)) {
     if (!(await closePoll(ctx.db, poll.id))) continue;
