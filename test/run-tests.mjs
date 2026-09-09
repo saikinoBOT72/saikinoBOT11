@@ -1510,6 +1510,207 @@ await test('時間切れの対戦は返金して片付ける', async () => {
   assert.equal((await duel.cancelExpired(db)).length, 0, '二重返金しない');
 });
 
+section('[ブラックジャック]');
+
+const bj = await import(src('lib/blackjack.js'));
+const cards = await import(src('lib/cards.js'));
+const card = (rank, suit = 0) => ({ rank, suit });
+
+await test('Aは11、超えるなら1として数える', () => {
+  assert.deepEqual(bj.handValue([card(1), card(13)]), { total: 21, soft: true });
+  assert.deepEqual(bj.handValue([card(1), card(1), card(9)]), { total: 21, soft: true });
+  assert.deepEqual(bj.handValue([card(1), card(5), card(9)]), { total: 15, soft: false }, 'A を1に落とす');
+  assert.deepEqual(bj.handValue([card(13), card(12), card(5)]), { total: 25, soft: false });
+  assert.equal(bj.cardPoints(11), 10, '絵札は10');
+  assert.equal(bj.cardPoints(1), 11);
+});
+
+await test('ブラックジャックは最初の2枚のときだけ', () => {
+  assert.equal(bj.isBlackjack([card(1), card(10)]), true);
+  assert.equal(bj.isBlackjack([card(5), card(6), card(10)]), false, '3枚で21はBJではない');
+  assert.equal(bj.isBust([card(13), card(12), card(5)]), true);
+});
+
+await test('ディーラーは17以上で止まる', () => {
+  assert.equal(bj.dealerShouldHit([card(10), card(6)]), true, '16は引く');
+  assert.equal(bj.dealerShouldHit([card(10), card(7)]), false, '17は止まる');
+  assert.equal(bj.dealerShouldHit([card(1), card(6)]), false, 'ソフト17も止まる');
+});
+
+await test('勝敗と払い戻し', () => {
+  assert.deepEqual(
+    { ...bj.outcome([card(1), card(13)], [card(10), card(10)]) },
+    { kind: 'blackjack', multiplier: 2.5, label: 'ブラックジャック！' },
+  );
+  assert.equal(bj.outcome([card(1), card(13)], [card(1), card(10)]).kind, 'push', '両者BJは引き分け');
+  assert.equal(bj.outcome([card(10), card(10)], [card(1), card(10)]).kind, 'lose');
+  assert.equal(bj.outcome([card(10), card(9)], [card(10), card(8)]).kind, 'win');
+  assert.equal(bj.outcome([card(10), card(9)], [card(10), card(9)]).kind, 'push');
+  assert.equal(bj.outcome([card(10), card(10), card(5)], [card(6), card(6)]).kind, 'bust', 'バーストは負け');
+  assert.equal(bj.outcome([card(10), card(8)], [card(10), card(6), card(9)]).kind, 'win', 'ディーラーバースト');
+
+  assert.equal(bj.payout(100, 2.5), 250);
+  assert.equal(bj.payout(100, 0), 0);
+  assert.equal(bj.payout(101, 2.5), 252, '端数は切り捨て');
+});
+
+await test('山札は52枚で重複しない', () => {
+  const deck = cards.newDeck();
+  assert.equal(deck.length, 52);
+  assert.equal(new Set(deck.map((c) => `${c.suit}-${c.rank}`)).size, 52);
+
+  const drawn = cards.draw(deck);
+  assert.equal(deck.length, 51);
+  assert.ok(drawn.rank >= 1 && drawn.rank <= 13);
+
+  // 尽きても切り直して引ける
+  const empty = [];
+  assert.ok(cards.draw(empty));
+});
+
+await test('カードの見た目は絵文字があれば1枚絵', async () => {
+  const emojiLib2 = await import(src('lib/emoji.js'));
+  assert.equal(cards.render(emojiLib2.EMOJI, card(1, 0)), '♠️A');
+  assert.equal(cards.render({ ...emojiLib2.EMOJI, spade_1: '<:spade_1:1>' }, card(1, 0)), '<:spade_1:1>');
+  assert.equal(
+    cards.renderHand(emojiLib2.EMOJI, [card(1, 0), card(13, 3)], { hideFrom: 1 }),
+    `♠️A ${emojiLib2.EMOJI.card_back}`,
+    '伏せ札は裏で出る',
+  );
+});
+
+section('[ブラックジャックの卓]');
+
+const bjTable = await import(src('lib/blackjack-table.js'));
+const BG = 'bj-guild';
+
+async function makeTable(id, bet = 100) {
+  return bjTable.createTable(db, { id, guildId: BG, channelId: 'c1', hostId: 'h1', bet });
+}
+
+await test('席は3人まで、同じ人は二度座れない', async () => {
+  const table = await makeTable('bjA');
+  for (const name of ['h1', 'p2', 'p3', 'p4']) await eco.setBalance(db, BG, name, 1000, 'test');
+
+  assert.equal((await bjTable.joinTable(db, table, 'h1')).ok, true);
+  assert.equal(await eco.getBalance(db, BG, 'h1'), 900, '参加費を預ける');
+
+  const again = await bjTable.joinTable(db, await bjTable.getTable(db, 'bjA'), 'h1');
+  assert.deepEqual(again, { ok: false, reason: 'already' });
+
+  await bjTable.joinTable(db, await bjTable.getTable(db, 'bjA'), 'p2');
+  await bjTable.joinTable(db, await bjTable.getTable(db, 'bjA'), 'p3');
+  const full = await bjTable.joinTable(db, await bjTable.getTable(db, 'bjA'), 'p4');
+  assert.deepEqual(full, { ok: false, reason: 'full' });
+  assert.equal(await eco.getBalance(db, BG, 'p4'), 1000, '座れなければ引かれない');
+});
+
+await test('払えなければ席は空いたまま', async () => {
+  const table = await makeTable('bjB');
+  await eco.setBalance(db, BG, 'poor', 10, 'test');
+  const result = await bjTable.joinTable(db, table, 'poor');
+  assert.deepEqual(result, { ok: false, reason: 'insufficient' });
+  assert.equal(bjTable.stateOf(await bjTable.getTable(db, 'bjB')).players.length, 0);
+});
+
+await test('配ると全員2枚、ディーラーも2枚', async () => {
+  const table = await makeTable('bjC');
+  for (const name of ['h1', 'p2']) {
+    await eco.setBalance(db, BG, name, 1000, 'test');
+    await bjTable.joinTable(db, await bjTable.getTable(db, 'bjC'), name);
+  }
+
+  const dealt = bjTable.deal(bjTable.stateOf(await bjTable.getTable(db, 'bjC')));
+  assert.equal(dealt.players.length, 2);
+  for (const player of dealt.players) assert.equal(player.cards.length, 2);
+  assert.equal(dealt.dealer.length, 2);
+  assert.equal(dealt.deck.length, 52 - 6, '配った分だけ減る');
+  assert.ok(dealt.turn === 0 || dealt.turn === 1 || dealt.turn === -1);
+});
+
+await test('手番は残っている人だけに回る', () => {
+  const players = [
+    { status: 'bust' },
+    { status: 'playing' },
+    { status: 'blackjack' },
+  ];
+  assert.equal(bjTable.nextActive(players, -1), 1);
+  assert.equal(bjTable.nextActive(players, 1), -1, 'もういなければ -1');
+});
+
+await test('ディーラーは全員バーストなら引かない', () => {
+  const busted = {
+    deck: cards.newDeck(),
+    dealer: [card(5), card(6)],
+    players: [{ status: 'bust' }],
+  };
+  assert.equal(bjTable.playDealer(busted).dealer.length, 2, '引く必要がない');
+
+  const alive = {
+    deck: cards.newDeck(),
+    dealer: [card(5), card(6)],
+    players: [{ status: 'stand' }],
+  };
+  assert.ok(bjTable.playDealer(alive).dealer.length > 2, '17未満なら引く');
+});
+
+await test('精算は一度だけ、勝った人にだけ払う', async () => {
+  const table = await makeTable('bjD');
+  for (const name of ['w1', 'l1']) {
+    await eco.setBalance(db, BG, name, 1000, 'test');
+    await bjTable.joinTable(db, await bjTable.getTable(db, 'bjD'), name);
+  }
+  await db.run("UPDATE blackjack_tables SET status = 'playing' WHERE id = 'bjD'");
+
+  const playing = await bjTable.getTable(db, 'bjD');
+  const state = {
+    ...bjTable.stateOf(playing),
+    dealer: [card(10), card(8)],
+    players: [
+      { userId: 'w1', bet: 100, cards: [card(10), card(10)], status: 'stand', doubled: false },
+      { userId: 'l1', bet: 100, cards: [card(10), card(7)], status: 'stand', doubled: false },
+    ],
+  };
+
+  const results = await bjTable.settleTable(db, playing, state);
+  assert.equal(results.length, 2);
+  assert.equal(await eco.getBalance(db, BG, 'w1'), 900 + 200, '勝った人は2倍');
+  assert.equal(await eco.getBalance(db, BG, 'l1'), 900, '負けた人は戻らない');
+
+  const again = await bjTable.settleTable(db, playing, state);
+  assert.equal(again, null, '二重に精算しない');
+  assert.equal(await eco.getBalance(db, BG, 'w1'), 1100);
+});
+
+await test('ダブルダウンは賭け金2倍で精算される', async () => {
+  const table = await makeTable('bjE');
+  await eco.setBalance(db, BG, 'd1', 1000, 'test');
+  await bjTable.joinTable(db, await bjTable.getTable(db, 'bjE'), 'd1');
+  await db.run("UPDATE blackjack_tables SET status = 'playing' WHERE id = 'bjE'");
+
+  const playing = await bjTable.getTable(db, 'bjE');
+  const results = await bjTable.settleTable(db, playing, {
+    ...bjTable.stateOf(playing),
+    dealer: [card(10), card(7)],
+    players: [{ userId: 'd1', bet: 100, cards: [card(10), card(10)], status: 'stand', doubled: true }],
+  });
+  assert.equal(results[0].stake, 200, '倍が賭かっている');
+  assert.equal(results[0].amount, 400);
+});
+
+await test('時間切れの卓を拾って返金できる', async () => {
+  const table = await makeTable('bjF');
+  await eco.setBalance(db, BG, 'r1', 1000, 'test');
+  await bjTable.joinTable(db, await bjTable.getTable(db, 'bjF'), 'r1');
+  await db.run('UPDATE blackjack_tables SET expires_at = ?2 WHERE id = ?1', 'bjF', Date.now() - 1000);
+
+  const expired = await bjTable.expiredTables(db);
+  assert.equal(expired.some((row) => row.id === 'bjF'), true);
+
+  await bjTable.refundTable(db, await bjTable.getTable(db, 'bjF'), bjTable.stateOf(await bjTable.getTable(db, 'bjF')));
+  assert.equal(await eco.getBalance(db, BG, 'r1'), 1000, '参加費が戻る');
+});
+
 section('[キャリーオーバー宝くじ]');
 
 const lottery = await import(src('lib/lottery.js'));

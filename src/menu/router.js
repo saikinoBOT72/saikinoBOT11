@@ -30,6 +30,7 @@ export const screens = {
   poll: poll.actions,
   doors: doors.actions,
   lot: lottery.actions,
+  bj: games.bj,
   rr: games.rr,
   cs: games.cs,
   mine: games.mine,

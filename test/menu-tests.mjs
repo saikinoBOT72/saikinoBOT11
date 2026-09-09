@@ -1062,6 +1062,203 @@ await test('残高が足りなければ挑戦できない', async () => {
   assert.match(firstEmbed(payload).description, /残高|上限/);
 });
 
+section('[ブラックジャック]');
+
+const bjBoard = await import(src('menu/blackjack-table.js'));
+const bjTableLib = await import(src('lib/blackjack-table.js'));
+const bjLib = await import(src('lib/blackjack.js'));
+
+async function pressBj(customId, options = {}) {
+  const ix = new Ix(rawInteraction({ customId, ...options }));
+  const response = await bjBoard.handleComponent(ix, ctx);
+  await ctx.settle();
+  return response.json();
+}
+
+/** 卓を立てて、その行を返す。 */
+async function openBjTable(bet = 100) {
+  await eco.setBalance(db, GUILD, ME, 1000, 'test');
+  await press(`m:bj:go:${bet}`);
+  return db.get('SELECT * FROM blackjack_tables ORDER BY created_at DESC, rowid DESC');
+}
+
+await test('卓を立てるとチャンネルに投稿され、立てた人が座る', async () => {
+  const sentBefore = ctx.sent.length;
+  const table = await openBjTable();
+
+  assert.equal(ctx.sent.length, sentBefore + 1, 'チャンネルに投稿される');
+  assert.equal(table.status, 'joining');
+  assert.equal(table.bet, 100);
+  assert.equal(await eco.getBalance(db, GUILD, ME), 900, '立てた人も参加費を払う');
+
+  const state = bjTableLib.stateOf(table);
+  assert.deepEqual(state.players.map((p) => p.userId), [ME]);
+  assert.match(JSON.stringify(ctx.sent.at(-1).payload), /1\/3/, '席の数が出る');
+});
+
+await test('席は3人まで、同じ人は二度座れない', async () => {
+  const table = await openBjTable();
+  for (const user of [OTHER, 'u9']) await eco.setBalance(db, GUILD, user, 1000, 'test');
+
+  const again = await pressBj(`bj:join:${table.id}`, { userId: ME });
+  assert.match(screenText(again), /すでに座って/);
+
+  const joined = await pressBj(`bj:join:${table.id}`, { userId: OTHER });
+  assert.equal(joined.type, 7, '掲示が更新される');
+  assert.equal(await eco.getBalance(db, GUILD, OTHER), 900);
+
+  // 3人目で満席 → そのまま開始
+  await pressBj(`bj:join:${table.id}`, { userId: 'u9' });
+  const started = await db.get('SELECT * FROM blackjack_tables WHERE id = ?1', table.id);
+  assert.equal(started.status, 'playing', '満席で自動的に始まる');
+
+  const state = bjTableLib.stateOf(started);
+  assert.equal(state.players.length, 3);
+  for (const player of state.players) assert.equal(player.cards.length, 2, '2枚ずつ配られる');
+  assert.equal(state.dealer.length, 2);
+
+  const late = await pressBj(`bj:join:${table.id}`, { userId: 'u8' });
+  assert.match(screenText(late), /もう始まって/);
+});
+
+await test('始められるのは卓を立てた人だけ', async () => {
+  const table = await openBjTable();
+  await eco.setBalance(db, GUILD, OTHER, 1000, 'test');
+  await pressBj(`bj:join:${table.id}`, { userId: OTHER });
+
+  const denied = await pressBj(`bj:start:${table.id}`, { userId: OTHER });
+  assert.match(screenText(denied), /卓を立てた人だけ/);
+
+  await pressBj(`bj:start:${table.id}`, { userId: ME });
+  const started = await db.get('SELECT * FROM blackjack_tables WHERE id = ?1', table.id);
+  assert.equal(started.status, 'playing');
+  globalThis.__bjId = table.id;
+});
+
+await test('手番でない人は動かせない', async () => {
+  const table = await db.get('SELECT * FROM blackjack_tables WHERE id = ?1', globalThis.__bjId);
+  const state = bjTableLib.stateOf(table);
+  if (state.turn < 0) return; // 全員BJならこのテストは意味がない
+
+  const waiting = state.players[state.turn === 0 ? 1 : 0];
+  const payload = await pressBj(`bj:stand:${table.id}`, { userId: waiting.userId });
+  assert.match(screenText(payload), /あなたの番ではありません/);
+
+  const outsider = await pressBj(`bj:hit:${table.id}`, { userId: 'u7' });
+  assert.match(screenText(outsider), /座っていません/);
+});
+
+await test('全員がスタンドすると決着し、収支が合う', async () => {
+  const id = globalThis.__bjId;
+  const before = (await eco.getBalance(db, GUILD, ME)) + (await eco.getBalance(db, GUILD, OTHER));
+
+  let table = await db.get('SELECT * FROM blackjack_tables WHERE id = ?1', id);
+  for (let i = 0; i < 6 && table.status === 'playing'; i++) {
+    const state = bjTableLib.stateOf(table);
+    if (state.turn < 0) break;
+    await pressBj(`bj:stand:${id}`, { userId: state.players[state.turn].userId });
+    table = await db.get('SELECT * FROM blackjack_tables WHERE id = ?1', id);
+  }
+
+  assert.equal(table.status, 'done');
+  const state = bjTableLib.stateOf(table);
+  assert.ok(bjLib.handValue(state.dealer).total >= 17 || state.players.every((p) => p.status === 'bust'));
+
+  const after = (await eco.getBalance(db, GUILD, ME)) + (await eco.getBalance(db, GUILD, OTHER));
+  assert.ok(after >= before, '払い戻しはあっても、余分に引かれない');
+});
+
+await test('ヒットで引け、21を超えたらそこで終わる', async () => {
+  const table = await openBjTable();
+  await pressBj(`bj:start:${table.id}`, { userId: ME });
+
+  let current = await db.get('SELECT * FROM blackjack_tables WHERE id = ?1', table.id);
+  let state = bjTableLib.stateOf(current);
+  if (state.turn < 0) return; // 配られた2枚がブラックジャックなら引く場面が無い
+
+  let hits = 0;
+  while (current.status === 'playing' && state.turn === 0 && hits < 10) {
+    const before = state.players[0].cards.length;
+    await pressBj(`bj:hit:${table.id}`, { userId: ME });
+    current = await db.get('SELECT * FROM blackjack_tables WHERE id = ?1', table.id);
+    state = bjTableLib.stateOf(current);
+    assert.equal(state.players[0].cards.length, before + 1, '1枚ずつ増える');
+    hits++;
+  }
+  assert.ok(hits > 0, '少なくとも1回は引ける');
+
+  const hand = state.players[0];
+  assert.ok(
+    current.status === 'done' || hand.status !== 'playing',
+    '21を超えるか21ちょうどになったら手番が終わる',
+  );
+});
+
+await test('ダブルダウンは最初の2枚のときだけ、賭け金が倍になる', async () => {
+  const table = await openBjTable();
+  await pressBj(`bj:start:${table.id}`, { userId: ME });
+
+  let current = await db.get('SELECT * FROM blackjack_tables WHERE id = ?1', table.id);
+  if (bjTableLib.stateOf(current).turn < 0) return; // BJで即決着なら対象外
+
+  await pressBj(`bj:double:${table.id}`, { userId: ME });
+  current = await db.get('SELECT * FROM blackjack_tables WHERE id = ?1', table.id);
+  const state = bjTableLib.stateOf(current);
+
+  assert.equal(state.players[0].doubled, true);
+  assert.equal(state.players[0].cards.length, 3, '1枚だけ引いて終わり');
+  assert.notEqual(state.players[0].status, 'playing');
+
+  // 追加の賭け金が引かれている（そのあと決着まで進むので、残高ではなく履歴で見る）
+  const extra = await db.get(
+    "SELECT amount FROM ledger WHERE guild_id = ?1 AND user_id = ?2 AND reason = 'blackjack:double' ORDER BY created_at DESC",
+    GUILD,
+    ME,
+  );
+  assert.equal(extra.amount, -100, '参加費と同額を追加で預ける');
+
+  // もう一度は押せない
+  const again = await pressBj(`bj:double:${table.id}`, { userId: ME });
+  assert.match(screenText(again), /最初の2枚|終わって|あなたの番/);
+});
+
+await test('残高が足りなければ座れない', async () => {
+  const table = await openBjTable();
+  await eco.setBalance(db, GUILD, 'u6', 10, 'test');
+  const payload = await pressBj(`bj:join:${table.id}`, { userId: 'u6' });
+  assert.match(screenText(payload), /残高が足りません/);
+  assert.equal(bjTableLib.stateOf(await db.get('SELECT * FROM blackjack_tables WHERE id = ?1', table.id)).players.length, 1);
+});
+
+await test('時間切れの卓は、始まる前なら返金して閉じる', async () => {
+  const table = await openBjTable();
+  const before = await eco.getBalance(db, GUILD, ME);
+  await db.run('UPDATE blackjack_tables SET expires_at = ?2 WHERE id = ?1', table.id, Date.now() - 1000);
+
+  const handled = await bjBoard.timeOut(ctx, await db.get('SELECT * FROM blackjack_tables WHERE id = ?1', table.id));
+  assert.match(JSON.stringify(handled.payload), /参加費は返しました/);
+  assert.equal(await eco.getBalance(db, GUILD, ME), before + 100);
+  assert.equal((await db.get('SELECT status FROM blackjack_tables WHERE id = ?1', table.id)).status, 'cancelled');
+});
+
+await test('時間切れの卓は、始まっていたら最後まで進める', async () => {
+  const table = await openBjTable();
+  await pressBj(`bj:start:${table.id}`, { userId: ME });
+  const playing = await db.get('SELECT * FROM blackjack_tables WHERE id = ?1', table.id);
+  if (playing.status !== 'playing') return; // 即決着なら対象外
+
+  const handled = await bjBoard.timeOut(ctx, playing);
+  assert.ok(handled, '決着させる');
+  assert.match(JSON.stringify(handled.payload), /時間切れ/);
+  assert.equal((await db.get('SELECT status FROM blackjack_tables WHERE id = ?1', table.id)).status, 'done');
+});
+
+await test('あそぶ画面にブラックジャックがある', async () => {
+  const payload = await press('m:games:open');
+  assert.ok(customIds(payload).includes('m:bj:open'));
+  assertAllButtonsWork(payload, 'あそぶ');
+});
+
 section('[宝くじ]');
 
 const lotteryLib = await import(src('lib/lottery.js'));

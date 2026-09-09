@@ -70,6 +70,7 @@ export const EMOJI = {
   diamond: '♦️',
   club: '♣️',
   card_back: '🂠',
+  joker: '🃏',
 
   /* --- ロシアンルーレットの弾倉 --- */
   chamber_left: '⚫',

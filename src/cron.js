@@ -9,6 +9,8 @@ import { cancelExpired } from './lib/rps.js';
 import { cancelEmbed as chinchiroCancelEmbed } from './menu/chinchiro-match.js';
 import { cancelExpired as cancelExpiredChinchiro } from './lib/chinchiro.js';
 import { cancelExpired as cancelExpiredDuels, findGame } from './menu/duel-board.js';
+import { timeOut as blackjackTimeOut } from './menu/blackjack-table.js';
+import { expiredTables } from './lib/blackjack-table.js';
 import { boardPayload, cancelledPayload as pollCancelledPayload } from './menu/poll-board.js';
 import {
   abandonedPolls,
@@ -37,6 +39,7 @@ export const STEPS = [
   sweepExpiredMatches,
   sweepExpiredChinchiro,
   sweepExpiredDuels,
+  sweepBlackjack,
   sweepPolls,
   postDueAnnouncements,
   drawLotteries,
@@ -111,6 +114,27 @@ export async function sweepExpiredDuels(ctx) {
       .catch((error) => console.error('時間切れメッセージの更新に失敗:', error));
   }
   if (handled.length > 0) console.log(`時間切れの対戦を ${handled.length} 件片付けました`);
+}
+
+/**
+ * 時間切れのブラックジャックの卓を片付ける。
+ * まだ配る前なら参加費を返し、途中なら残った人をスタンド扱いにして最後まで進める。
+ * （返金目当てで放置されないよう、勝負が始まっていたら必ず決着させる）
+ */
+export async function sweepBlackjack(ctx) {
+  const tables = await expiredTables(ctx.db);
+  for (const table of tables) {
+    try {
+      const handled = await blackjackTimeOut(ctx, table);
+      if (!handled || !table.message_id) continue;
+      await ctx.rest
+        .editMessage(table.channel_id, table.message_id, handled.payload)
+        .catch((error) => console.error('ブラックジャックの表示更新に失敗:', error));
+    } catch (error) {
+      console.error(`ブラックジャックの片付けに失敗 (${table.id}):`, error);
+    }
+  }
+  if (tables.length > 0) console.log(`時間切れの卓を ${tables.length} 件片付けました`);
 }
 
 export async function sweepPolls(ctx) {

@@ -4,6 +4,8 @@ import { coins } from '../lib/format.js';
 import { payoutTable, spin } from '../lib/slot.js';
 import { startChallenge } from './rps-challenge.js';
 import { startChallenge as startDuel, findGame } from './duel-board.js';
+import { openTable as openBlackjack } from './blackjack-table.js';
+import { MAX_PLAYERS as BJ_MAX_PLAYERS } from '../lib/blackjack.js';
 import { startChallenge as startChinchiro } from './chinchiro-match.js';
 import { escrowFor } from '../lib/chinchiro.js';
 import { MAX_MULTIPLIER as DICE_MAX } from '../lib/dice.js';
@@ -50,6 +52,7 @@ export async function open(ix, _args, ctx, notice = null) {
             { name: `${em.charge} チャージ＆シュート`, value: '1対1。ためて撃つ読み合い', inline: true },
             { name: `${em.mines} 地雷＆陣取り`, value: '1対1。3×3のマスを取り合う', inline: true },
             { name: `${em.lottery} 宝くじ`, value: '毎週日曜に抽選。当たれば持ち越しごと総取り', inline: true },
+            { name: `${em.joker} ブラックジャック`, value: `対ディーラー。${BJ_MAX_PLAYERS}人まで同じ卓で遊べる`, inline: true },
           ],
         }),
         notice,
@@ -62,6 +65,7 @@ export async function open(ix, _args, ctx, notice = null) {
         button(id('hl', 'open'), 'ハイ&ロー', { emoji: em.highlow, style: ButtonStyle.PRIMARY }),
       ),
       row(
+        button(id('bj', 'open'), 'ブラックジャック', { emoji: em.joker, style: ButtonStyle.PRIMARY }),
         button(id('lot', 'open'), '宝くじ', { emoji: em.lottery, style: ButtonStyle.PRIMARY }),
         button(id('poll', 'open'), '予想大会', { emoji: em.poll, style: ButtonStyle.SUCCESS }),
       ),
@@ -687,3 +691,87 @@ export const dd = duelScreens('doors', {
   lead: '二人で同じ額を出し合い、当たり続けるかぎり倍率が伸びます。最後は山分けか、ひとりじめか。',
   extra: () => [button(id('doors', 'open'), '1人で遊ぶ', { emoji: '👤' })],
 });
+
+/* ------------------------------------------------------------------ ブラックジャック */
+
+async function bjOpen(ix, _args, ctx, notice = null) {
+  const settings = await ctx.settings(ix.guildId);
+  const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
+
+  return show(ix, {
+    embeds: [
+      withNotice(
+        embed({
+          color: 0x1abc9c,
+          title: `${em.joker} ブラックジャック`,
+          description:
+            `所持金 ${coins(balance, settings)}\n\n` +
+            `21を超えない範囲で、**ディーラー（Bot）より大きい手**を作れば勝ちです。\n` +
+            `卓を立てるとチャンネルに投稿され、**${BJ_MAX_PLAYERS}人まで**座れます。\n` +
+            'ここで決めた額が、そのまま全員の参加費になります。',
+          fields: [
+            { name: 'ブラックジャック', value: '最初の2枚で21なら **2.5倍**', inline: true },
+            { name: 'ふつうの勝ち', value: '**2倍**', inline: true },
+            { name: 'ダブルダウン', value: '賭け金を倍にして1枚だけ引く', inline: true },
+          ],
+        }),
+        notice,
+      ),
+    ],
+    components: amountRows(['bj', 'go'], balance, {
+      maxBet: settings.max_bet,
+      customId: id('bj', 'custom'),
+      extra: [backButton('games')],
+    }),
+  });
+}
+
+function bjCustom() {
+  return openModal(amountModal(id('bj', 'amount'), 'ブラックジャックの参加費'));
+}
+
+async function bjAmount(ix, _args, ctx) {
+  const value = readInt(ix, 'amount', { min: 1 });
+  if (isError(value)) return bjOpen(ix, [], ctx, value.error);
+  if (value === null) return bjOpen(ix, [], ctx, '参加費を入力してください。');
+  return bjGo(ix, [String(value)], ctx);
+}
+
+async function bjGo(ix, [rawBet], ctx) {
+  const bet = Number(rawBet);
+  const settings = await ctx.settings(ix.guildId);
+  const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
+
+  const check = checkBet(bet, balance, settings);
+  if (!check.ok) return bjOpen(ix, [], ctx, check.message);
+
+  const opened = await openBlackjack(ctx, {
+    guildId: ix.guildId,
+    channelId: ix.channelId,
+    hostId: ix.userId,
+    bet,
+    settings,
+  });
+  if (!opened.ok) {
+    const messages = {
+      insufficient: '残高が足りません。',
+      post: 'このチャンネルに卓を投稿できませんでした。',
+    };
+    return bjOpen(ix, [], ctx, messages[opened.reason] ?? '卓を立てられませんでした。');
+  }
+
+  return show(ix, {
+    embeds: [
+      embed({
+        color: 0x1abc9c,
+        title: '卓を立てました',
+        description:
+          `参加費 ${coins(bet, settings)} の卓をチャンネルに投稿しました。\n` +
+          `ほかの人が座るのを待って、**▶️ 始める** を押してください（${BJ_MAX_PLAYERS}人そろえば自動で始まります）。`,
+      }),
+    ],
+    components: [row(backButton('games'), homeButton())],
+  });
+}
+
+export const bj = { open: bjOpen, custom: bjCustom, amount: bjAmount, go: bjGo };

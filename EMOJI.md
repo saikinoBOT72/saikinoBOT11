@@ -21,11 +21,14 @@
 | --- | --- |
 | サイコロの目 | `dice_1` `dice_2` `dice_3` `dice_4` `dice_5` `dice_6` |
 | トランプ52枚 | `spade_1` … `spade_10` `spade_J` `spade_Q` `spade_K`（`heart_` `diamond_` `club_` も同じ形） |
+| カードの裏 | `card_back`（ハイ&ローとブラックジャックの伏せ札） |
+| ジョーカー | `joker`（ブラックジャックの見出しに使います） |
 
 - **エースは `_1`**、11〜13 は **`_J` `_Q` `_K`** です
 - 大文字小文字はどちらでも構いません（`spade_K` でも `spade_k` でも引けます）
 - **一部だけでも動きます。** 見つからないものは今までどおりの表示（⚀ や ♠️A）のまま
-- トランプが52枚そろうと、ハイ&ローの表示が「♠️A」から**カード1枚の絵**に変わります
+- トランプが52枚そろうと、ハイ&ローとブラックジャックの表示が「♠️A」から**カード1枚の絵**に変わります
+- `card_back` はブラックジャックのディーラーの伏せ札にも使われます
 
 ## 画像の仕様
 
@@ -106,7 +109,6 @@ Twemoji の画像を落としてアップロードするだけです。
 | 地雷＆陣取り | `cell_empty`(⬜) `cell_challenger`(🟥) `cell_opponent`(🟦) `bomb`(💣) `boom`(💥) |
 | チャージ＆シュート | `move_charge`(⚡) `move_guard`(🛡️) `move_shoot`(🔵) `hp_full`(❤️) `hp_lost`(🖤) |
 | ロシアンルーレット | `chamber_left`(⚫) `chamber_spent`(⚪) |
-| カードの裏 | `card_back`（🂠 は Unicode に絵文字が無いので自作） |
 | 演出 | `dice_roll`（振っている最中。**GIF にすると回って見えます**） |
 
 Twemoji の画像は <https://github.com/jdecked/twemoji> にあります（CC-BY 4.0）。表のファイル名の SVG／PNG をそのまま使えます。
