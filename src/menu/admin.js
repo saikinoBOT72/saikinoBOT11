@@ -35,6 +35,7 @@ import {
   setChannel as setLotteryChannel,
   setEnabled as setLotteryEnabled,
 } from '../lib/lottery.js';
+import { SUIT_KEYS, cardSlot, diceSlot, saveCustomEmoji } from '../lib/emoji.js';
 import { METRICS, rankingTitle } from '../lib/ranking.js';
 import { ButtonStyle } from '../discord/constants.js';
 import {
@@ -999,6 +1000,16 @@ export async function anndel(ix, [rawId], ctx) {
 /** 1画面に出す数。多すぎると Discord の文字数上限に当たる。 */
 const EMOJI_PER_PAGE = 20;
 
+/** ゲームが名前で探しにいく絵文字（サイコロ6面とトランプ52枚）。 */
+function expectedEmojiNames() {
+  const names = [];
+  for (let value = 1; value <= 6; value++) names.push(diceSlot(value));
+  for (const suit of SUIT_KEYS) {
+    for (let rank = 1; rank <= 13; rank++) names.push(cardSlot(suit, rank));
+  }
+  return names;
+}
+
 /**
  * アプリケーション絵文字の一覧。
  * 絵文字そのものを並べて「ちゃんと表示されるか」を目で確かめられるようにし、
@@ -1041,7 +1052,12 @@ export async function emoji(ix, [rawPage], ctx) {
     });
   }
 
+  await saveCustomEmoji(ctx.db, all);
+  ctx.forgetEmoji();
+
   const sorted = [...all].sort((a, b) => a.name.localeCompare(b.name));
+  const names = new Set(sorted.map((item) => item.name.toLowerCase()));
+  const missing = expectedEmojiNames().filter((name) => !names.has(name));
   const pages = Math.ceil(sorted.length / EMOJI_PER_PAGE);
   const page = Math.min(Math.max(Number(rawPage) || 0, 0), pages - 1);
   const slice = sorted.slice(page * EMOJI_PER_PAGE, (page + 1) * EMOJI_PER_PAGE);
@@ -1056,11 +1072,20 @@ export async function emoji(ix, [rawPage], ctx) {
         color: 0x9b59b6,
         title: '😀 絵文字の確認',
         description:
-          `このアプリに **${sorted.length} 個** 登録されています（${page + 1}/${pages} ページ）。\n\n` +
+          `このアプリに **${sorted.length} 個** 登録されています（${page + 1}/${pages} ページ）。\n` +
+          '画面を開くたびに取り込み直すので、絵文字を足したらここを開くだけで反映されます。\n\n' +
           `${preview}\n\n` +
-          'ここに絵柄が並んでいれば、Bot から問題なく使えます。\n' +
-          '下のコードをそのままコピーして渡してください。',
-        fields: [{ name: 'コード', value: `\`\`\`\n${truncate(codes, 1000)}\n\`\`\`` }],
+          'ここに絵柄が並んでいれば、Bot から問題なく使えています。',
+        fields: [
+          { name: 'コード', value: `\`\`\`\n${truncate(codes, 1000)}\n\`\`\`` },
+          {
+            name: 'ゲームで使う名前',
+            value:
+              missing.length === 0
+                ? '✅ サイコロ6面とトランプ52枚がそろっています'
+                : `まだ見つからない名前（${missing.length}個）:\n\`${truncate(missing.join(' '), 900)}\``,
+          },
+        ],
         footer: { text: 'Developer Portal の Emojis タブに入れたものが出ます' },
       }),
     ],

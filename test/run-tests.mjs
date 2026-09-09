@@ -1727,10 +1727,39 @@ await test('画面で使う絵文字がすべて埋まっている', () => {
 await test('サイコロの目は1〜6が添字1〜6に並ぶ', () => {
   assert.equal(emojiLib.DICE_FACES.length, 7);
   assert.equal(emojiLib.DICE_FACES[0], '');
-  assert.equal(emojiLib.DICE_FACES[1], emojiLib.EMOJI.dice1);
-  assert.equal(emojiLib.DICE_FACES[6], emojiLib.EMOJI.dice6);
+  assert.equal(emojiLib.DICE_FACES[1], emojiLib.EMOJI.dice_1);
+  assert.equal(emojiLib.DICE_FACES[6], emojiLib.EMOJI.dice_6);
   // チンチロ側が別に持たないこと（差し替えは emoji.js 1か所だけ）
   assert.deepEqual(dice.DICE_FACES, emojiLib.DICE_FACES, '出目の定義が二重になっていない');
+});
+
+await test('カスタム絵文字は名前で引き、無い分は既定のまま', () => {
+  assert.equal(emojiLib.diceSlot(3), 'dice_3');
+  assert.equal(emojiLib.cardSlot('spade', 1), 'spade_1');
+  assert.equal(emojiLib.cardSlot('club', 13), 'club_k', '11〜13 は J/Q/K');
+  assert.equal(emojiLib.cardSlot('heart', 10), 'heart_10');
+
+  const custom = { ...emojiLib.EMOJI, dice_3: '<:dice_3:222>', spade_1: '<:spade_1:111>' };
+  assert.deepEqual(emojiLib.diceFaces(custom).slice(1), ['⚀', '⚁', '<:dice_3:222>', '⚃', '⚄', '⚅']);
+  assert.equal(emojiLib.cardFace(custom, 0, 1, 'A'), '<:spade_1:111>', 'あれば1枚絵');
+  assert.equal(emojiLib.cardFace(custom, 1, 5, '5'), '♥️5', '無ければスート＋数字');
+});
+
+await test('取り込んだ絵文字を読み書きできる', async () => {
+  const stored = await emojiLib.saveCustomEmoji(db, [
+    { id: '111111111111111111', name: 'Spade_1', animated: false },
+    { id: '222222222222222222', name: 'dice_roll', animated: true },
+    { id: '333333333333333333', name: null },
+  ]);
+  assert.equal(stored, 2, '名前かIDが欠けたものは入れない');
+
+  const merged = await emojiLib.loadEmoji(db);
+  assert.equal(merged.spade_1, '<:Spade_1:111111111111111111>', '大文字小文字を気にせず引ける');
+  assert.equal(merged.dice_roll, '<a:dice_roll:222222222222222222>', 'アニメーションは a: が付く');
+  assert.equal(merged.dice_1, '⚀', '取り込んでいないものは既定のまま');
+
+  await emojiLib.saveCustomEmoji(db, []);
+  assert.equal((await emojiLib.loadEmoji(db)).spade_1, undefined, '取り込み直すと入れ替わる');
 });
 
 await test('結果に出る絵文字はすべて emoji.js から来ている', async () => {
@@ -1758,13 +1787,24 @@ await test('結果に出る絵文字はすべて emoji.js から来ている', a
 
 await test('トランプのスートは山札と同じ並び', async () => {
   const highlow = await import(src('lib/highlow.js'));
-  assert.equal(emojiLib.CARD_SUITS.length, highlow.SUITS.length);
-  // 既定のままなら中身も一致する（カスタム絵文字に差し替えたら並びだけが意味を持つ）
-  assert.equal(
-    emojiLib.CARD_SUITS[0],
-    emojiLib.EMOJI.spade,
-    'スートの並びは spade / heart / diamond / club',
-  );
+  assert.equal(emojiLib.SUIT_KEYS.length, highlow.SUITS.length);
+  assert.deepEqual(emojiLib.SUIT_KEYS, ['spade', 'heart', 'diamond', 'club']);
+  // 山札の並びと絵文字名の並びがずれていたら、別のカードが出てしまう
+  assert.equal(highlow.SUITS[0], emojiLib.EMOJI.spade);
+  assert.equal(highlow.SUITS[3], emojiLib.EMOJI.club);
+});
+
+await test('52枚あればカード1枚の絵で出る', async () => {
+  const highlow = await import(src('lib/highlow.js'));
+  const custom = { ...emojiLib.EMOJI };
+  for (const [index, suit] of emojiLib.SUIT_KEYS.entries()) {
+    for (let rank = 1; rank <= 13; rank++) {
+      custom[emojiLib.cardSlot(suit, rank)] = `<:${suit}_${rank}:${index}${rank}>`;
+    }
+  }
+  assert.equal(highlow.cardLabel({ rank: 1, suit: '♠️' }, custom), '<:spade_1:01>');
+  assert.equal(highlow.cardLabel({ rank: 13, suit: '♣️' }, custom), '<:club_13:313>');
+  assert.equal(highlow.cardLabel({ rank: 1, suit: '♠️' }), '♠️A', '渡さなければ今までどおり');
 });
 
 section('[表示ヘルパー]');

@@ -28,7 +28,7 @@ import {
   show,
   withNotice,
 } from './common.js';
-import { CARD_SUITS as suits, EMOJI } from '../lib/emoji.js';
+
 
 /* ------------------------------------------------------------------ 進行中の勝負 */
 
@@ -62,6 +62,7 @@ async function clearGame(ctx, ix) {
 
 export async function open(ix, _args, ctx, notice = null) {
   const settings = await ctx.settings(ix.guildId);
+  const em = await ctx.emoji();
   const running = await getGame(ctx, ix);
   if (running) return table(ix, ctx, running, '前回の続きです。');
 
@@ -137,6 +138,7 @@ function toRow(game) {
 /** 場の状態。次の予想を選ぶ画面。 */
 async function table(ix, ctx, game, notice = null) {
   const settings = await ctx.settings(ix.guildId);
+  const em = await ctx.emoji();
   const card = { rank: game.card_rank, suit: game.card_suit };
   const highMultiplier = stepMultiplier(card.rank, 'high');
   const lowMultiplier = stepMultiplier(card.rank, 'low');
@@ -149,7 +151,7 @@ async function table(ix, ctx, game, notice = null) {
           color: 0x2980b9,
           title: '🃏 ハイ&ロー',
           description:
-            `# ${cardLabel(card, suits)}\n次のカードは **上（HIGH）** か **下（LOW）** か？`,
+            `# ${cardLabel(card, em)}\n次のカードは **上（HIGH）** か **下（LOW）** か？`,
           fields: [
             {
               name: '⬆️ HIGH',
@@ -192,6 +194,7 @@ export async function pick(ix, [choice], ctx) {
   if (!game) return open(ix, [], ctx, '進行中の勝負がありません。');
 
   const settings = await ctx.settings(ix.guildId);
+  const em = await ctx.emoji();
   const card = { rank: game.card_rank, suit: game.card_suit };
   if (!canChoose(card.rank, choice)) return table(ix, ctx, game, 'その予想は選べません。');
 
@@ -202,7 +205,7 @@ export async function pick(ix, [choice], ctx) {
   const flipping = embed({
     color: 0x2980b9,
     title: '🃏 ハイ&ロー',
-    description: `# ${cardLabel(card, suits)} → ${EMOJI.card_back}\n**${choice === 'high' ? '⬆️ HIGH' : '⬇️ LOW'}** に賭けました。めくっています…`,
+    description: `# ${cardLabel(card, em)} → ${em.card_back}\n**${choice === 'high' ? '⬆️ HIGH' : '⬇️ LOW'}** に賭けました。めくっています…`,
   });
 
   if (result === 'draw') {
@@ -223,7 +226,7 @@ export async function pick(ix, [choice], ctx) {
               color: 0x95a5a6,
               title: '🃏 ハイ&ロー',
               description:
-                `# ${cardLabel(card, suits)} → ${cardLabel(next, suits)}\n` +
+                `# ${cardLabel(card, em)} → ${cardLabel(next, em)}\n` +
                 `外れ… ${coins(game.bet, settings)} を失いました。`,
               fields: [
                 { name: 'そこまでの倍率', value: `×${game.multiplier}（${game.steps}連勝）`, inline: true },
@@ -257,7 +260,7 @@ export async function pick(ix, [choice], ctx) {
               color: 0xf1c40f,
               title: '🃏 ハイ&ロー — 上限到達！',
               description:
-                `# ${cardLabel(card, suits)} → ${cardLabel(next, suits)}\n` +
+                `# ${cardLabel(card, em)} → ${cardLabel(next, em)}\n` +
                 `🎉 **${steps}連勝・×${total}**！ ここまでで自動的に確定しました。\n${coins(won, settings)} を獲得！`,
               fields: [{ name: '所持金', value: coins(balance, settings), inline: true }],
             }),
@@ -288,6 +291,7 @@ export async function pick(ix, [choice], ctx) {
 /** めくったあとの場（次の予想を選べる状態）を、演出の最終コマとして作る。 */
 async function drawFrame(ix, ctx, previous, next, game, headline) {
   const settings = await ctx.settings(ix.guildId);
+  const em = await ctx.emoji();
   const current = payout(game.bet, game.multiplier);
 
   return {
@@ -295,7 +299,7 @@ async function drawFrame(ix, ctx, previous, next, game, headline) {
       embed({
         color: 0x2ecc71,
         title: '🃏 ハイ&ロー',
-        description: `# ${cardLabel(previous, suits)} → ${cardLabel(next, suits)}\n${headline} 次はどっち？`,
+        description: `# ${cardLabel(previous, em)} → ${cardLabel(next, em)}\n${headline} 次はどっち？`,
         fields: [
           {
             name: '⬆️ HIGH',
@@ -340,6 +344,7 @@ export async function stop(ix, _args, ctx) {
   if (game.steps === 0) return table(ix, ctx, game, '1回も当ててからでないと降りられません。');
 
   const settings = await ctx.settings(ix.guildId);
+  const em = await ctx.emoji();
   const won = payout(game.bet, game.multiplier);
   await clearGame(ctx, ix);
   await deposit(ctx.db, ix.guildId, ix.userId, won, 'highlow:win', `×${game.multiplier}`);

@@ -16,7 +16,7 @@ import { coins } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
-import { DICE_FACES as faces } from '../lib/emoji.js';
+import { diceFaces } from '../lib/emoji.js';
 
 /** 公開メッセージのボタンは `cc:` 始まり。 */
 export const namespace = 'cc';
@@ -99,6 +99,7 @@ async function handleInvite(ix, ctx, match, action) {
 
   const first = await markPlaying(ctx.db, match.id);
   if (!first) return reply({ content: 'この勝負はすでに始まっています。' });
+  const faces = diceFaces(await ctx.emoji());
 
   const settings = await getSettings(ctx.db, match.guild_id);
 
@@ -124,7 +125,7 @@ async function handleInvite(ix, ctx, match, action) {
   const firstId = first === 'challenger' ? match.challenger_id : match.opponent_id;
   return update({
     content: `<@${firstId}>`,
-    embeds: [tableEmbed({ ...match, turn: first }, settings, `先攻は <@${firstId}> に決まりました！`)],
+    embeds: [tableEmbed({ ...match, turn: first }, settings, `先攻は <@${firstId}> に決まりました！`, faces)],
     components: [rollRow(match.id)],
   });
 }
@@ -141,6 +142,7 @@ async function handleRoll(ix, ctx, match) {
   }
 
   const settings = await getSettings(ctx.db, match.guild_id);
+  const faces = diceFaces(await ctx.emoji());
   const updated = await getMatch(ctx.db, match.id);
   const frames = throws.map((dice, index) => ({
     after: index === 0 ? 700 : 800,
@@ -161,14 +163,14 @@ async function handleRoll(ix, ctx, match) {
 
   // 両者が振り終えていれば決着、まだなら手番を渡す
   if (updated.challenger_dice && updated.opponent_dice) {
-    frames.push({ after: 900, payload: await resolveMatch(ctx, updated, settings) });
+    frames.push({ after: 900, payload: await resolveMatch(ctx, updated, settings, faces) });
   } else {
     const nextId = updated.turn === 'challenger' ? updated.challenger_id : updated.opponent_id;
     frames.push({
       after: 900,
       payload: {
         content: `<@${nextId}>`,
-        embeds: [tableEmbed(updated, settings)],
+        embeds: [tableEmbed(updated, settings, null, faces)],
         components: [rollRow(match.id)],
       },
     });
@@ -181,7 +183,7 @@ async function handleRoll(ix, ctx, match) {
       embed({
         color: 0xe67e22,
         title: '🎲 チンチロ',
-        description: `<@${ix.userId}> がサイコロを振りました…\n\n# ${rolling()}`,
+        description: `<@${ix.userId}> がサイコロを振りました…\n\n# ${rolling(faces)}`,
       }),
     ],
     components: [],
@@ -192,7 +194,8 @@ async function handleRoll(ix, ctx, match) {
  * 両者の出目から勝敗を決めて精算し、最後のコマを作る。
  * compare() と settle() は同じ 'challenger'|'opponent' で話す。テストから直接呼べるように公開している。
  */
-export async function resolveMatch(ctx, match, settings) {
+export async function resolveMatch(ctx, match, settings, faces = null) {
+  const dice = faces ?? diceFaces(await ctx.emoji());
   const challengerHand = evaluate(lastThrow(match.challenger_dice));
   const opponentHand = evaluate(lastThrow(match.opponent_dice));
   const result = compare(challengerHand, opponentHand);
@@ -203,8 +206,8 @@ export async function resolveMatch(ctx, match, settings) {
   const { prize } = await settle(ctx.db, match, result.winner, result.multiplier);
 
   const lines = [
-    `<@${match.challenger_id}>　${diceLine(challengerHand.dice, faces)}　${handLabel(challengerHand)}`,
-    `<@${match.opponent_id}>　${diceLine(opponentHand.dice, faces)}　${handLabel(opponentHand)}`,
+    `<@${match.challenger_id}>　${diceLine(challengerHand.dice, dice)}　${handLabel(challengerHand)}`,
+    `<@${match.opponent_id}>　${diceLine(opponentHand.dice, dice)}　${handLabel(opponentHand)}`,
     '',
   ];
   if (result.winner === 'draw') {
@@ -230,12 +233,12 @@ function lastThrow(json) {
   return throws[throws.length - 1];
 }
 
-function rolling() {
+function rolling(faces) {
   const roll = faces[1 + Math.floor(Math.random() * 6)];
   return `${roll} ${roll} ${roll}`;
 }
 
-function tableEmbed(match, settings, headline = null) {
+function tableEmbed(match, settings, headline = null, faces = undefined) {
   const waiting = match.turn === 'challenger' ? match.challenger_id : match.opponent_id;
   const done = [];
   for (const role of ['challenger', 'opponent']) {

@@ -3,6 +3,8 @@
  * 1〜13 のカードを引き、次が上か下かを当てる。当たるたび倍率が掛け算で伸び、
  * いつでも降りて確定できる。同じ数字は引き分けとして引き直す。
  */
+import { cardFace } from './emoji.js';
+
 export const RANKS = { 1: 'A', 11: 'J', 12: 'Q', 13: 'K' };
 export const SUITS = ['♠️', '♥️', '♦️', '♣️'];
 
@@ -23,12 +25,15 @@ export function drawCard() {
 }
 
 /**
- * カードの表示。suits を渡すとサーバーのカスタム絵文字になる。
- * 山札は SUITS の並び順で引いているので、同じ並びの配列を渡せば置き換わる。
+ * カードの表示。
+ * 52枚ぶんのカスタム絵文字があればそのカード1枚で、
+ * 無ければ「スート＋数字」で出す（emoji を渡さなければ既定の見た目）。
  */
-export function cardLabel(card, suits = SUITS) {
-  const suit = suits[SUITS.indexOf(card.suit)] ?? card.suit;
-  return `${suit}${RANKS[card.rank] ?? card.rank}`;
+export function cardLabel(card, emoji = null) {
+  const suitIndex = SUITS.indexOf(card.suit);
+  const label = RANKS[card.rank] ?? String(card.rank);
+  if (!emoji || suitIndex < 0) return `${card.suit}${label}`;
+  return cardFace(emoji, suitIndex, card.rank, label);
 }
 
 /**

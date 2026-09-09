@@ -2,6 +2,7 @@ import { wrapD1 } from './lib/sql.js';
 import { createRest } from './discord/rest.js';
 import { getSettings } from './lib/economy.js';
 import { clampHour } from './lib/calendar.js';
+import { loadEmoji } from './lib/emoji.js';
 
 /**
  * 1リクエストぶんの道具箱。DB・Discord API・サーバー設定をまとめて持ち回る。
@@ -10,6 +11,7 @@ export function createContext(env, executionCtx) {
   const db = wrapD1(env.DB);
   const rest = createRest(env.DISCORD_TOKEN);
   const settingsCache = new Map();
+  let emojiCache = null;
 
   return {
     db,
@@ -33,6 +35,19 @@ export function createContext(env, executionCtx) {
 
     forgetSettings(guildId) {
       settingsCache.delete(guildId);
+    },
+
+    /**
+     * 画面で使う絵文字。取り込み済みのカスタム絵文字があればそれ、無ければ既定。
+     * アプリ全体で1組なのでサーバーごとの区別はない。
+     */
+    async emoji() {
+      if (!emojiCache) emojiCache = await loadEmoji(db);
+      return emojiCache;
+    },
+
+    forgetEmoji() {
+      emojiCache = null;
     },
 
     /** 応答を返したあとで走らせる処理（チャンネルへの告知など）。 */

@@ -23,6 +23,7 @@ const achLib = await import(src('lib/achievements.js'));
 const annLib = await import(src('lib/announcements.js'));
 const act = await import(src('lib/activities.js'));
 const shop = await import(src('lib/shop.js'));
+const emojiLib = await import(src('lib/emoji.js'));
 
 const runner = createRunner('[メニュー]');
 const { test, section } = runner;
@@ -1382,19 +1383,50 @@ await test('履歴が日本語のラベルで出る', async () => {
 
 section('[管理メニュー]');
 
-await test('アプリの絵文字を一覧できる', async () => {
+await test('アプリの絵文字を一覧でき、開いた時点で取り込まれる', async () => {
   ctx.applicationEmojis.items = [
-    { id: '111111111111111111', name: 'dice1', animated: false },
-    { id: '222222222222222222', name: 'spade_a', animated: false },
+    { id: '111111111111111111', name: 'dice_1', animated: false },
+    { id: '222222222222222222', name: 'spade_1', animated: false },
     { id: '333333333333333333', name: 'dice_roll', animated: true },
   ];
 
   const payload = await press('m:admin:emoji', { admin: true });
   const text = screenText(payload);
   assert.match(text, /3 個/, '個数が出る');
-  assert.match(text, /<:dice1:111111111111111111>/, '絵柄が並ぶ');
-  assert.match(text, /dice1 = <:dice1:111111111111111111>/, 'コードが出る');
+  assert.match(text, /<:dice_1:111111111111111111>/, '絵柄が並ぶ');
+  assert.match(text, /dice_1 = <:dice_1:111111111111111111>/, 'コードが出る');
   assert.match(text, /<a:dice_roll:333333333333333333>/, 'アニメーションは a: が付く');
+  assert.match(text, /まだ見つからない名前/, '足りない名前を知らせる');
+
+  // 開いた時点で控えに入り、ゲーム側から名前で引ける
+  const merged = await emojiLib.loadEmoji(db);
+  assert.equal(merged.dice_1, '<:dice_1:111111111111111111>');
+  assert.equal(merged.spade_1, '<:spade_1:222222222222222222>');
+});
+
+await test('サイコロとトランプが揃うと、ゲームの表示が入れ替わる', async () => {
+  const items = [];
+  for (let value = 1; value <= 6; value++) {
+    items.push({ id: `10000000000000000${value}`, name: `dice_${value}`, animated: false });
+  }
+  const ranks = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+  for (const [suitIndex, suit] of ['spade', 'heart', 'diamond', 'club'].entries()) {
+    for (const [rankIndex, rank] of ranks.entries()) {
+      items.push({ id: `2${suitIndex}${String(rankIndex).padStart(16, '0')}`, name: `${suit}_${rank}`, animated: false });
+    }
+  }
+  ctx.applicationEmojis.items = items;
+
+  const payload = await press('m:admin:emoji', { admin: true });
+  assert.match(screenText(payload), /そろっています/, '足りない名前が無くなる');
+
+  const highlow = await import(src('lib/highlow.js'));
+  const merged = await emojiLib.loadEmoji(db);
+  assert.equal(highlow.cardLabel({ rank: 1, suit: '♠️' }, merged), '<:spade_1:200000000000000000>');
+  assert.equal(highlow.cardLabel({ rank: 13, suit: '♣️' }, merged), '<:club_K:230000000000000012>');
+  assert.equal(emojiLib.diceFaces(merged)[3], '<:dice_3:100000000000000003>');
+
+  await emojiLib.saveCustomEmoji(db, []);
 });
 
 await test('絵文字が多いとページに分かれる', async () => {
