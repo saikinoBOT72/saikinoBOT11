@@ -23,6 +23,7 @@ const achLib = await import(src('lib/achievements.js'));
 const annLib = await import(src('lib/announcements.js'));
 const act = await import(src('lib/activities.js'));
 const shop = await import(src('lib/shop.js'));
+const emojiLib = await import(src('lib/emoji.js'));
 
 const runner = createRunner('[メニュー]');
 const { test, section } = runner;
@@ -376,12 +377,14 @@ await test('挑戦状が投稿され、承諾で両者から預かる', async ()
   assert.equal(await eco.getBalance(db, GUILD, OTHER), 500, '相手からも預かる');
   const playing = await db.get('SELECT * FROM chinchiro_matches WHERE id = ?1', match.id);
   assert.equal(playing.status, 'playing');
-  assert.equal(playing.turn, 'challenger', '挑戦者から振る');
+  assert.ok(['challenger', 'opponent'].includes(playing.turn), '先攻はランダムに決まる');
   globalThis.__ccId = match.id;
+  globalThis.__ccFirst = playing.turn === 'challenger' ? ME : OTHER;
+  globalThis.__ccSecond = playing.turn === 'challenger' ? OTHER : ME;
 });
 
 await test('手番でない人は振れない', async () => {
-  const payload = await pressCc(`cc:roll:${globalThis.__ccId}`, { userId: OTHER });
+  const payload = await pressCc(`cc:roll:${globalThis.__ccId}`, { userId: globalThis.__ccSecond });
   assert.match(screenText(payload), /あなたの番ではありません/);
   const payload2 = await pressCc(`cc:roll:${globalThis.__ccId}`, { userId: 'u9' });
   assert.match(screenText(payload2), /参加者ではありません/);
@@ -390,12 +393,12 @@ await test('手番でない人は振れない', async () => {
 await test('順番に振ると決着し、コインの総量は変わらない', async () => {
   const totalBefore = (await eco.getBalance(db, GUILD, ME)) + (await eco.getBalance(db, GUILD, OTHER));
 
-  await pressCc(`cc:roll:${globalThis.__ccId}`, { userId: ME });
+  await pressCc(`cc:roll:${globalThis.__ccId}`, { userId: globalThis.__ccFirst });
   const midway = await db.get('SELECT * FROM chinchiro_matches WHERE id = ?1', globalThis.__ccId);
-  assert.ok(midway.challenger_dice, '挑戦者の出目が記録される');
-  assert.equal(midway.turn, 'opponent', '手番が移る');
+  assert.ok(midway.challenger_dice || midway.opponent_dice, '先攻の出目が記録される');
+  assert.equal(midway.turn, globalThis.__ccFirst === ME ? 'opponent' : 'challenger', '手番が移る');
 
-  await pressCc(`cc:roll:${globalThis.__ccId}`, { userId: OTHER });
+  await pressCc(`cc:roll:${globalThis.__ccId}`, { userId: globalThis.__ccSecond });
   const done = await db.get('SELECT * FROM chinchiro_matches WHERE id = ?1', globalThis.__ccId);
   assert.equal(done.status, 'done');
 
@@ -409,7 +412,7 @@ await test('順番に振ると決着し、コインの総量は変わらない',
 });
 
 await test('終わった勝負のボタンはもう効かない', async () => {
-  const payload = await pressCc(`cc:roll:${globalThis.__ccId}`, { userId: ME });
+  const payload = await pressCc(`cc:roll:${globalThis.__ccId}`, { userId: globalThis.__ccFirst });
   assert.match(screenText(payload), /終了/);
 });
 
@@ -440,7 +443,7 @@ await test('強い役を出した方が勝ち、その人にコインが入る',
       opponentId: OTHER,
       bet: 100,
     });
-    await chinchiroLib.markPlaying(db, id);
+    await chinchiroLib.markPlaying(db, id, 'challenger');
     await eco.withdraw(db, GUILD, ME, 500, 'chinchiro:escrow', id);
     await eco.withdraw(db, GUILD, OTHER, 500, 'chinchiro:escrow', id);
     await chinchiroLib.recordRoll(db, id, 'challenger', [challengerDice]);
@@ -1001,6 +1004,40 @@ await test('履歴が日本語のラベルで出る', async () => {
 });
 
 section('[管理メニュー]');
+
+await test('絵文字を差し替えると画面に反映される', async () => {
+  const custom = '<:dice1:123456789012345678>';
+  await press('m:admin:emojisave:dice1', { type: 5, admin: true, fields: { value: custom } });
+  assert.equal((await emojiLib.loadEmoji(db, GUILD)).dice1, custom);
+
+  const screen = await press('m:admin:emoji', { admin: true });
+  assert.match(screenText(screen), /差し替え済み/);
+
+  await press('m:admin:emojisave:slot', { type: 5, admin: true, fields: { value: '🎮' } });
+  const games = await press('m:games:open');
+  assert.match(JSON.stringify(firstEmbed(games).fields), /🎮 スロット/);
+  const buttons = games.data.components.flatMap((r) => r.components);
+  assert.deepEqual(buttons.find((b) => b.custom_id === 'm:slot:open').emoji, { name: '🎮' });
+});
+
+await test('絵文字の形がおかしいと弾かれ、空欄で既定に戻る', async () => {
+  const before = (await emojiLib.loadEmoji(db, GUILD)).dice1;
+  const bad = await press('m:admin:emojisave:dice1', { type: 5, admin: true, fields: { value: ':dice1:' } });
+  assert.match(screenText(bad), /カスタム絵文字は/);
+  assert.equal((await emojiLib.loadEmoji(db, GUILD)).dice1, before, '変わらない');
+
+  await press('m:admin:emojisave:dice1', { type: 5, admin: true, fields: { value: '' } });
+  assert.equal((await emojiLib.loadEmoji(db, GUILD)).dice1, '⚀', '既定に戻る');
+
+  await press('m:admin:emojireset', { admin: true });
+  assert.equal((await emojiLib.loadEmoji(db, GUILD)).slot, '🎰');
+});
+
+await test('絵文字の設定は管理者だけ', async () => {
+  assert.match(screenText(await press('m:admin:emoji', { admin: false })), /権限/);
+  await press('m:admin:emojisave:slot', { type: 5, admin: false, fields: { value: '🎮' } });
+  assert.equal((await emojiLib.loadEmoji(db, GUILD)).slot, '🎰', '変わらない');
+});
 
 await test('権限が無ければ管理画面を開けない', async () => {
   const payload = await press('m:admin:open', { admin: false });

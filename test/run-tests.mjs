@@ -865,8 +865,8 @@ await test('決着は先に取った1つだけ、時間切れは返金される'
   const match = await chinchiro.createMatch(db, {
     id: 'cc4', guildId: G, channelId: 'c', challengerId: 'ccE', opponentId: 'ccF', bet: 100,
   });
-  assert.equal(await chinchiro.markPlaying(db, 'cc4'), true);
-  assert.equal(await chinchiro.markPlaying(db, 'cc4'), false, '二重開始できない');
+  assert.ok(['challenger', 'opponent'].includes(await chinchiro.markPlaying(db, 'cc4')), '先攻が決まる');
+  assert.equal(await chinchiro.markPlaying(db, 'cc4'), null, '二重開始できない');
   assert.equal(await chinchiro.finishMatch(db, 'cc4'), true);
   assert.equal(await chinchiro.finishMatch(db, 'cc4'), false, '二重精算できない');
 
@@ -890,11 +890,13 @@ await test('順番に振るので同じ人が続けて振れない', async () =>
   await chinchiro.createMatch(db, {
     id: 'cc6', guildId: G, channelId: 'c', challengerId: 'ccE', opponentId: 'ccF', bet: 100,
   });
-  await chinchiro.markPlaying(db, 'cc6');
+  await chinchiro.markPlaying(db, 'cc6', 'challenger');
   assert.equal(await chinchiro.recordRoll(db, 'cc6', 'opponent', [[1, 2, 4]]), false, '先攻より先には振れない');
   assert.equal(await chinchiro.recordRoll(db, 'cc6', 'challenger', [[1, 2, 4]]), true);
   assert.equal(await chinchiro.recordRoll(db, 'cc6', 'challenger', [[3, 3, 3]]), false, '二度は振れない');
+  assert.equal((await chinchiro.getMatch(db, 'cc6')).turn, 'opponent', '手番が相手に渡る');
   assert.equal(await chinchiro.recordRoll(db, 'cc6', 'opponent', [[5, 5, 2]]), true);
+  assert.equal((await chinchiro.getMatch(db, 'cc6')).turn, null, '両者振り終えたら手番なし');
 });
 
 section('[スロット]');
@@ -1262,6 +1264,74 @@ await test('区切りを0時から4時に変えても、連続記録は途切れ
 
   const next = await streak.touchStreak(db, G, 'shift', '筋トレ', FOUR, at('2026-09-03T12:00:00+09:00'));
   assert.equal(next.current, 2, 'そのまま続く');
+});
+
+section('[定期処理（1分ごと）]');
+
+const cron = await import(src('cron.js'));
+
+/** 定期処理を動かすための、最小限の道具箱。 */
+function cronContext() {
+  const sent = [];
+  return {
+    db,
+    sent,
+    timezone: 'Asia/Tokyo',
+    calendar: 'Asia/Tokyo',
+    async settings(guildId) {
+      return eco.getSettings(db, guildId);
+    },
+    rest: {
+      async createMessage(channelId, payload) {
+        sent.push({ channelId, payload });
+        return { id: `msg${sent.length}` };
+      },
+      async editMessage() {
+        return {};
+      },
+    },
+  };
+}
+
+await test('同じ時刻に2つ設定しても、両方とも発表される', async () => {
+  const cronCtx = cronContext();
+  await eco.setBalance(db, G, 'ann1', 500, 'test');
+
+  const first = await announcements.createAnnouncement(db, G, {
+    channelId: 'chan1', metric: 'balance', frequency: 'daily', hour: 0, topN: 3, prize: 0,
+  });
+  // 対象が誰もいない設定。黙って消えると「片方しか出ない」ように見える
+  const second = await announcements.createAnnouncement(db, G, {
+    channelId: 'chan1', metric: 'activity_streak', activityName: '存在しない', frequency: 'daily', hour: 0, topN: 3, prize: 0,
+  });
+  const hour = Number(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tokyo', hour: '2-digit', hour12: false })
+    .formatToParts(new Date()).find((part) => part.type === 'hour').value) % 24;
+  await db.run('UPDATE announcements SET hour = ?1 WHERE id IN (?2, ?3)', hour, first.id, second.id);
+
+  await cron.postDueAnnouncements(cronCtx);
+  assert.equal(cronCtx.sent.length, 2, '2件とも投稿する');
+  assert.match(JSON.stringify(cronCtx.sent[1].payload), /対象になる人がいませんでした/);
+
+  cronCtx.sent.length = 0;
+  await cron.postDueAnnouncements(cronCtx);
+  assert.equal(cronCtx.sent.length, 0, '同じ日に二度は出さない');
+
+  await announcements.removeAnnouncement(db, G, first.id);
+  await announcements.removeAnnouncement(db, G, second.id);
+});
+
+await test('1つの定期処理がこけても、残りは動く', async () => {
+  const cronCtx = cronContext();
+  cronCtx.db = {
+    ...db,
+    all: async () => {
+      throw new Error('わざと失敗');
+    },
+    get: db.get.bind(db),
+    run: db.run.bind(db),
+  };
+  // runScheduled が投げずに戻ってくれば、囲えている
+  await cron.runScheduled(cronCtx);
 });
 
 section('[表示ヘルパー]');

@@ -40,14 +40,19 @@ export async function setStatus(db, id, status) {
   await db.run('UPDATE chinchiro_matches SET status = ?2 WHERE id = ?1', id, status);
 }
 
-/** pending → playing。先に取れた1つだけが成功する。 */
-export async function markPlaying(db, id) {
+/**
+ * pending → playing。先に取れた1つだけが成功する。
+ * 先攻はランダム。あとから振るほうが相手の目を見られて有利なので、固定にしない。
+ * @returns {Promise<'challenger'|'opponent'|null>} 取れたら先攻の役、取れなければ null
+ */
+export async function markPlaying(db, id, first = Math.random() < 0.5 ? 'challenger' : 'opponent') {
   const result = await db.run(
-    "UPDATE chinchiro_matches SET status = 'playing', turn = 'challenger', expires_at = ?2 WHERE id = ?1 AND status = 'pending'",
+    "UPDATE chinchiro_matches SET status = 'playing', turn = ?3, expires_at = ?2 WHERE id = ?1 AND status = 'pending'",
     id,
     Date.now() + PLAY_TIMEOUT_MS,
+    first,
   );
-  return result.changes === 1;
+  return result.changes === 1 ? first : null;
 }
 
 /**
@@ -56,13 +61,18 @@ export async function markPlaying(db, id) {
  */
 export async function recordRoll(db, id, role, throws) {
   const column = role === 'challenger' ? 'challenger_dice' : 'opponent_dice';
-  const nextTurn = role === 'challenger' ? 'opponent' : null;
+  const other = role === 'challenger' ? 'opponent' : 'challenger';
+  const otherColumn = role === 'challenger' ? 'opponent_dice' : 'challenger_dice';
+  // 相手がまだ振っていなければ手番を渡す。振り終わっていれば手番なし（決着）
   const result = await db.run(
-    `UPDATE chinchiro_matches SET ${column} = ?2, turn = ?3, expires_at = ?4
+    `UPDATE chinchiro_matches
+        SET ${column} = ?2,
+            turn = CASE WHEN ${otherColumn} IS NULL THEN ?3 ELSE NULL END,
+            expires_at = ?4
       WHERE id = ?1 AND status = 'playing' AND turn = ?5 AND ${column} IS NULL`,
     id,
     JSON.stringify(throws),
-    nextTurn,
+    other,
     Date.now() + PLAY_TIMEOUT_MS,
     role,
   );

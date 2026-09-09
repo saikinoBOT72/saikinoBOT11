@@ -27,6 +27,7 @@ import {
 
 export async function open(ix, _args, ctx, notice = null) {
   const settings = await ctx.settings(ix.guildId);
+  const em = await ctx.emoji(ix.guildId);
   const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
 
   return show(ix, {
@@ -37,12 +38,12 @@ export async function open(ix, _args, ctx, notice = null) {
           title: '🎮 あそぶ',
           description: `所持金 ${coins(balance, settings)}\n\n遊びたいものを選んでください。`,
           fields: [
-            { name: '🎰 スロット', value: '3つ揃いで最大 x3000', inline: true },
-            { name: '🪙 コイントス', value: '当たれば2倍', inline: true },
-            { name: '🃏 ハイ&ロー', value: '連勝で倍率上昇。降り際が勝負', inline: true },
-            { name: '✊ じゃんけん', value: '1対1。勝てば総取り', inline: true },
-            { name: '🎲 チンチロ', value: '1対1。役で倍率が変わる', inline: true },
-            { name: '🗳️ 予想大会', value: 'みんなで賭けて、正解者で山分け', inline: true },
+            { name: `${em.slot} スロット`, value: '3つ揃いで最大 x3000', inline: true },
+            { name: `${em.coinflip} コイントス`, value: '当たれば2倍', inline: true },
+            { name: `${em.highlow} ハイ&ロー`, value: '連勝で倍率上昇。降り際が勝負', inline: true },
+            { name: `${em.rps} じゃんけん`, value: '1対1。勝てば総取り', inline: true },
+            { name: `${em.chinchiro} チンチロ`, value: '1対1。役で倍率が変わる', inline: true },
+            { name: `${em.poll} 予想大会`, value: 'みんなで賭けて、正解者で山分け', inline: true },
           ],
         }),
         notice,
@@ -50,14 +51,14 @@ export async function open(ix, _args, ctx, notice = null) {
     ],
     components: [
       row(
-        button(id('slot', 'open'), 'スロット', { emoji: '🎰', style: ButtonStyle.PRIMARY }),
-        button(id('cf', 'open'), 'コイントス', { emoji: '🪙', style: ButtonStyle.PRIMARY }),
-        button(id('hl', 'open'), 'ハイ&ロー', { emoji: '🃏', style: ButtonStyle.PRIMARY }),
+        button(id('slot', 'open'), 'スロット', { emoji: em.slot, style: ButtonStyle.PRIMARY }),
+        button(id('cf', 'open'), 'コイントス', { emoji: em.coinflip, style: ButtonStyle.PRIMARY }),
+        button(id('hl', 'open'), 'ハイ&ロー', { emoji: em.highlow, style: ButtonStyle.PRIMARY }),
       ),
       row(
-        button(id('rps', 'open'), 'じゃんけん', { emoji: '✊', style: ButtonStyle.SUCCESS }),
-        button(id('cc', 'open'), 'チンチロ', { emoji: '🎲', style: ButtonStyle.SUCCESS }),
-        button(id('poll', 'open'), '予想大会', { emoji: '🗳️', style: ButtonStyle.SUCCESS }),
+        button(id('rps', 'open'), 'じゃんけん', { emoji: em.rps, style: ButtonStyle.SUCCESS }),
+        button(id('cc', 'open'), 'チンチロ', { emoji: em.chinchiro, style: ButtonStyle.SUCCESS }),
+        button(id('poll', 'open'), '予想大会', { emoji: em.poll, style: ButtonStyle.SUCCESS }),
       ),
       row(backButton()),
     ],

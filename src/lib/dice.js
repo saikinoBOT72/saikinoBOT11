@@ -89,8 +89,9 @@ export function compare(challengerHand, opponentHand) {
   return { winner: 'draw', multiplier: 0, reason: '同じ役' };
 }
 
-export function diceLine(dice) {
-  return dice.map((value) => DICE_FACES[value]).join(' ');
+/** 出目を絵文字で並べる。faces を渡すとサーバーのカスタム絵文字になる。 */
+export function diceLine(dice, faces = DICE_FACES) {
+  return dice.map((value) => faces[value]).join(' ');
 }
 
 export function handLabel(hand) {

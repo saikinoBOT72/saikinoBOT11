@@ -22,8 +22,13 @@ export function drawCard() {
   return { rank: 1 + Math.floor(Math.random() * 13), suit: SUITS[Math.floor(Math.random() * SUITS.length)] };
 }
 
-export function cardLabel(card) {
-  return `${card.suit}${RANKS[card.rank] ?? card.rank}`;
+/**
+ * カードの表示。suits を渡すとサーバーのカスタム絵文字になる。
+ * 山札は SUITS の並び順で引いているので、同じ並びの配列を渡せば置き換わる。
+ */
+export function cardLabel(card, suits = SUITS) {
+  const suit = suits[SUITS.indexOf(card.suit)] ?? card.suit;
+  return `${suit}${RANKS[card.rank] ?? card.rank}`;
 }
 
 /**
