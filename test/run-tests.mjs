@@ -1491,6 +1491,108 @@ await test('時間切れの対戦は返金して片付ける', async () => {
   assert.equal((await duel.cancelExpired(db)).length, 0, '二重返金しない');
 });
 
+section('[キャリーオーバー宝くじ]');
+
+const lottery = await import(src('lib/lottery.js'));
+const LG = 'lot-guild';
+
+await test('回の区切りは日曜19時', () => {
+  const at = (text) => new Date(text);
+  assert.equal(lottery.drawKeyFor('Asia/Tokyo', at('2026-09-07T10:00:00+09:00')), '2026-09-13', '次の日曜');
+  assert.equal(lottery.drawKeyFor('Asia/Tokyo', at('2026-09-13T18:59:00+09:00')), '2026-09-13', '抽選前は当日の回');
+  assert.equal(lottery.drawKeyFor('Asia/Tokyo', at('2026-09-13T19:00:00+09:00')), '2026-09-20', '抽選後は次の回');
+
+  assert.equal(lottery.isDrawTime('Asia/Tokyo', at('2026-09-13T19:30:00+09:00')), true);
+  assert.equal(lottery.isDrawTime('Asia/Tokyo', at('2026-09-13T18:30:00+09:00')), false, '時刻が違う');
+  assert.equal(lottery.isDrawTime('Asia/Tokyo', at('2026-09-14T19:30:00+09:00')), false, '曜日が違う');
+});
+
+await test('数字の読み取りは全角もゼロ埋めも通る', () => {
+  assert.deepEqual(lottery.parseNumber('777'), { ok: true, number: 777 });
+  assert.deepEqual(lottery.parseNumber('７'), { ok: true, number: 7 });
+  assert.deepEqual(lottery.parseNumber('000'), { ok: true, number: 0 });
+  assert.equal(lottery.parseNumber('1000').ok, false);
+  assert.equal(lottery.parseNumber('あ').ok, false);
+  assert.equal(lottery.formatNumber(7), '007');
+});
+
+await test('同じ数字は1人しか買えず、上限は10枚', async () => {
+  await eco.setBalance(db, LG, 'p1', 5000, 'test');
+  await eco.setBalance(db, LG, 'p2', 5000, 'test');
+
+  assert.deepEqual(await lottery.buyTicket(db, LG, '2026-09-13', 'p1', 123), { ok: true });
+  assert.equal(await eco.getBalance(db, LG, 'p1'), 5000 - lottery.TICKET_PRICE);
+
+  const taken = await lottery.buyTicket(db, LG, '2026-09-13', 'p2', 123);
+  assert.deepEqual(taken, { ok: false, reason: 'taken' });
+  assert.equal(await eco.getBalance(db, LG, 'p2'), 5000, '買えなければ引かれない');
+
+  for (let number = 200; number < 209; number++) {
+    assert.equal((await lottery.buyTicket(db, LG, '2026-09-13', 'p1', number)).ok, true);
+  }
+  const over = await lottery.buyTicket(db, LG, '2026-09-13', 'p1', 300);
+  assert.deepEqual(over, { ok: false, reason: 'limit' }, '10枚まで');
+  assert.equal((await lottery.myTickets(db, LG, '2026-09-13', 'p1')).length, 10);
+});
+
+await test('払えなければ番号は押さえられない', async () => {
+  await eco.setBalance(db, LG, 'poor', 10, 'test');
+  const result = await lottery.buyTicket(db, LG, '2026-09-13', 'poor', 555);
+  assert.deepEqual(result, { ok: false, reason: 'insufficient' });
+
+  const free = await lottery.buyTicket(db, LG, '2026-09-13', 'p2', 555);
+  assert.deepEqual(free, { ok: true }, '押さえた番号が解放されている');
+});
+
+await test('当たりが出なければ次の回に持ち越す', async () => {
+  const before = await lottery.getLottery(db, LG);
+  const { pool } = await lottery.poolOf(db, LG, '2026-09-13');
+  assert.ok(pool > 0);
+
+  // 誰も買っていない数字を引く
+  const miss = await lottery.drawLottery(db, before, '2026-09-13', 999);
+  assert.equal(miss.winnerId, null);
+  assert.equal(miss.pool, pool);
+
+  const after = await lottery.getLottery(db, LG);
+  assert.equal(after.carryover, before.carryover + pool, 'まるごと持ち越し');
+  assert.equal(after.last_draw_key, '2026-09-13');
+
+  assert.equal(await lottery.drawLottery(db, after, '2026-09-13', 123), null, '同じ回は二度引かない');
+});
+
+await test('当たれば持ち越しごと総取りし、持ち越しは0に戻る', async () => {
+  const carried = (await lottery.getLottery(db, LG)).carryover;
+  assert.ok(carried > 0, '前のテストで持ち越しがある');
+
+  await eco.setBalance(db, LG, 'p3', 1000, 'test');
+  await lottery.buyTicket(db, LG, '2026-09-20', 'p3', 777);
+  const before = await eco.getBalance(db, LG, 'p3');
+
+  const state = await lottery.getLottery(db, LG);
+  const result = await lottery.drawLottery(db, state, '2026-09-20', 777);
+  assert.equal(result.winnerId, 'p3');
+  assert.equal(result.prize, carried + lottery.TICKET_PRICE, '売上＋持ち越し');
+  assert.equal(await eco.getBalance(db, LG, 'p3'), before + result.prize);
+  assert.equal((await lottery.getLottery(db, LG)).carryover, 0, '持ち越しは使い切る');
+
+  const history = await lottery.recentDraws(db, LG, 5);
+  assert.equal(history[0].draw_key, '2026-09-20');
+  assert.equal(history[0].winner_id, 'p3');
+});
+
+await test('発表チャンネルを決めるまで抽選しない', async () => {
+  const off = await lottery.getLottery(db, 'lot-quiet');
+  assert.equal(off.channel_id, null);
+  assert.equal((await lottery.activeLotteries(db)).some((row) => row.guild_id === 'lot-quiet'), false);
+
+  await lottery.setChannel(db, 'lot-quiet', 'chan9');
+  assert.equal((await lottery.activeLotteries(db)).some((row) => row.guild_id === 'lot-quiet'), true);
+
+  await lottery.setEnabled(db, 'lot-quiet', false);
+  assert.equal((await lottery.activeLotteries(db)).some((row) => row.guild_id === 'lot-quiet'), false, '停止中は引かない');
+});
+
 section('[定期処理（1分ごと）]');
 
 const cron = await import(src('cron.js'));
@@ -1543,6 +1645,25 @@ await test('同じ時刻に2つ設定しても、両方とも発表される', a
 
   await announcements.removeAnnouncement(db, G, first.id);
   await announcements.removeAnnouncement(db, G, second.id);
+});
+
+await test('日曜19時に宝くじを抽選して発表する', async () => {
+  const cronCtx = cronContext();
+  cronCtx.emoji = async () => (await import(src('lib/emoji.js'))).defaultEmoji();
+  await lottery.setChannel(db, 'lot-cron', 'chan-lot');
+  await eco.setBalance(db, 'lot-cron', 'c1', 1000, 'test');
+  await lottery.buyTicket(db, 'lot-cron', '2026-09-13', 'c1', 42);
+
+  await cron.drawLotteries(cronCtx, new Date('2026-09-13T18:00:00+09:00'));
+  assert.equal(cronCtx.sent.length, 0, '時刻が違えば引かない');
+
+  await cron.drawLotteries(cronCtx, new Date('2026-09-13T19:10:00+09:00'));
+  assert.equal(cronCtx.sent.length, 1, '発表する');
+  assert.equal(cronCtx.sent[0].channelId, 'chan-lot');
+
+  cronCtx.sent.length = 0;
+  await cron.drawLotteries(cronCtx, new Date('2026-09-13T19:40:00+09:00'));
+  assert.equal(cronCtx.sent.length, 0, '同じ回は一度だけ');
 });
 
 await test('1つの定期処理がこけても、残りは動く', async () => {

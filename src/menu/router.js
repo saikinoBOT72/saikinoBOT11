@@ -8,6 +8,7 @@ import * as privacy from './privacy.js';
 import * as titles from './titles.js';
 import * as highlow from './highlow.js';
 import * as doors from './doors.js';
+import * as lottery from './lottery.js';
 import * as poll from './poll.js';
 import { MENU_PREFIX } from './common.js';
 
@@ -28,6 +29,7 @@ export const screens = {
   hl: highlow.actions,
   poll: poll.actions,
   doors: doors.actions,
+  lot: lottery.actions,
   rr: games.rr,
   cs: games.cs,
   mine: games.mine,

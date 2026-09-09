@@ -21,10 +21,25 @@ import {
 import { buildAnnouncement, describeSchedule, dueAnnouncements, markAnnounced } from './lib/announcements.js';
 import { rankingTitle } from './lib/ranking.js';
 import { dateKey } from './lib/calendar.js';
+import {
+  DRAW_HOUR,
+  activeLotteries,
+  drawLottery,
+  formatNumber,
+  isDrawTime,
+  poolOf,
+} from './lib/lottery.js';
 import { embed } from './discord/builders.js';
 
 /** 定期処理の一覧。増えたらここに足す。 */
-export const STEPS = [sweepExpiredMatches, sweepExpiredChinchiro, sweepExpiredDuels, sweepPolls, postDueAnnouncements];
+export const STEPS = [
+  sweepExpiredMatches,
+  sweepExpiredChinchiro,
+  sweepExpiredDuels,
+  sweepPolls,
+  postDueAnnouncements,
+  drawLotteries,
+];
 
 export async function runScheduled(ctx) {
   for (const step of STEPS) {
@@ -158,6 +173,65 @@ export async function postDueAnnouncements(ctx) {
     }
   }
   if (due.length > 0) console.log(`${due.length} 件の発表を処理しました`);
+}
+
+/** 毎週日曜の夜、宝くじを抽選して発表する。 */
+export async function drawLotteries(ctx, now = new Date()) {
+  if (!isDrawTime(ctx.calendar, now)) return;
+
+  const drawKey = dateKey(ctx.calendar, now);
+  for (const lottery of await activeLotteries(ctx.db)) {
+    try {
+      const before = await poolOf(ctx.db, lottery.guild_id, drawKey);
+      const result = await drawLottery(ctx.db, lottery, drawKey);
+      if (!result) continue; // すでに引いてある
+
+      const settings = await ctx.settings(lottery.guild_id);
+      const em = await ctx.emoji(lottery.guild_id);
+      await ctx.rest.createMessage(lottery.channel_id, {
+        content: result.winnerId ? `<@${result.winnerId}>` : '',
+        embeds: [lotteryEmbed(result, before, settings, em)],
+        allowed_mentions: { users: result.winnerId ? [result.winnerId] : [] },
+      });
+    } catch (error) {
+      console.error(`宝くじの抽選に失敗 (${lottery.guild_id}):`, error);
+    }
+  }
+}
+
+function lotteryEmbed(result, before, settings, em) {
+  const number = formatNumber(result.number);
+  if (result.winnerId) {
+    return embed({
+      color: 0xf1c40f,
+      title: `${em.lottery} 宝くじ 当選！`,
+      description:
+        `# ${number}\n\n` +
+        `🎉 **<@${result.winnerId}> が当てました！**\n` +
+        `${settings.currency_emoji} **${result.prize.toLocaleString('ja-JP')}** ${settings.currency_name} を総取りです。`,
+      fields: [
+        { name: '今回の売上', value: `${result.pool.toLocaleString('ja-JP')}（${result.tickets}枚）`, inline: true },
+        { name: '持ち越し分', value: `${result.carryover.toLocaleString('ja-JP')}`, inline: true },
+      ],
+      footer: { text: `次回は来週の日曜 ${DRAW_HOUR}時` },
+    });
+  }
+
+  const nextPot = result.carryover + result.pool;
+  return embed({
+    color: 0x16a085,
+    title: `${em.lottery} 宝くじ 抽選結果`,
+    description:
+      `# ${number}\n\n` +
+      (result.tickets > 0
+        ? '当たった人はいませんでした。売上はまるごと**来週に持ち越し**です。'
+        : '今回は1枚も売れませんでした。'),
+    fields: [
+      { name: '今回の売上', value: `${result.pool.toLocaleString('ja-JP')}（${result.tickets}枚）`, inline: true },
+      { name: '来週の賞金', value: `**${nextPot.toLocaleString('ja-JP')}** から`, inline: true },
+    ],
+    footer: { text: `次回は来週の日曜 ${DRAW_HOUR}時` },
+  });
 }
 
 function emptyAnnouncementEmbed(announcement) {

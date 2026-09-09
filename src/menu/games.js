@@ -49,6 +49,7 @@ export async function open(ix, _args, ctx, notice = null) {
             { name: `${em.roulette} ロシアンルーレット`, value: '1対1。引くほど当たる確率が上がる', inline: true },
             { name: `${em.charge} チャージ＆シュート`, value: '1対1。ためて撃つ読み合い', inline: true },
             { name: `${em.mines} 地雷＆陣取り`, value: '1対1。3×3のマスを取り合う', inline: true },
+            { name: `${em.lottery} 宝くじ`, value: '毎週日曜に抽選。当たれば持ち越しごと総取り', inline: true },
           ],
         }),
         notice,
@@ -62,6 +63,7 @@ export async function open(ix, _args, ctx, notice = null) {
       ),
       row(
         button(id('doors', 'open'), '運命の扉', { emoji: em.doors, style: ButtonStyle.PRIMARY }),
+        button(id('lot', 'open'), '宝くじ', { emoji: em.lottery, style: ButtonStyle.PRIMARY }),
         button(id('poll', 'open'), '予想大会', { emoji: em.poll, style: ButtonStyle.SUCCESS }),
       ),
       row(

@@ -34,6 +34,14 @@ import {
   resetEmoji,
   setEmoji,
 } from '../lib/emoji.js';
+import {
+  DRAW_HOUR as LOTTERY_DRAW_HOUR,
+  drawKeyFor,
+  getLottery,
+  poolOf,
+  setChannel as setLotteryChannel,
+  setEnabled as setLotteryEnabled,
+} from '../lib/lottery.js';
 import { METRICS, rankingTitle } from '../lib/ranking.js';
 import { ButtonStyle } from '../discord/constants.js';
 import {
@@ -95,6 +103,7 @@ export async function open(ix, _args, ctx, notice = null) {
       ),
       row(
         button(id('admin', 'emoji'), '絵文字の設定', { emoji: '😀' }),
+        button(id('admin', 'lot'), '宝くじ', { emoji: '🎫' }),
         backButton(),
       ),
     ],
@@ -1102,8 +1111,69 @@ export async function emojireset(ix, _args, ctx) {
   return emoji(ix, [], ctx, removed > 0 ? `${removed} 件を既定に戻しました` : 'もともと既定のままです');
 }
 
+/* ------------------------------------------------------------------ 宝くじ */
+
+export async function lot(ix, _args, ctx, notice = null) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const settings = await ctx.settings(ix.guildId);
+  const lottery = await getLottery(ctx.db, ix.guildId);
+  const drawKey = drawKeyFor(ctx.calendar);
+  const { tickets, pool } = await poolOf(ctx.db, ix.guildId, drawKey);
+
+  return show(ix, {
+    embeds: [
+      withNotice(
+        embed({
+          color: 0x16a085,
+          title: '🎫 宝くじの設定',
+          description:
+            `毎週日曜の **${LOTTERY_DRAW_HOUR}時** に自動で抽選します。\n` +
+            '**発表するチャンネルを決めるまで抽選は行われません**（買うことはできます）。',
+          fields: [
+            { name: '発表チャンネル', value: lottery.channel_id ? `<#${lottery.channel_id}>` : '未設定', inline: true },
+            { name: '状態', value: lottery.enabled ? '🟢 有効' : '⚪ 停止中', inline: true },
+            { name: '持ち越し', value: `${lottery.carryover.toLocaleString('ja-JP')}`, inline: true },
+            { name: '今回の売上', value: `${pool.toLocaleString('ja-JP')}（${tickets}枚）`, inline: true },
+            { name: '次の抽選日', value: drawKey, inline: true },
+            { name: '最後に引いた回', value: lottery.last_draw_key ?? 'まだ', inline: true },
+          ],
+        }),
+        notice,
+      ),
+    ],
+    components: [
+      channelSelect(id('admin', 'lotch'), '発表するチャンネルを選ぶ'),
+      row(
+        button(id('admin', 'lottoggle'), lottery.enabled ? '停止する' : '再開する', {
+          emoji: lottery.enabled ? '⏸️' : '▶️',
+          style: lottery.enabled ? ButtonStyle.SECONDARY : ButtonStyle.SUCCESS,
+        }),
+        backButton('admin'),
+        homeButton(),
+      ),
+    ],
+  });
+}
+
+export async function lotch(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const channelId = ix.values[0];
+  await setLotteryChannel(ctx.db, ix.guildId, channelId);
+  return lot(ix, [], ctx, `<#${channelId}> で発表します`);
+}
+
+export async function lottoggle(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const lottery = await getLottery(ctx.db, ix.guildId);
+  const updated = await setLotteryEnabled(ctx.db, ix.guildId, !lottery.enabled);
+  return lot(ix, [], ctx, updated.enabled ? '再開しました' : '停止しました');
+}
+
 export const actions = {
   open,
+  lot,
+  lotch,
+  lottoggle,
   emoji,
   emojipick,
   emojisave,

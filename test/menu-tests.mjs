@@ -1039,6 +1039,76 @@ await test('残高が足りなければ挑戦できない', async () => {
   assert.match(firstEmbed(payload).description, /残高|上限/);
 });
 
+section('[宝くじ]');
+
+const lotteryLib = await import(src('lib/lottery.js'));
+
+await test('番号を買うと引き落とされ、同じ番号は買えない', async () => {
+  await eco.setBalance(db, GUILD, ME, 1000, 'test');
+  await eco.setBalance(db, GUILD, OTHER, 1000, 'test');
+
+  const sentBefore = ctx.sent.length;
+  const bought = await press('m:lot:save', { type: 5, fields: { number: '777' } });
+  assert.equal(await eco.getBalance(db, GUILD, ME), 900);
+  assert.match(screenText(bought), /777/);
+  assert.equal(ctx.sent.length, sentBefore + 1, 'チャンネルにも知らせる');
+
+  const taken = await press('m:lot:save', { type: 5, userId: OTHER, fields: { number: '７７７' } });
+  assert.match(screenText(taken), /もう誰かが買っています/);
+  assert.equal(await eco.getBalance(db, GUILD, OTHER), 1000, '買えなければ引かれない');
+});
+
+await test('おかしな番号は弾かれる', async () => {
+  const before = await eco.getBalance(db, GUILD, ME);
+  const payload = await press('m:lot:save', { type: 5, fields: { number: 'あああ' } });
+  assert.match(screenText(payload), /000〜999/);
+  assert.equal(await eco.getBalance(db, GUILD, ME), before);
+});
+
+await test('おまかせで買うと空いている番号が当たる', async () => {
+  const drawKey = lotteryLib.drawKeyFor(ctx.calendar);
+  const before = (await lotteryLib.myTickets(db, GUILD, drawKey, OTHER)).length;
+  await press('m:lot:lucky', { userId: OTHER });
+  const after = await lotteryLib.myTickets(db, GUILD, drawKey, OTHER);
+  assert.equal(after.length, before + 1);
+  assert.ok(after.every((row) => row.number >= 0 && row.number <= 999));
+});
+
+await test('10枚買うとボタンが押せなくなる', async () => {
+  await eco.setBalance(db, GUILD, ME, 5000, 'test');
+  const drawKey = lotteryLib.drawKeyFor(ctx.calendar);
+  for (let number = 300; (await lotteryLib.myTickets(db, GUILD, drawKey, ME)).length < 10; number++) {
+    await lotteryLib.buyTicket(db, GUILD, drawKey, ME, number);
+  }
+
+  const payload = await press('m:lot:open');
+  const buy = payload.data.components[0].components.find((c) => c.custom_id === 'm:lot:buy');
+  assert.equal(buy.disabled, true);
+
+  const over = await press('m:lot:save', { type: 5, fields: { number: '888' } });
+  assert.match(screenText(over), /10 枚まで/);
+});
+
+await test('管理者が発表チャンネルを決めると抽選が動く', async () => {
+  const before = await press('m:lot:open');
+  assert.match(firstEmbed(before).description, /まだ発表チャンネルが設定されていない/);
+
+  const denied = await press('m:admin:lotch', { admin: false, values: ['chan-x'] });
+  assert.match(screenText(denied), /権限/);
+
+  await press('m:admin:lotch', { admin: true, values: ['chan-x'] });
+  const after = await press('m:lot:open');
+  assert.doesNotMatch(firstEmbed(after).description, /まだ発表チャンネルが設定されていない/);
+
+  const admin = await press('m:admin:lot', { admin: true });
+  assert.match(screenText(admin), /chan-x/);
+  assertAllButtonsWork(admin, '宝くじの設定');
+
+  await press('m:admin:lottoggle', { admin: true });
+  assert.equal((await lotteryLib.getLottery(db, GUILD)).enabled, 0, '停止できる');
+  await press('m:admin:lottoggle', { admin: true });
+});
+
 section('[ショップ]');
 
 await test('一覧から詳細を開ける', async () => {
