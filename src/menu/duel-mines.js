@@ -19,6 +19,7 @@ import { coins } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
+import { EMOJI as em } from '../lib/emoji.js';
 
 export const key = 'mine';
 export const title = '地雷＆陣取り';
@@ -43,7 +44,7 @@ const RULES = [
   '9マス埋まった時点で、**多く取ったほうの勝ち**。',
 ].join('\n');
 
-export async function start(ctx, { duel, settings, em }) {
+export async function start(ctx, { duel, settings }) {
   const state = {
     phase: 'place',
     board: emptyBoard(),
@@ -53,7 +54,7 @@ export async function start(ctx, { duel, settings, em }) {
   };
   const started = await mutate(ctx.db, duel.id, () => ({ state }));
   if (!started.ok) return { content: '', embeds: [embed({ description: '開始できませんでした。' })], components: [] };
-  return board(started.duel, state, settings, em, '地雷を埋めるところから始めます。');
+  return board(started.duel, state, settings, '地雷を埋めるところから始めます。');
 }
 
 export async function handle(ix, ctx, { duel, role, action, args }) {
@@ -61,16 +62,15 @@ export async function handle(ix, ctx, { duel, role, action, args }) {
   if (action !== 'cell' || !Number.isInteger(cell)) return reply({ content: '不明な操作です。' });
 
   const settings = await ctx.settings(duel.guild_id);
-  const em = await ctx.emoji(duel.guild_id);
   const state = JSON.parse(duel.state);
 
-  if (state.phase === 'place') return handlePlace(ix, ctx, duel, role, cell, settings, em);
-  return handleClaim(ix, ctx, duel, role, cell, settings, em);
+  if (state.phase === 'place') return handlePlace(ix, ctx, duel, role, cell, settings);
+  return handleClaim(ix, ctx, duel, role, cell, settings);
 }
 
 /* ------------------------------------------------------------------ 地雷を埋める */
 
-async function handlePlace(ix, ctx, duel, role, cell, settings, em) {
+async function handlePlace(ix, ctx, duel, role, cell, settings) {
   const placed = await mutate(ctx.db, duel.id, ({ state }) => {
     if (state.phase !== 'place') return { reject: 'phase' };
     const result = placeMine(state.mines[role], cell);
@@ -104,7 +104,7 @@ async function handlePlace(ix, ctx, duel, role, cell, settings, em) {
 
   if (!placed.extra.ready) {
     // 相手に見えないよう、埋めた場所は本人にだけ知らせる
-    ctx.waitUntil(refreshBoard(ctx, placed.duel, placed.state, settings, em));
+    ctx.waitUntil(refreshBoard(ctx, placed.duel, placed.state, settings));
     return reply({
       content:
         `${NUMBERS[cell]} に地雷を埋めました（${placed.extra.count}/${MINES_PER_PLAYER}）。` +
@@ -114,22 +114,22 @@ async function handlePlace(ix, ctx, duel, role, cell, settings, em) {
 
   const firstId = userIdOf(duel, placed.state.first);
   ctx.waitUntil(
-    refreshBoard(ctx, placed.duel, placed.state, settings, em, `地雷が出そろいました。先攻は <@${firstId}> です。`),
+    refreshBoard(ctx, placed.duel, placed.state, settings, `地雷が出そろいました。先攻は <@${firstId}> です。`),
   );
   return reply({ content: `${NUMBERS[cell]} に地雷を埋めました。勝負開始です！` });
 }
 
 /** 公開メッセージのほうを、返事とは別に書き換える。 */
-async function refreshBoard(ctx, duel, state, settings, em, headline = null) {
+async function refreshBoard(ctx, duel, state, settings, headline = null) {
   if (!duel.message_id) return;
   await ctx.rest
-    .editMessage(duel.channel_id, duel.message_id, board(duel, state, settings, em, headline))
+    .editMessage(duel.channel_id, duel.message_id, board(duel, state, settings, headline))
     .catch((error) => console.error('地雷＆陣取りの盤面更新に失敗:', error));
 }
 
 /* ------------------------------------------------------------------ マスを取る */
 
-async function handleClaim(ix, ctx, duel, role, cell, settings, em) {
+async function handleClaim(ix, ctx, duel, role, cell, settings) {
   const taken = await mutate(ctx.db, duel.id, ({ state }) => {
     if (state.phase !== 'claim') return { reject: 'phase' };
     if (state.turn !== role) return { reject: 'turn' };
@@ -167,7 +167,7 @@ async function handleClaim(ix, ctx, duel, role, cell, settings, em) {
     : `<@${ix.userId}> が ${NUMBERS[cell]} を取りました。`;
 
   if (!over) {
-    return update(board(taken.duel, taken.state, settings, em, headline));
+    return update(board(taken.duel, taken.state, settings, headline));
   }
 
   const winner = leader(taken.state.board);
@@ -175,7 +175,7 @@ async function handleClaim(ix, ctx, duel, role, cell, settings, em) {
     return reply({ content: 'この勝負はもう終わっています。' });
   }
   const { pot } = await settleDuel(ctx.db, taken.duel, winner);
-  return update(resultPayload(duel, taken.state, settings, em, winner, pot, headline));
+  return update(resultPayload(duel, taken.state, settings, winner, pot, headline));
 }
 
 /* ------------------------------------------------------------------ 表示 */
@@ -201,7 +201,7 @@ function grid(state, { reveal = false } = {}) {
   return rows.join('\n');
 }
 
-export function board(duel, state, settings, em, headline = null) {
+export function board(duel, state, settings, headline = null) {
   const placing = state.phase === 'place';
   const waiting = placing
     ? [duel.challenger_id, duel.opponent_id].filter((_, index) => {
@@ -277,7 +277,7 @@ function cellRows(duel, state) {
   return rows;
 }
 
-function resultPayload(duel, state, settings, em, winner, pot, headline) {
+function resultPayload(duel, state, settings, winner, pot, headline) {
   const winnerId = userIdOf(duel, winner);
   return {
     content: '',

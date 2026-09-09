@@ -23,12 +23,12 @@ import {
   show,
   withNotice,
 } from './common.js';
+import { EMOJI as em } from '../lib/emoji.js';
 
 /* ------------------------------------------------------------------ ゲーム選択 */
 
 export async function open(ix, _args, ctx, notice = null) {
   const settings = await ctx.settings(ix.guildId);
-  const em = await ctx.emoji(ix.guildId);
   const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
 
   return show(ix, {
@@ -568,7 +568,6 @@ function duelScreens(gameKey, { screen, lead }) {
   const rules = findGame(gameKey);
 
   async function open(ix, _args, ctx, notice = null) {
-    const em = await ctx.emoji(ix.guildId);
     return show(ix, {
       embeds: [
         withNotice(
@@ -576,7 +575,7 @@ function duelScreens(gameKey, { screen, lead }) {
             color: rules.color,
             title: `${em[rules.emojiSlot]} ${rules.title}`,
             description: `${lead}\n\n対戦したい相手を選んでください。相手が承諾すると勝負開始です。`,
-            fields: rules.inviteFields ? rules.inviteFields({ em }) : [],
+            fields: rules.inviteFields ? rules.inviteFields() : [],
           }),
           notice,
         ),
@@ -594,7 +593,6 @@ function duelScreens(gameKey, { screen, lead }) {
 
   async function betScreen(ix, ctx, opponentId, notice = null) {
     const settings = await ctx.settings(ix.guildId);
-    const em = await ctx.emoji(ix.guildId);
     const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
     const rows = amountRows([screen, 'go', opponentId], balance, {
       maxBet: settings.max_bet,

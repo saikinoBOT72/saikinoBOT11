@@ -8,6 +8,7 @@ import { coins } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
+import { EMOJI as em } from '../lib/emoji.js';
 
 export const key = 'cs';
 export const title = 'チャージ＆シュート';
@@ -29,7 +30,7 @@ const RULES = [
   '同じ手どうしは相殺。ビッグはシュートも押し切ります。',
 ].join('\n');
 
-export async function start(ctx, { duel, settings, em }) {
+export async function start(ctx, { duel, settings }) {
   const state = {
     energy: { challenger: 0, opponent: 0 },
     choice: { challenger: null, opponent: null },
@@ -38,7 +39,7 @@ export async function start(ctx, { duel, settings, em }) {
   };
   const started = await mutate(ctx.db, duel.id, () => ({ state }));
   if (!started.ok) return { content: '', embeds: [embed({ description: '開始できませんでした。' })], components: [] };
-  return board(started.duel, state, settings, em, '勝負開始！ 二人とも手を選んでください。');
+  return board(started.duel, state, settings, '勝負開始！ 二人とも手を選んでください。');
 }
 
 export async function handle(ix, ctx, { duel, role, action, args }) {
@@ -47,7 +48,6 @@ export async function handle(ix, ctx, { duel, role, action, args }) {
   if (!MOVES[move]) return reply({ content: '不明な手です。' });
 
   const settings = await ctx.settings(duel.guild_id);
-  const em = await ctx.emoji(duel.guild_id);
 
   // 自分の手を入れる。相手と同時に押されてもやり直して必ず入る
   const chosen = await mutate(ctx.db, duel.id, ({ state }) => {
@@ -74,11 +74,11 @@ export async function handle(ix, ctx, { duel, role, action, args }) {
     });
   }
 
-  return resolveRound(ix, ctx, chosen.duel, state, settings, em);
+  return resolveRound(ix, ctx, chosen.duel, state, settings);
 }
 
 /** 二人そろったので、1ラウンド進める。 */
-async function resolveRound(ix, ctx, duel, state, settings, em) {
+async function resolveRound(ix, ctx, duel, state, settings) {
   const round = playRound(state.energy, state.choice);
   const entry = {
     round: state.round,
@@ -92,8 +92,8 @@ async function resolveRound(ix, ctx, duel, state, settings, em) {
     const next = { ...state, energy: round.energy, choice: { challenger: null, opponent: null }, log };
     if (!(await finishDuel(ctx.db, duel, next))) return reply({ content: 'この勝負はもう終わっています。' });
     const { pot } = await settleDuel(ctx.db, duel, round.winner);
-    ctx.animate(ix, [{ after: 1000, payload: resultPayload(duel, entry, settings, em, round.winner, pot) }]);
-    return update(revealFrame(duel, entry, em));
+    ctx.animate(ix, [{ after: 1000, payload: resultPayload(duel, entry, settings, round.winner, pot) }]);
+    return update(revealFrame(duel, entry));
   }
 
   const drawn = state.round >= MAX_ROUNDS;
@@ -108,19 +108,19 @@ async function resolveRound(ix, ctx, duel, state, settings, em) {
   if (drawn) {
     if (!(await finishDuel(ctx.db, duel, next))) return reply({ content: 'この勝負はもう終わっています。' });
     await refundDuel(ctx.db, duel);
-    ctx.animate(ix, [{ after: 1000, payload: drawPayload(duel, settings, em) }]);
-    return update(revealFrame(duel, entry, em));
+    ctx.animate(ix, [{ after: 1000, payload: drawPayload(duel, settings) }]);
+    return update(revealFrame(duel, entry));
   }
 
   const moved = await mutate(ctx.db, duel.id, () => ({ state: next }));
   if (!moved.ok) return reply({ content: 'この勝負はもう終わっています。' });
 
-  ctx.animate(ix, [{ after: 1000, payload: board(moved.duel, next, settings, em, `**${round.reason}**`) }]);
-  return update(revealFrame(duel, entry, em));
+  ctx.animate(ix, [{ after: 1000, payload: board(moved.duel, next, settings, `**${round.reason}**`) }]);
+  return update(revealFrame(duel, entry));
 }
 
 /** 出した手を見せる一瞬。 */
-function revealFrame(duel, entry, em) {
+function revealFrame(duel, entry) {
   return {
     content: '',
     embeds: [
@@ -137,7 +137,7 @@ function revealFrame(duel, entry, em) {
   };
 }
 
-export function board(duel, state, settings, em, headline = null) {
+export function board(duel, state, settings, headline = null) {
   const waiting = [];
   if (!state.choice.challenger) waiting.push(duel.challenger_id);
   if (!state.choice.opponent) waiting.push(duel.opponent_id);
@@ -196,7 +196,7 @@ function moveRows(duel) {
   ];
 }
 
-function resultPayload(duel, entry, settings, em, winner, pot) {
+function resultPayload(duel, entry, settings, winner, pot) {
   const winnerId = userIdOf(duel, winner);
   const loserId = userIdOf(duel, winner === 'challenger' ? 'opponent' : 'challenger');
   return {
@@ -217,7 +217,7 @@ function resultPayload(duel, entry, settings, em, winner, pot) {
   };
 }
 
-function drawPayload(duel, settings, em) {
+function drawPayload(duel, settings) {
   return {
     content: '',
     embeds: [

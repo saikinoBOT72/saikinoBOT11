@@ -35,11 +35,6 @@ export function createTestContext() {
         return {};
       },
     },
-    async emoji(guildId) {
-      const { loadEmoji } = await import(src('lib/emoji.js'));
-      return loadEmoji(db, guildId);
-    },
-    forgetEmoji() {},
     async settings(guildId) {
       if (!settingsCache.has(guildId)) {
         const { getSettings } = await import(src('lib/economy.js'));

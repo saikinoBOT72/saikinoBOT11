@@ -22,6 +22,7 @@ import {
   show,
   withNotice,
 } from './common.js';
+import { EMOJI as em } from '../lib/emoji.js';
 
 /* ------------------------------------------------------------------ 進行中の勝負 */
 
@@ -52,7 +53,6 @@ async function clearGame(ctx, ix) {
 
 export async function open(ix, _args, ctx, notice = null) {
   const settings = await ctx.settings(ix.guildId);
-  const em = await ctx.emoji(ix.guildId);
   const running = await getGame(ctx, ix);
   if (running) return table(ix, ctx, running, '前回の続きです。');
 
@@ -122,7 +122,6 @@ async function start(ix, ctx, betAmount) {
 /** 扉の前。次の扉を選ぶ画面。 */
 async function table(ix, ctx, game, notice = null) {
   const settings = await ctx.settings(ix.guildId);
-  const em = await ctx.emoji(ix.guildId);
   const current = payout(game.bet, game.multiplier);
 
   return show(ix, {
@@ -164,7 +163,6 @@ export async function pick(ix, [choice], ctx) {
   if (!DOORS[choice]) return open(ix, [], ctx, '不明な扉です。');
 
   const settings = await ctx.settings(ix.guildId);
-  const em = await ctx.emoji(ix.guildId);
   const winning = openDoor();
   const hit = winning === choice;
 
@@ -249,7 +247,6 @@ export async function pick(ix, [choice], ctx) {
 /** 当たったあとの扉。次を選べる状態を、演出の最後のコマとして作る。 */
 async function openedFrame(ix, ctx, choice, game) {
   const settings = await ctx.settings(ix.guildId);
-  const em = await ctx.emoji(ix.guildId);
   const current = payout(game.bet, game.multiplier);
 
   return {
@@ -283,7 +280,6 @@ export async function stop(ix, _args, ctx) {
   if (game.steps === 0) return table(ix, ctx, game, '1枚も開けていないので、まだ持ち帰れません。');
 
   const settings = await ctx.settings(ix.guildId);
-  const em = await ctx.emoji(ix.guildId);
   const won = payout(game.bet, game.multiplier);
   await clearGame(ctx, ix);
   await deposit(ctx.db, ix.guildId, ix.userId, won, 'doors:win', `×${game.multiplier}`);

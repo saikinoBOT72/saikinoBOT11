@@ -30,6 +30,7 @@ import {
   poolOf,
 } from './lib/lottery.js';
 import { embed } from './discord/builders.js';
+import { EMOJI as em } from './lib/emoji.js';
 
 /** 定期処理の一覧。増えたらここに足す。 */
 export const STEPS = [
@@ -187,7 +188,6 @@ export async function drawLotteries(ctx, now = new Date()) {
       if (!result) continue; // すでに引いてある
 
       const settings = await ctx.settings(lottery.guild_id);
-      const em = await ctx.emoji(lottery.guild_id);
       await ctx.rest.createMessage(lottery.channel_id, {
         content: result.winnerId ? `<@${result.winnerId}>` : '',
         embeds: [lotteryEmbed(result, before, settings, em)],

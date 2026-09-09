@@ -20,6 +20,7 @@ import { coins } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
+import { EMOJI as em } from '../lib/emoji.js';
 
 export const key = 'doors';
 export const title = '運命の扉';
@@ -40,26 +41,25 @@ const RULES = [
   '**二人ともひとりじめを選ぶと、二人とも0**。',
 ].join('\n');
 
-export async function start(ctx, { duel, settings, em }) {
+export async function start(ctx, { duel, settings }) {
   const state = { phase: 'doors', steps: 0, multiplier: 1, log: [], choice: { challenger: null, opponent: null } };
   const started = await mutate(ctx.db, duel.id, () => ({ state }));
   if (!started.ok) return { content: '', embeds: [embed({ description: '開始できませんでした。' })], components: [] };
-  return board(started.duel, state, settings, em, '最初の扉です。どちらが押してもかまいません。');
+  return board(started.duel, state, settings, '最初の扉です。どちらが押してもかまいません。');
 }
 
 export async function handle(ix, ctx, { duel, role, action, args }) {
   const settings = await ctx.settings(duel.guild_id);
-  const em = await ctx.emoji(duel.guild_id);
 
-  if (action === 'door') return handleDoor(ix, ctx, duel, args[0], settings, em);
-  if (action === 'take') return handleTake(ix, ctx, duel, settings, em);
-  if (action === 'share') return handleShare(ix, ctx, duel, role, args[0], settings, em);
+  if (action === 'door') return handleDoor(ix, ctx, duel, args[0], settings);
+  if (action === 'take') return handleTake(ix, ctx, duel, settings);
+  if (action === 'share') return handleShare(ix, ctx, duel, role, args[0], settings);
   return reply({ content: '不明な操作です。' });
 }
 
 /* ------------------------------------------------------------------ 扉を開ける */
 
-async function handleDoor(ix, ctx, duel, choice, settings, em) {
+async function handleDoor(ix, ctx, duel, choice, settings) {
   if (!DOORS[choice]) return reply({ content: '不明な扉です。' });
 
   const winning = openDoor();
@@ -93,13 +93,13 @@ async function handleDoor(ix, ctx, duel, choice, settings, em) {
     return reply({ content: messages[opened.reason] ?? '開けられませんでした。' });
   }
 
-  const frames = [{ after: 900, payload: openingFrame(duel, em, ix.userId, choice) }];
+  const frames = [{ after: 900, payload: openingFrame(duel, ix.userId, choice) }];
 
   if (!hit) {
     // 掛け金は預かったまま没収（誰にも返さない）
-    frames.push({ after: 1000, payload: lostPayload(duel, opened.state, settings, em) });
+    frames.push({ after: 1000, payload: lostPayload(duel, opened.state, settings) });
     ctx.animate(ix, frames);
-    return update(openingFrame(duel, em, ix.userId, choice));
+    return update(openingFrame(duel, ix.userId, choice));
   }
 
   const state = opened.state;
@@ -107,16 +107,16 @@ async function handleDoor(ix, ctx, duel, choice, settings, em) {
     after: 1000,
     payload:
       state.phase === 'share'
-        ? sharePayload(opened.duel, state, settings, em, `🎉 **${state.steps}枚目の扉まで到達！** ここで打ち止めです。`)
-        : board(opened.duel, state, settings, em, `${DOORS[choice].emoji} **当たり！** 扉が開きました。`),
+        ? sharePayload(opened.duel, state, settings, `🎉 **${state.steps}枚目の扉まで到達！** ここで打ち止めです。`)
+        : board(opened.duel, state, settings, `${DOORS[choice].emoji} **当たり！** 扉が開きました。`),
   });
   ctx.animate(ix, frames);
-  return update(openingFrame(duel, em, ix.userId, choice));
+  return update(openingFrame(duel, ix.userId, choice));
 }
 
 /* ------------------------------------------------------------------ 持ち帰る */
 
-async function handleTake(ix, ctx, duel, settings, em) {
+async function handleTake(ix, ctx, duel, settings) {
   const taken = await mutate(ctx.db, duel.id, ({ state }) => {
     if (state.phase !== 'doors') return { reject: 'phase' };
     if (state.steps === 0) return { reject: 'empty' };
@@ -132,12 +132,12 @@ async function handleTake(ix, ctx, duel, settings, em) {
     return reply({ content: messages[taken.reason] ?? '持ち帰れませんでした。' });
   }
 
-  return update(sharePayload(taken.duel, taken.state, settings, em, `<@${ix.userId}> がここで持ち帰ることにしました。`));
+  return update(sharePayload(taken.duel, taken.state, settings, `<@${ix.userId}> がここで持ち帰ることにしました。`));
 }
 
 /* ------------------------------------------------------------------ 山分けか、ひとりじめか */
 
-async function handleShare(ix, ctx, duel, role, choice, settings, em) {
+async function handleShare(ix, ctx, duel, role, choice, settings) {
   if (!SHARE[choice]) return reply({ content: '不明な選択です。' });
 
   const chosen = await mutate(ctx.db, duel.id, ({ state }) => {
@@ -158,7 +158,7 @@ async function handleShare(ix, ctx, duel, role, choice, settings, em) {
 
   const state = chosen.state;
   if (!state.choice.challenger || !state.choice.opponent) {
-    ctx.waitUntil(refreshBoard(ctx, chosen.duel, state, settings, em));
+    ctx.waitUntil(refreshBoard(ctx, chosen.duel, state, settings));
     return reply({ content: `${SHARE[choice].emoji} **${SHARE[choice].label}** を選びました。相手を待っています…` });
   }
 
@@ -167,19 +167,19 @@ async function handleShare(ix, ctx, duel, role, choice, settings, em) {
   if (!(await finishDuel(ctx.db, chosen.duel, state))) return reply({ content: 'この勝負はもう終わっています。' });
   await payDuel(ctx.db, duel, { challenger: share.challenger, opponent: share.opponent }, 'doors:win');
 
-  return update(resultPayload(duel, state, share, prize, settings, em));
+  return update(resultPayload(duel, state, share, prize, settings));
 }
 
-async function refreshBoard(ctx, duel, state, settings, em) {
+async function refreshBoard(ctx, duel, state, settings) {
   if (!duel.message_id) return;
   await ctx.rest
-    .editMessage(duel.channel_id, duel.message_id, sharePayload(duel, state, settings, em))
+    .editMessage(duel.channel_id, duel.message_id, sharePayload(duel, state, settings))
     .catch((error) => console.error('運命の扉の表示更新に失敗:', error));
 }
 
 /* ------------------------------------------------------------------ 表示 */
 
-function openingFrame(duel, em, userId, choice) {
+function openingFrame(duel, userId, choice) {
   return {
     content: '',
     embeds: [
@@ -193,7 +193,7 @@ function openingFrame(duel, em, userId, choice) {
   };
 }
 
-export function board(duel, state, settings, em, headline = null) {
+export function board(duel, state, settings, headline = null) {
   const current = payout(duel.escrow * 2, state.multiplier);
   const history = state.log.map((entry) => DOORS[entry.choice].emoji).join('');
 
@@ -231,7 +231,7 @@ export function board(duel, state, settings, em, headline = null) {
   };
 }
 
-function sharePayload(duel, state, settings, em, headline = null) {
+function sharePayload(duel, state, settings, headline = null) {
   const prize = payout(duel.escrow * 2, state.multiplier);
   const waiting = [];
   if (!state.choice.challenger) waiting.push(duel.challenger_id);
@@ -276,7 +276,7 @@ function shareStatus(userId, choice) {
   return `<@${userId}>\n${choice ? '✅ 選びました' : '⏳ 考え中'}`;
 }
 
-function lostPayload(duel, state, settings, em) {
+function lostPayload(duel, state, settings) {
   const { choice, winning } = state.opened;
   return {
     content: '',
@@ -294,7 +294,7 @@ function lostPayload(duel, state, settings, em) {
   };
 }
 
-function resultPayload(duel, state, share, prize, settings, em) {
+function resultPayload(duel, state, share, prize, settings) {
   const lines = [
     `<@${duel.challenger_id}>　${SHARE[state.choice.challenger].emoji} ${SHARE[state.choice.challenger].label}`,
     `<@${duel.opponent_id}>　${SHARE[state.choice.opponent].emoji} ${SHARE[state.choice.opponent].label}`,

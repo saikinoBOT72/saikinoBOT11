@@ -13,7 +13,6 @@ import {
   stepMultiplier,
 } from '../lib/highlow.js';
 import { modal, textInput } from '../discord/builders.js';
-import { cardSuits } from '../lib/emoji.js';
 import { ButtonStyle } from '../discord/constants.js';
 import {
   amountRows,
@@ -29,6 +28,7 @@ import {
   show,
   withNotice,
 } from './common.js';
+import { CARD_SUITS as suits, EMOJI } from '../lib/emoji.js';
 
 /* ------------------------------------------------------------------ 進行中の勝負 */
 
@@ -137,7 +137,6 @@ function toRow(game) {
 /** 場の状態。次の予想を選ぶ画面。 */
 async function table(ix, ctx, game, notice = null) {
   const settings = await ctx.settings(ix.guildId);
-  const suits = cardSuits(await ctx.emoji(ix.guildId));
   const card = { rank: game.card_rank, suit: game.card_suit };
   const highMultiplier = stepMultiplier(card.rank, 'high');
   const lowMultiplier = stepMultiplier(card.rank, 'low');
@@ -193,8 +192,6 @@ export async function pick(ix, [choice], ctx) {
   if (!game) return open(ix, [], ctx, '進行中の勝負がありません。');
 
   const settings = await ctx.settings(ix.guildId);
-  const emoji = await ctx.emoji(ix.guildId);
-  const suits = cardSuits(emoji);
   const card = { rank: game.card_rank, suit: game.card_suit };
   if (!canChoose(card.rank, choice)) return table(ix, ctx, game, 'その予想は選べません。');
 
@@ -205,7 +202,7 @@ export async function pick(ix, [choice], ctx) {
   const flipping = embed({
     color: 0x2980b9,
     title: '🃏 ハイ&ロー',
-    description: `# ${cardLabel(card, suits)} → ${emoji.card_back}\n**${choice === 'high' ? '⬆️ HIGH' : '⬇️ LOW'}** に賭けました。めくっています…`,
+    description: `# ${cardLabel(card, suits)} → ${EMOJI.card_back}\n**${choice === 'high' ? '⬆️ HIGH' : '⬇️ LOW'}** に賭けました。めくっています…`,
   });
 
   if (result === 'draw') {
@@ -291,7 +288,6 @@ export async function pick(ix, [choice], ctx) {
 /** めくったあとの場（次の予想を選べる状態）を、演出の最終コマとして作る。 */
 async function drawFrame(ix, ctx, previous, next, game, headline) {
   const settings = await ctx.settings(ix.guildId);
-  const suits = cardSuits(await ctx.emoji(ix.guildId));
   const current = payout(game.bet, game.multiplier);
 
   return {

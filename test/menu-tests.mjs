@@ -23,7 +23,6 @@ const achLib = await import(src('lib/achievements.js'));
 const annLib = await import(src('lib/announcements.js'));
 const act = await import(src('lib/activities.js'));
 const shop = await import(src('lib/shop.js'));
-const emojiLib = await import(src('lib/emoji.js'));
 
 const runner = createRunner('[メニュー]');
 const { test, section } = runner;
@@ -1359,40 +1358,6 @@ await test('履歴が日本語のラベルで出る', async () => {
 });
 
 section('[管理メニュー]');
-
-await test('絵文字を差し替えると画面に反映される', async () => {
-  const custom = '<:dice1:123456789012345678>';
-  await press('m:admin:emojisave:dice1', { type: 5, admin: true, fields: { value: custom } });
-  assert.equal((await emojiLib.loadEmoji(db, GUILD)).dice1, custom);
-
-  const screen = await press('m:admin:emoji', { admin: true });
-  assert.match(screenText(screen), /差し替え済み/);
-
-  await press('m:admin:emojisave:slot', { type: 5, admin: true, fields: { value: '🎮' } });
-  const games = await press('m:games:open');
-  assert.match(JSON.stringify(firstEmbed(games).fields), /🎮 スロット/);
-  const buttons = games.data.components.flatMap((r) => r.components);
-  assert.deepEqual(buttons.find((b) => b.custom_id === 'm:slot:open').emoji, { name: '🎮' });
-});
-
-await test('絵文字の形がおかしいと弾かれ、空欄で既定に戻る', async () => {
-  const before = (await emojiLib.loadEmoji(db, GUILD)).dice1;
-  const bad = await press('m:admin:emojisave:dice1', { type: 5, admin: true, fields: { value: ':dice1:' } });
-  assert.match(screenText(bad), /カスタム絵文字は/);
-  assert.equal((await emojiLib.loadEmoji(db, GUILD)).dice1, before, '変わらない');
-
-  await press('m:admin:emojisave:dice1', { type: 5, admin: true, fields: { value: '' } });
-  assert.equal((await emojiLib.loadEmoji(db, GUILD)).dice1, '⚀', '既定に戻る');
-
-  await press('m:admin:emojireset', { admin: true });
-  assert.equal((await emojiLib.loadEmoji(db, GUILD)).slot, '🎰');
-});
-
-await test('絵文字の設定は管理者だけ', async () => {
-  assert.match(screenText(await press('m:admin:emoji', { admin: false })), /権限/);
-  await press('m:admin:emojisave:slot', { type: 5, admin: false, fields: { value: '🎮' } });
-  assert.equal((await emojiLib.loadEmoji(db, GUILD)).slot, '🎰', '変わらない');
-});
 
 await test('権限が無ければ管理画面を開けない', async () => {
   const payload = await press('m:admin:open', { admin: false });

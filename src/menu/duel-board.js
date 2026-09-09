@@ -27,6 +27,7 @@ import * as roulette from './duel-roulette.js';
 import * as charge from './duel-charge.js';
 import * as mines from './duel-mines.js';
 import * as doors from './duel-doors.js';
+import { EMOJI as em } from '../lib/emoji.js';
 
 /** 公開メッセージのボタンは `d:` 始まり。 */
 export const namespace = 'd';
@@ -67,7 +68,6 @@ export async function startChallenge(ctx, { game, guildId, channelId, challenger
     state: {},
   });
 
-  const em = await ctx.emoji(guildId);
   try {
     const message = await ctx.rest.createMessage(channelId, {
       content: `<@${opponentId}>`,
@@ -78,7 +78,7 @@ export async function startChallenge(ctx, { game, guildId, channelId, challenger
           description:
             `<@${challengerId}> が <@${opponentId}> に勝負を挑みました。\n` +
             `賭け金は ${coins(bet, settings)}（**勝った方が総取り**）`,
-          fields: rules.inviteFields ? rules.inviteFields({ bet, escrow, settings, em }) : [],
+          fields: rules.inviteFields ? rules.inviteFields({ bet, escrow, settings }) : [],
           footer: { text: '2分以内に応答がなければ自動でキャンセルされます' },
         }),
       ],
@@ -154,8 +154,7 @@ async function handleInvite(ix, ctx, duel, rules, action) {
 
   const started = await getDuel(ctx.db, duel.id);
   const settings = await getSettings(ctx.db, duel.guild_id);
-  const em = await ctx.emoji(duel.guild_id);
-  return update(await rules.start(ctx, { duel: started, state: stateOf(started), settings, em }));
+  return update(await rules.start(ctx, { duel: started, state: stateOf(started), settings }));
 }
 
 /** 勝負が流れたときの表示。 */
@@ -164,7 +163,7 @@ export function cancelEmbed(rules, text) {
 }
 
 /** 各ゲームから使う、決着表示の共通部分。 */
-export function resultEmbed({ rules, em, title, description, fields = [] }) {
+export function resultEmbed({ rules, title, description, fields = [] }) {
   return embed({
     color: 0xf1c40f,
     title: `${em[rules.emojiSlot]} ${title ?? `${rules.title} 結果`}`,

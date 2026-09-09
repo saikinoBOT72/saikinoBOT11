@@ -1680,6 +1680,39 @@ await test('1つの定期処理がこけても、残りは動く', async () => {
   await cron.runScheduled(cronCtx);
 });
 
+section('[絵文字]');
+
+const emojiLib = await import(src('lib/emoji.js'));
+
+await test('画面で使う絵文字がすべて埋まっている', () => {
+  for (const [slot, value] of Object.entries(emojiLib.EMOJI)) {
+    assert.equal(typeof value, 'string', `${slot} が文字列でない`);
+    assert.ok(value.length > 0, `${slot} が空`);
+    // カスタム絵文字にするなら <:名前:数字> の形であること
+    if (value.startsWith('<')) {
+      assert.match(value, /^<a?:\w{2,32}:\d{15,25}>$/, `${slot} の形がおかしい: ${value}`);
+    }
+  }
+});
+
+await test('サイコロの目は1〜6が添字1〜6に並ぶ', () => {
+  assert.equal(emojiLib.DICE_FACES.length, 7);
+  assert.equal(emojiLib.DICE_FACES[0], '');
+  assert.equal(emojiLib.DICE_FACES[1], emojiLib.EMOJI.dice1);
+  assert.equal(emojiLib.DICE_FACES[6], emojiLib.EMOJI.dice6);
+});
+
+await test('トランプのスートは山札と同じ並び', async () => {
+  const highlow = await import(src('lib/highlow.js'));
+  assert.equal(emojiLib.CARD_SUITS.length, highlow.SUITS.length);
+  // 既定のままなら中身も一致する（カスタム絵文字に差し替えたら並びだけが意味を持つ）
+  assert.equal(
+    emojiLib.CARD_SUITS[0],
+    emojiLib.EMOJI.spade,
+    'スートの並びは spade / heart / diamond / club',
+  );
+});
+
 section('[表示ヘルパー]');
 
 await test('金額表示', () => {

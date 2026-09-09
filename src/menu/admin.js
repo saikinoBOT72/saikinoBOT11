@@ -28,13 +28,6 @@ import {
   toggleAnnouncement,
 } from '../lib/announcements.js';
 import {
-  SLOTS as EMOJI_SLOTS,
-  normalizeEmoji,
-  resetAllEmoji,
-  resetEmoji,
-  setEmoji,
-} from '../lib/emoji.js';
-import {
   DRAW_HOUR as LOTTERY_DRAW_HOUR,
   drawKeyFor,
   getLottery,
@@ -102,7 +95,6 @@ export async function open(ix, _args, ctx, notice = null) {
         button(id('admin', 'cfg'), '通貨の設定', { emoji: '⚙️' }),
       ),
       row(
-        button(id('admin', 'emoji'), '絵文字の設定', { emoji: '😀' }),
         button(id('admin', 'lot'), '宝くじ', { emoji: '🎫' }),
         backButton(),
       ),
@@ -1001,116 +993,6 @@ export async function anndel(ix, [rawId], ctx) {
   return ann(ix, [], ctx, '設定を削除しました');
 }
 
-/* ------------------------------------------------------------------ 絵文字の差し替え */
-
-/** グループ順に並べたスロットの一覧。 */
-function emojiGroups() {
-  const groups = new Map();
-  for (const [slot, meta] of Object.entries(EMOJI_SLOTS)) {
-    if (!groups.has(meta.group)) groups.set(meta.group, []);
-    groups.get(meta.group).push({ slot, ...meta });
-  }
-  return groups;
-}
-
-export async function emoji(ix, _args, ctx, notice = null) {
-  if (!ix.isAdmin) return denied(ix, ctx);
-  const current = await ctx.emoji(ix.guildId);
-
-  const fields = [];
-  for (const [group, slots] of emojiGroups()) {
-    fields.push({
-      name: group,
-      value: slots
-        .map(({ slot, label, fallback }) => {
-          const changed = current[slot] !== fallback ? '　*(差し替え済み)*' : '';
-          return `${current[slot]} ${label}${changed}`;
-        })
-        .join('\n'),
-    });
-  }
-
-  return show(ix, {
-    embeds: [
-      withNotice(
-        embed({
-          color: 0x9b59b6,
-          title: '😀 絵文字の設定',
-          description:
-            'ゲームの見た目に使う絵文字を、このサーバーのカスタム絵文字に差し替えられます。\n' +
-            'サイコロの目やトランプのスートは、Unicode だと文字として細く表示されるので、' +
-            '画像を作って登録すると見栄えがよくなります。\n\n' +
-            '**入れ方**: メッセージ欄に `\\:絵文字名:` と打って送ると `<:名前:数字>` が出てくるので、それを貼り付けてください。',
-          fields,
-        }),
-        notice,
-      ),
-    ],
-    components: [
-      stringSelect(
-        id('admin', 'emojipick'),
-        '差し替える絵文字を選ぶ',
-        Object.entries(EMOJI_SLOTS)
-          .slice(0, 25)
-          .map(([slot, meta]) => ({
-            label: truncate(`${meta.group}／${meta.label}`, 100),
-            value: slot,
-            emoji: current[slot],
-            description: current[slot] === meta.fallback ? '既定のまま' : '差し替え済み',
-          })),
-      ),
-      row(
-        button(id('admin', 'emojireset'), 'すべて既定に戻す', { emoji: '↩️', style: ButtonStyle.DANGER }),
-        backButton('admin'),
-        homeButton(),
-      ),
-    ],
-  });
-}
-
-export async function emojipick(ix, _args, ctx) {
-  if (!ix.isAdmin) return denied(ix, ctx);
-  const slot = ix.values[0];
-  const meta = EMOJI_SLOTS[slot];
-  if (!meta) return emoji(ix, [], ctx, 'その絵文字は見つかりませんでした。');
-
-  return openModal(
-    modal(id('admin', 'emojisave', slot), truncate(`${meta.label} の絵文字`, 44), [
-      textInput('value', '絵文字（空欄で既定に戻す）', {
-        placeholder: `例: <:${slot}:1234567890123456789>`,
-        max: 64,
-      }),
-    ]),
-  );
-}
-
-export async function emojisave(ix, [slot], ctx) {
-  if (!ix.isAdmin) return denied(ix, ctx);
-  const meta = EMOJI_SLOTS[slot];
-  if (!meta) return emoji(ix, [], ctx, 'その絵文字は見つかりませんでした。');
-
-  const raw = readText(ix, 'value');
-  if (!raw) {
-    await resetEmoji(ctx.db, ix.guildId, slot);
-    ctx.forgetEmoji(ix.guildId);
-    return emoji(ix, [], ctx, `${meta.label} を既定（${meta.fallback}）に戻しました`);
-  }
-
-  const parsed = normalizeEmoji(raw);
-  if (!parsed.ok) return emoji(ix, [], ctx, parsed.message);
-
-  await setEmoji(ctx.db, ix.guildId, slot, parsed.value);
-  ctx.forgetEmoji(ix.guildId);
-  return emoji(ix, [], ctx, `${meta.label} を ${parsed.value} にしました`);
-}
-
-export async function emojireset(ix, _args, ctx) {
-  if (!ix.isAdmin) return denied(ix, ctx);
-  const removed = await resetAllEmoji(ctx.db, ix.guildId);
-  ctx.forgetEmoji(ix.guildId);
-  return emoji(ix, [], ctx, removed > 0 ? `${removed} 件を既定に戻しました` : 'もともと既定のままです');
-}
-
 /* ------------------------------------------------------------------ 宝くじ */
 
 export async function lot(ix, _args, ctx, notice = null) {
@@ -1174,10 +1056,6 @@ export const actions = {
   lot,
   lotch,
   lottoggle,
-  emoji,
-  emojipick,
-  emojisave,
-  emojireset,
   ann,
   annnew,
   annch,

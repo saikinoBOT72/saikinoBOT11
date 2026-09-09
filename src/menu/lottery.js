@@ -31,10 +31,10 @@ import {
   show,
   withNotice,
 } from './common.js';
+import { EMOJI as em } from '../lib/emoji.js';
 
 export async function open(ix, _args, ctx, notice = null) {
   const settings = await ctx.settings(ix.guildId);
-  const em = await ctx.emoji(ix.guildId);
   const lottery = await getLottery(ctx.db, ix.guildId);
   const drawKey = drawKeyFor(ctx.calendar);
 
@@ -151,7 +151,6 @@ async function purchase(ix, ctx, number) {
   }
 
   const settings = await ctx.settings(ix.guildId);
-  const em = await ctx.emoji(ix.guildId);
   ctx.announce(ix.channelId, {
     content: `${em.lottery} <@${ix.userId}> が宝くじを1枚買いました（${coins(TICKET_PRICE, settings)}）。`,
   });
