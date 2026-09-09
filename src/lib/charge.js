@@ -1,3 +1,5 @@
+import { EMOJI } from './emoji.js';
+
 /**
  * チャージ＆シュート。
  *
@@ -6,9 +8,9 @@
  * 体力は2。2回撃たれたら負け。
  */
 export const MOVES = {
-  charge: { label: 'ためる', emoji: '⚡', cost: -1, hint: 'エネルギーを1ためる。無防備' },
-  guard: { label: 'ガード', emoji: '🛡️', cost: 0, hint: 'シュートを防ぐ' },
-  shoot: { label: 'シュート', emoji: '🔵', cost: 1, hint: 'エネルギー1。ためている相手に当たる' },
+  charge: { label: 'ためる', emoji: EMOJI.move_charge, cost: -1, hint: 'エネルギーを1ためる。無防備' },
+  guard: { label: 'ガード', emoji: EMOJI.move_guard, cost: 0, hint: 'シュートを防ぐ' },
+  shoot: { label: 'シュート', emoji: EMOJI.move_shoot, cost: 1, hint: 'エネルギー1。ためている相手に当たる' },
 };
 
 /** 体力。これが0になったら負け。 */
@@ -72,5 +74,5 @@ export function playRound(hp, energy, moves) {
 
 /** ❤️❤️ のような体力の表示。 */
 export function hearts(value) {
-  return '❤️'.repeat(Math.max(0, value)) + '🖤'.repeat(Math.max(0, MAX_HP - value));
+  return EMOJI.hp_full.repeat(Math.max(0, value)) + EMOJI.hp_lost.repeat(Math.max(0, MAX_HP - value));
 }

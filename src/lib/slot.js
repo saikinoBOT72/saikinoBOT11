@@ -1,16 +1,18 @@
+import { EMOJI } from './emoji.js';
+
 /**
  * スロットの出目テーブル。
  * weight は各リールでの出現比率、payout3 は3つ揃い、payout2 は2つ揃いの配当倍率。
  * この設定で理論還元率(RTP)は約 91.7%、当選率は約 11.8%。
  */
 export const SLOT_SYMBOLS = [
-  { symbol: '🍒', weight: 26, payout3: 5, payout2: 0 },
-  { symbol: '🍋', weight: 22, payout3: 8, payout2: 0 },
-  { symbol: '🍇', weight: 16, payout3: 15, payout2: 0 },
-  { symbol: '🔔', weight: 11, payout3: 45, payout2: 3 },
-  { symbol: '⭐', weight: 7, payout3: 150, payout2: 8 },
-  { symbol: '7️⃣', weight: 3, payout3: 600, payout2: 15 },
-  { symbol: '💎', weight: 1, payout3: 3000, payout2: 40 },
+  { symbol: EMOJI.slot_cherry, weight: 26, payout3: 5, payout2: 0 },
+  { symbol: EMOJI.slot_lemon, weight: 22, payout3: 8, payout2: 0 },
+  { symbol: EMOJI.slot_grape, weight: 16, payout3: 15, payout2: 0 },
+  { symbol: EMOJI.slot_bell, weight: 11, payout3: 45, payout2: 3 },
+  { symbol: EMOJI.slot_star, weight: 7, payout3: 150, payout2: 8 },
+  { symbol: EMOJI.slot_seven, weight: 3, payout3: 600, payout2: 15 },
+  { symbol: EMOJI.slot_diamond, weight: 1, payout3: 3000, payout2: 40 },
 ];
 
 const TOTAL_WEIGHT = SLOT_SYMBOLS.reduce((sum, s) => sum + s.weight, 0);

@@ -2,21 +2,24 @@
  * チンチロ。サイコロ3つを振って役を competing させる1対1の勝負。
  * 役が出るまで最大3回振り、役の格で勝敗と倍率が決まる。
  */
+import { DICE_FACES, EMOJI } from './emoji.js';
+
 export const MAX_THROWS = 3;
 
 /** 勝ったときに相手からもらえる倍率の最大値。この分を先に預かる。 */
 export const MAX_MULTIPLIER = 5;
 
 const KINDS = {
-  pinzoro: { label: 'ピンゾロ', rank: 7, multiplier: 5, emoji: '🌟' },
-  zorome: { label: 'ゾロ目', rank: 6, multiplier: 3, emoji: '✨' },
-  shigoro: { label: 'シゴロ', rank: 5, multiplier: 2, emoji: '🔥' },
-  me: { label: '出目', rank: 4, multiplier: 1, emoji: '🎲' },
-  none: { label: '役なし（ションベン）', rank: 2, multiplier: 1, emoji: '💧' },
-  hifumi: { label: 'ヒフミ', rank: 1, multiplier: 1, emoji: '💀' },
+  pinzoro: { label: 'ピンゾロ', rank: 7, multiplier: 5, emoji: EMOJI.hand_pinzoro },
+  zorome: { label: 'ゾロ目', rank: 6, multiplier: 3, emoji: EMOJI.hand_zorome },
+  shigoro: { label: 'シゴロ', rank: 5, multiplier: 2, emoji: EMOJI.hand_shigoro },
+  me: { label: '出目', rank: 4, multiplier: 1, emoji: EMOJI.hand_me },
+  none: { label: '役なし（ションベン）', rank: 2, multiplier: 1, emoji: EMOJI.hand_none },
+  hifumi: { label: 'ヒフミ', rank: 1, multiplier: 1, emoji: EMOJI.hand_hifumi },
 };
 
-export const DICE_FACES = ['', '⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
+// サイコロの目は emoji.js が持っている（差し替えるのはあちら1か所だけ）
+export { DICE_FACES };
 
 export function rollDice() {
   return [0, 0, 0].map(() => 1 + Math.floor(Math.random() * 6));

@@ -214,7 +214,7 @@ export const slot = { open: slotOpen, bet: slotBet, custom: slotCustom, amount: 
 
 /* ------------------------------------------------------------------ コイントス */
 
-const SIDES = { heads: { label: '表', emoji: '🪙' }, tails: { label: '裏', emoji: '🌑' } };
+const SIDES = { heads: { label: '表', emoji: em.coin_heads }, tails: { label: '裏', emoji: em.coin_tails } };
 
 async function cfOpen(ix, _args, ctx, notice = null) {
   const settings = await ctx.settings(ix.guildId);
@@ -225,7 +225,7 @@ async function cfOpen(ix, _args, ctx, notice = null) {
       withNotice(
         embed({
           color: 0xf1c40f,
-          title: '🪙 コイントス',
+          title: `${em.coinflip} コイントス`,
           description: `所持金 ${coins(balance, settings)}\n\n賭け金を選んでください。当たれば2倍、外れれば没収です。`,
         }),
         notice,
@@ -259,14 +259,14 @@ async function cfSide(ix, ctx, bet) {
     embeds: [
       embed({
         color: 0xf1c40f,
-        title: '🪙 コイントス',
+        title: `${em.coinflip} コイントス`,
         description: `賭け金は ${coins(bet, settings)}。\n**表か裏かを選んでください。**`,
       }),
     ],
     components: [
       row(
-        button(id('cf', 'go', String(bet), 'heads'), '表', { emoji: '🪙', style: ButtonStyle.PRIMARY }),
-        button(id('cf', 'go', String(bet), 'tails'), '裏', { emoji: '🌑', style: ButtonStyle.PRIMARY }),
+        button(id('cf', 'go', String(bet), 'heads'), '表', { emoji: em.coin_heads, style: ButtonStyle.PRIMARY }),
+        button(id('cf', 'go', String(bet), 'tails'), '裏', { emoji: em.coin_tails, style: ButtonStyle.PRIMARY }),
       ),
       row(backButton('cf', '賭け金を変える'), homeButton()),
     ],
@@ -292,20 +292,20 @@ async function cfGo(ix, [rawBet, side], ctx) {
   const tossing = (note) =>
     embed({
       color: 0xf1c40f,
-      title: '🪙 コイントス',
+      title: `${em.coinflip} コイントス`,
       description: note,
       footer: { text: `${SIDES[side].label} に ${bet.toLocaleString('ja-JP')}` },
     });
 
   ctx.animate(ix, [
-    { after: 700, payload: { embeds: [tossing('# 🪙\nくるくる…')], components: [] } },
+    { after: 700, payload: { embeds: [tossing(`# ${em.coinflip}\nくるくる…`)], components: [] } },
     {
       after: 900,
       payload: {
         embeds: [
           embed({
             color: won ? 0x2ecc71 : 0x95a5a6,
-            title: '🪙 コイントス',
+            title: `${em.coinflip} コイントス`,
             description:
               `# ${SIDES[outcome].emoji}\n結果は **${SIDES[outcome].label}**！\n` +
               (won ? `🎉 的中！ ${coins(bet * 2, settings)} を獲得しました。` : `外れ… ${coins(bet, settings)} を失いました。`),

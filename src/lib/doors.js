@@ -1,3 +1,5 @@
+import { EMOJI } from './emoji.js';
+
 /**
  * 運命の扉。
  *
@@ -9,8 +11,8 @@
  * そこから少しだけ差し引いた分が、この賭けの取り分になる。
  */
 export const DOORS = {
-  red: { label: '赤の扉', emoji: '🟥' },
-  blue: { label: '青の扉', emoji: '🟦' },
+  red: { label: '赤の扉', emoji: EMOJI.door_red },
+  blue: { label: '青の扉', emoji: EMOJI.door_blue },
 };
 
 /**
@@ -48,8 +50,8 @@ export function isCapped(steps, multiplier) {
 }
 
 /** 結果を大きく出すための見出し。 */
-export const HIT_HEADLINE = '# ⭕ あたり！';
-export const MISS_HEADLINE = '# ❌ はずれ';
+export const HIT_HEADLINE = `# ${EMOJI.hit} あたり！`;
+export const MISS_HEADLINE = `# ${EMOJI.miss} はずれ`;
 
 /* ------------------------------------------------------------------ 山分けか、裏切りか */
 

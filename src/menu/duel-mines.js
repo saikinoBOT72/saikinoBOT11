@@ -26,7 +26,7 @@ export const title = '地雷＆陣取り';
 export const emojiSlot = 'mines';
 export const color = 0x34495e;
 
-const MARKS = { challenger: '🟥', opponent: '🟦', null: '⬜' };
+const MARKS = { challenger: em.cell_challenger, opponent: em.cell_opponent, null: em.cell_empty };
 const NUMBERS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'];
 
 export function inviteFields() {
@@ -163,7 +163,7 @@ async function handleClaim(ix, ctx, duel, role, cell, settings) {
 
   const { outcome, over } = taken.extra;
   const headline = outcome.exploded
-    ? `💥 <@${ix.userId}> が ${NUMBERS[cell]} で**地雷を踏みました**！ このマスは相手のものに。`
+    ? `${em.boom} <@${ix.userId}> が ${NUMBERS[cell]} で**地雷を踏みました**！ このマスは相手のものに。`
     : `<@${ix.userId}> が ${NUMBERS[cell]} を取りました。`;
 
   if (!over) {
@@ -191,7 +191,7 @@ function grid(state, { reveal = false } = {}) {
       if (owner) {
         cells.push(MARKS[owner]);
       } else if (reveal && [...state.mines.challenger, ...state.mines.opponent].includes(index)) {
-        cells.push('💣');
+        cells.push(em.bomb);
       } else {
         cells.push(NUMBERS[index]);
       }
@@ -234,12 +234,12 @@ export function board(duel, state, settings, headline = null) {
             ]
           : [
               {
-                name: '🟥 挑戦者',
+                name: `${em.cell_challenger} 挑戦者`,
                 value: `<@${duel.challenger_id}>\n**${countOwned(state.board, 'challenger')}** マス`,
                 inline: true,
               },
               {
-                name: '🟦 相手',
+                name: `${em.cell_opponent} 相手`,
                 value: `<@${duel.opponent_id}>\n**${countOwned(state.board, 'opponent')}** マス`,
                 inline: true,
               },
@@ -253,7 +253,7 @@ export function board(duel, state, settings, headline = null) {
 }
 
 function minesStatus(userId, mines) {
-  return `<@${userId}>\n${'💣'.repeat(mines.length) || '—'} ${mines.length}/${MINES_PER_PLAYER}`;
+  return `<@${userId}>\n${em.bomb.repeat(mines.length) || '—'} ${mines.length}/${MINES_PER_PLAYER}`;
 }
 
 /** 3行×3ボタン。取られたマスは押せない。 */
@@ -288,8 +288,8 @@ function resultPayload(duel, state, settings, winner, pot, headline) {
         description:
           `${grid(state, { reveal: true })}\n\n` +
           `${headline}\n\n` +
-          `🟥 <@${duel.challenger_id}> **${countOwned(state.board, 'challenger')}** マス　` +
-          `🟦 <@${duel.opponent_id}> **${countOwned(state.board, 'opponent')}** マス\n\n` +
+          `${em.cell_challenger} <@${duel.challenger_id}> **${countOwned(state.board, 'challenger')}** マス　` +
+          `${em.cell_opponent} <@${duel.opponent_id}> **${countOwned(state.board, 'opponent')}** マス\n\n` +
           `🏆 **<@${winnerId}> の勝ち！** ${coins(pot, settings)} を総取りしました。`,
       }),
     ],

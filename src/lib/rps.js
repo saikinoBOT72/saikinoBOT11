@@ -1,9 +1,10 @@
 import { deposit } from './economy.js';
+import { EMOJI } from './emoji.js';
 
 export const HANDS = {
-  rock: { emoji: '✊', label: 'グー' },
-  scissors: { emoji: '✌️', label: 'チョキ' },
-  paper: { emoji: '🖐️', label: 'パー' },
+  rock: { emoji: EMOJI.hand_rock, label: 'グー' },
+  scissors: { emoji: EMOJI.hand_scissors, label: 'チョキ' },
+  paper: { emoji: EMOJI.hand_paper, label: 'パー' },
 };
 
 const BEATS = { rock: 'scissors', scissors: 'paper', paper: 'rock' };

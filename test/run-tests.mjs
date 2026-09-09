@@ -1729,6 +1729,31 @@ await test('サイコロの目は1〜6が添字1〜6に並ぶ', () => {
   assert.equal(emojiLib.DICE_FACES[0], '');
   assert.equal(emojiLib.DICE_FACES[1], emojiLib.EMOJI.dice1);
   assert.equal(emojiLib.DICE_FACES[6], emojiLib.EMOJI.dice6);
+  // チンチロ側が別に持たないこと（差し替えは emoji.js 1か所だけ）
+  assert.deepEqual(dice.DICE_FACES, emojiLib.DICE_FACES, '出目の定義が二重になっていない');
+});
+
+await test('結果に出る絵文字はすべて emoji.js から来ている', async () => {
+  const slot = await import(src('lib/slot.js'));
+  const rps = await import(src('lib/rps.js'));
+  const roulette2 = await import(src('lib/roulette.js'));
+
+  const em = emojiLib.EMOJI;
+  assert.ok(
+    slot.payoutTable({ currency_emoji: '🪙' }).includes(em.slot_diamond),
+    'スロットの絵柄も emoji.js から',
+  );
+  assert.equal(rps.HANDS.rock.emoji, em.hand_rock);
+  assert.equal(rps.HANDS.scissors.emoji, em.hand_scissors);
+  assert.equal(rps.HANDS.paper.emoji, em.hand_paper);
+  assert.ok(roulette2.cylinder(1).startsWith(em.chamber_spent), '撃った弾倉');
+  assert.ok(roulette2.cylinder(0).startsWith(em.chamber_left), '残りの弾倉');
+  assert.equal(dice.evaluate([1, 1, 1]).emoji, em.hand_pinzoro);
+  assert.equal(doorsLib.DOORS.red.emoji, em.door_red);
+  assert.ok(doorsLib.HIT_HEADLINE.includes(em.hit));
+  assert.ok(doorsLib.MISS_HEADLINE.includes(em.miss));
+  assert.equal(charge.MOVES.shoot.emoji, em.move_shoot);
+  assert.equal(charge.hearts(1), `${em.hp_full}${em.hp_lost}`);
 });
 
 await test('トランプのスートは山札と同じ並び', async () => {

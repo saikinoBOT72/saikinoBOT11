@@ -1,3 +1,5 @@
+import { EMOJI } from './emoji.js';
+
 /**
  * ロシアンルーレット。
  *
@@ -24,5 +26,7 @@ export function chambersLeft(pulled) {
 
 /** 弾倉の見た目。引き終わったところは空、残りは伏せたまま。 */
 export function cylinder(pulled) {
-  return Array.from({ length: CHAMBERS }, (_, index) => (index < pulled ? '⚪' : '⚫')).join(' ');
+  return Array.from({ length: CHAMBERS }, (_, index) =>
+    index < pulled ? EMOJI.chamber_spent : EMOJI.chamber_left,
+  ).join(' ');
 }

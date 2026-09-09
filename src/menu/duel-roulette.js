@@ -117,7 +117,7 @@ export function board(duel, state, settings, headline = null) {
         footer: { text: `${duel.pulled ?? state.pulled} 回引きました・外すほど危なくなります` },
       }),
     ],
-    components: [row(button(`d:pull:${duel.id}`, '引き金を引く', { emoji: '🔫', style: ButtonStyle.DANGER }))],
+    components: [row(button(`d:pull:${duel.id}`, '引き金を引く', { emoji: em.roulette, style: ButtonStyle.DANGER }))],
     allowed_mentions: { users: [waiting] },
   };
 }
