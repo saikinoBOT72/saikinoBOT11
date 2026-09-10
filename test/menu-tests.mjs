@@ -34,6 +34,28 @@ const GUILD = 'g1';
 const ME = 'u1';
 const OTHER = 'u2';
 
+/**
+ * 結果画面の決まり。
+ * Discord は「本文が絵文字だけ」のときだけ絵文字を特大で描くので、
+ * content に文字が1つでも混ざっていたら小さくなってしまう。
+ * 見せたい絵が content にあり、そこに文字が無いことを機械的に見張る。
+ */
+function assertBigArt(payload, where) {
+  const content = payload?.data?.content ?? '';
+  assert.notEqual(content.trim(), '', `${where}: 大きく見せる絵が content に無い`);
+  const withoutCustom = content
+    .replace(/<a?:\w+:\d+>/g, '')          // カスタム絵文字 <:name:id>
+    .replace(/[0-9#*]\uFE0F?\u20E3/g, '');  // 7️⃣ のような囲み数字（数字を含むが絵文字）
+  const letters = withoutCustom.match(/[0-9A-Za-z\u3040-\u30ff\u4e00-\u9fff]/g) ?? [];
+  assert.deepEqual(letters, [], `${where}: content に文字が混ざっていると絵文字が小さくなる（${content}）`);
+}
+
+/** 結果のひとことが embed の title に来ているか。 */
+function assertVerdictFirst(payload, where) {
+  const title = firstEmbed(payload).title ?? '';
+  assert.notEqual(title.trim(), '', `${where}: 結果のひとことが title に無い`);
+}
+
 async function press(customId, options = {}) {
   const ix = new Ix(rawInteraction({ customId, ...options }));
   const response = await handleComponent(ix, ctx);
@@ -177,14 +199,16 @@ await test('スロットはまず回転中を出し、少しずつ結果が現�
   const first = await press('m:slot:bet:100');
   const after = await eco.getBalance(db, GUILD, ME);
 
-  assert.match(firstEmbed(first).description, /回転中/, '押した直後は回転中');
+  assert.match(firstEmbed(first).title, /回転中/, '押した直後は回転中');
   assert.deepEqual(first.data.components, [], '回っているあいだはボタンを出さない');
   assert.ok(after <= before + 300000 && after >= before - 100, 'お金の処理は先に済んでいる');
 
   assert.equal(ctx.animated.length, 3, 'リールが1つずつ止まる');
-  assert.match(ctx.animated[0].embeds[0].description, /回転中/);
+  assert.match(ctx.animated[0].embeds[0].title, /回転中/);
   const last = finalFrame(ctx);
-  assert.match(last.embeds[0].description, /🍒|🍋|🍇|🔔|⭐|7️⃣|💎/);
+  assert.match(last.content, /🍒|🍋|🍇|🔔|⭐|7️⃣|💎/, 'リールは大きく出すため content に置く');
+  assertBigArt({ data: last }, 'スロット結果');
+  assertVerdictFirst({ data: last }, 'スロット結果');
   assertAllButtonsWork({ data: last }, 'スロット結果');
 });
 
@@ -226,7 +250,7 @@ await test('ゲーム画面のボタンはどれも入力の読み違いで怒�
 await test('入力フォームの金額（全角も可）でスロットが回る', async () => {
   const before = await eco.getBalance(db, GUILD, ME);
   const payload = await press('m:slot:amount', { type: 5, fields: { amount: '２００' } });
-  assert.match(firstEmbed(payload).description, /回転中/);
+  assert.match(firstEmbed(payload).title, /回転中/);
   assert.notEqual(await eco.getBalance(db, GUILD, ME), before);
 });
 
@@ -246,11 +270,12 @@ await test('コイントスは表裏を選んでから勝負し、結果は少�
   const tossing = await press('m:cf:go:100:heads');
   const after = await eco.getBalance(db, GUILD, ME);
 
-  assert.match(firstEmbed(tossing).description, /弾きました/, '押した直後は投げただけ');
+  assert.match(firstEmbed(tossing).title, /弾きました/, '押した直後は投げただけ');
   assert.ok(after === before + 100 || after === before - 100, `${before} → ${after}`);
 
   const last = finalFrame(ctx);
-  assert.match(last.embeds[0].description, /結果は/);
+  assert.match(last.embeds[0].title, /的中|はずれ/, '勝ち負けが最初に読める');
+  assertBigArt({ data: last }, 'コイントス結果');
   assertAllButtonsWork({ data: last }, 'コイントス結果');
 });
 
@@ -450,8 +475,10 @@ await test('強い役を出した方が勝ち、その人にコインが入る',
     await chinchiroLib.recordRoll(db, id, 'opponent', [opponentDice]);
 
     const payload = await chinchiroMatch.resolveMatch(ctx, await chinchiroLib.getMatch(db, id), settings);
+    assertBigArt({ data: payload }, 'チンチロ結果');   // 出目が大きく出る形か
     return {
-      text: payload.embeds[0].description,
+      // 勝ち負けは title、詳しい説明は description。どちらに書いても読めるようにする
+      text: `${payload.embeds[0].title} ${payload.embeds[0].description}`,
       me: await eco.getBalance(db, GUILD, ME),
       other: await eco.getBalance(db, GUILD, OTHER),
     };

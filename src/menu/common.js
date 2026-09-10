@@ -86,3 +86,51 @@ export function readText(ix, field) {
   const value = ix.field(field).trim();
   return value === '' ? null : value;
 }
+
+/**
+ * 結果画面の形をそろえる道具。
+ *
+ * 【なぜ content に絵文字を置くのか】
+ * Discord は「本文が絵文字だけのメッセージ」を特大サイズで描く。
+ * embed の中に入れた絵文字は、見出し(#)を付けても本文サイズ止まりなので、
+ * いちばん見せたいもの（出目・カード・手・盤面）は content に絵文字だけで置く。
+ * 文字を1つでも混ぜると普通の大きさに戻るので、ラベルは embed 側に書く。
+ *
+ * 【並び順】
+ *   1. 大きな絵（content）
+ *   2. 勝ったか負けたか（embed の title）
+ *   3. どうしてそうなったかの説明（description）
+ *   4. 賭け金・収支・所持金（fields）
+ *
+ * @param {object} options
+ * @param {string} options.art     絵文字だけの行。ここに文字を混ぜない
+ * @param {string} options.verdict 結果のひとこと。いちばん先に読ませたい言葉
+ * @param {number} options.color
+ * @param {string} [options.detail] 説明。無くてもよい
+ * @param {object[]} [options.fields]
+ */
+export function resultEmbed({ art, verdict, color, detail, fields, footer, author, thumbnail }) {
+  return {
+    content: art ? String(art).trim() : '',
+    embeds: [
+      embed({
+        color,
+        author,
+        title: verdict,
+        description: detail || undefined,
+        fields,
+        footer,
+        thumbnail,
+      }),
+    ],
+  };
+}
+
+/** 賭け金・収支・所持金の3つ。どのゲームでも同じ並びにする。 */
+export function moneyFields(bet, net, after, settings, { coins }) {
+  return [
+    { name: '賭け金', value: bet.toLocaleString('ja-JP'), inline: true },
+    { name: '収支', value: `${net >= 0 ? '+' : ''}${net.toLocaleString('ja-JP')}`, inline: true },
+    { name: '所持金', value: coins(after, settings), inline: true },
+  ];
+}

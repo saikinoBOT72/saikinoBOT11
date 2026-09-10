@@ -19,8 +19,10 @@ import {
   homeButton,
   id,
   isError,
+  moneyFields,
   openModal,
   readInt,
+  resultEmbed,
   row,
   show,
   withNotice,
@@ -148,24 +150,25 @@ async function slotSpin(ix, ctx, bet) {
   const after = await getBalance(ctx.db, ix.guildId, ix.userId);
   const net = payout - bet;
 
-  const reelLine = (reels) => `# ${reels.join(' ｜ ')}`;
-  const spinning = (reels, note) =>
-    embed({
-      color: 0xe67e22,
-      title: '🎰 スロット',
-      description: `${reelLine(reels)}\n${note}`,
-      footer: { text: `賭け金 ${bet.toLocaleString('ja-JP')}` },
-    });
-
-  const finalEmbed = embed({
-    color: payout > 0 ? 0x2ecc71 : 0x95a5a6,
-    title: '🎰 スロット',
-    description: `${reelLine(result.reels)}\n${slotHeadline(result, payout, settings)}`,
-    fields: [
-      { name: '賭け金', value: bet.toLocaleString('ja-JP'), inline: true },
-      { name: '収支', value: `${net >= 0 ? '+' : ''}${net.toLocaleString('ja-JP')}`, inline: true },
-      { name: '所持金', value: coins(after, settings), inline: true },
+  // リールは content に絵文字だけで置く。Discord がいちばん大きく描いてくれる。
+  const reelLine = (reels) => reels.join('');
+  const spinning = (reels, note) => ({
+    content: reelLine(reels),
+    embeds: [
+      embed({
+        color: 0xe67e22,
+        title: note,
+        footer: { text: `賭け金 ${bet.toLocaleString('ja-JP')}` },
+      }),
     ],
+  });
+
+  const final = resultEmbed({
+    art: reelLine(result.reels),
+    verdict: slotVerdict(result),
+    color: payout > 0 ? 0x2ecc71 : 0x95a5a6,
+    detail: slotDetail(result, payout, settings),
+    fields: moneyFields(bet, net, after, settings, { coins }),
   });
   const finalComponents = [
     row(
@@ -181,9 +184,9 @@ async function slotSpin(ix, ctx, bet) {
 
   // 左のリールから1つずつ止まっていく
   ctx.animate(ix, [
-    { after: 800, payload: { embeds: [spinning([result.reels[0], '🎲', '🎲'], '回転中…')], components: [] } },
-    { after: 800, payload: { embeds: [spinning([result.reels[0], result.reels[1], '🎲'], '回転中…')], components: [] } },
-    { after: 800, payload: { embeds: [finalEmbed], components: finalComponents } },
+    { after: 800, payload: { ...spinning([result.reels[0], em.slot_spin, em.slot_spin], '🎰 回転中…'), components: [] } },
+    { after: 800, payload: { ...spinning([result.reels[0], result.reels[1], em.slot_spin], '🎰 回転中…'), components: [] } },
+    { after: 800, payload: { ...final, components: finalComponents } },
   ]);
 
   if (result.kind === 'triple') {
@@ -198,20 +201,19 @@ async function slotSpin(ix, ctx, bet) {
     });
   }
 
-  return show(ix, {
-    embeds: [spinning(['🎲', '🎲', '🎲'], '**回転中…**')],
-    components: [],
-  });
+  return show(ix, { ...spinning([em.slot_spin, em.slot_spin, em.slot_spin], '🎰 回転中…'), components: [] });
 }
 
-function slotHeadline(result, payout, settings) {
-  if (result.kind === 'triple') {
-    return `🎉 **${result.symbol} 3つ揃い！ x${result.multiplier}** — ${coins(payout, settings)} 獲得！`;
-  }
-  if (result.kind === 'double') {
-    return `✨ ${result.symbol} が2つ！ x${result.multiplier} — ${coins(payout, settings)} 獲得`;
-  }
-  return '残念…もう一度どうぞ';
+/** 結果のひとこと。いちばん先に読ませたいので短く。 */
+function slotVerdict(result) {
+  if (result.kind === 'triple') return `🎉 3つそろい！ ×${result.multiplier}`;
+  if (result.kind === 'double') return `✨ 2つそろい ×${result.multiplier}`;
+  return '💧 はずれ';
+}
+
+function slotDetail(result, payout, settings) {
+  if (result.kind === 'none') return 'そろいませんでした。もう一度どうぞ。';
+  return `${result.symbol} がそろって ${coins(payout, settings)} 獲得。`;
 }
 
 export const slot = { open: slotOpen, bet: slotBet, custom: slotCustom, amount: slotAmount };
@@ -293,32 +295,32 @@ async function cfGo(ix, [rawBet, side], ctx) {
   if (won) await deposit(ctx.db, ix.guildId, ix.userId, bet * 2, 'coinflip:win');
   const after = await getBalance(ctx.db, ix.guildId, ix.userId);
 
-  const tossing = (note) =>
-    embed({
-      color: 0xf1c40f,
-      title: `${em.coinflip} コイントス`,
-      description: note,
-      footer: { text: `${SIDES[side].label} に ${bet.toLocaleString('ja-JP')}` },
-    });
+  // コインは content に絵文字だけで置く。ここがいちばん大きく出る。
+  const tossing = (note) => ({
+    content: em.coinflip,
+    embeds: [
+      embed({
+        color: 0xf1c40f,
+        title: note,
+        footer: { text: `${SIDES[side].label} に ${bet.toLocaleString('ja-JP')}` },
+      }),
+    ],
+  });
 
   ctx.animate(ix, [
-    { after: 700, payload: { embeds: [tossing(`# ${em.coinflip}\nくるくる…`)], components: [] } },
+    { after: 700, payload: { ...tossing('くるくる…'), components: [] } },
     {
       after: 900,
       payload: {
-        embeds: [
-          embed({
-            color: won ? 0x2ecc71 : 0x95a5a6,
-            title: `${em.coinflip} コイントス`,
-            description:
-              `# ${SIDES[outcome].emoji}\n結果は **${SIDES[outcome].label}**！\n` +
-              (won ? `🎉 的中！ ${coins(bet * 2, settings)} を獲得しました。` : `外れ… ${coins(bet, settings)} を失いました。`),
-            fields: [
-              { name: '賭け', value: `${SIDES[side].label} / ${bet.toLocaleString('ja-JP')}`, inline: true },
-              { name: '所持金', value: coins(after, settings), inline: true },
-            ],
-          }),
-        ],
+        ...resultEmbed({
+          art: SIDES[outcome].emoji,
+          verdict: won ? `🎉 ${SIDES[outcome].label} — 的中！` : `💧 ${SIDES[outcome].label} — はずれ`,
+          color: won ? 0x2ecc71 : 0x95a5a6,
+          detail: won
+            ? `${SIDES[side].label} に賭けて当たりました。`
+            : `${SIDES[side].label} に賭けていました。`,
+          fields: moneyFields(bet, won ? bet : -bet, after, settings, { coins }),
+        }),
         components: [
           row(
             button(id('cf', 'go', String(bet), side), `もう一度（${SIDES[side].label} ${bet}）`, {
@@ -334,7 +336,7 @@ async function cfGo(ix, [rawBet, side], ctx) {
     },
   ]);
 
-  return show(ix, { embeds: [tossing('コインを弾きました…')], components: [] });
+  return show(ix, { ...tossing('コインを弾きました…'), components: [] });
 }
 
 export const cf = { open: cfOpen, bet: cfBet, custom: cfCustom, amount: cfAmount, go: cfGo };

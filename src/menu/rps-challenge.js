@@ -144,6 +144,8 @@ async function handleHand(ix, ctx, match, hand) {
 export async function resolveMatch(ctx, match) {
   const settings = await getSettings(ctx.db, match.guild_id);
   const result = judge(match.challenger_hand, match.opponent_hand);
+  // 手だけを content に置く。文字を混ぜると Discord が小さく描いてしまう。
+  const handsArt = `${HANDS[match.challenger_hand].emoji}${HANDS[match.opponent_hand].emoji}`;
   const handsLine =
     `<@${match.challenger_id}> ${HANDS[match.challenger_hand].emoji} ` +
     `vs ${HANDS[match.opponent_hand].emoji} <@${match.opponent_id}>`;
@@ -153,7 +155,7 @@ export async function resolveMatch(ctx, match) {
       if (!(await finishMatch(ctx.db, match.id))) return alreadyResolved();
       await refund(ctx.db, match);
       return update({
-        content: '',
+        content: handsArt,
         embeds: [
           embed({
             color: 0x95a5a6,
@@ -167,11 +169,12 @@ export async function resolveMatch(ctx, match) {
     const next = await nextRound(ctx.db, match.id, match.round);
     if (!next) return alreadyResolved();
     return update({
-      content: `<@${match.challenger_id}> <@${match.opponent_id}>`,
+      content: handsArt,
       embeds: [
         {
           ...playEmbed(next, settings, next.round),
-          description: `${handsLine}\n\n**あいこ！** もう一度手を選んでください。`,
+          title: '🤝 あいこ！ もう一度',
+          description: `${handsLine}\n\n二人とも、もう一度手を選んでください。`,
         },
       ],
       components: [handRow(match.id)],
@@ -184,16 +187,19 @@ export async function resolveMatch(ctx, match) {
   if (match.bet > 0) await deposit(ctx.db, match.guild_id, winnerId, match.bet * 2, 'rps:win', match.id);
 
   return update({
-    content: '',
+    content: handsArt,
     embeds: [
       embed({
         color: 0x2ecc71,
-        title: '🏆 じゃんけん結果',
-        description:
-          `${handsLine}\n\n**<@${winnerId}> の勝ち！**` +
-          (match.bet > 0
-            ? `\n${coins(match.bet * 2, settings)} を獲得（<@${loserId}> は ${match.bet} を失いました）`
-            : ''),
+        title: '🏆 勝負あり',
+        description: `**<@${winnerId}> の勝ち！**\n\n${handsLine}`,
+        fields:
+          match.bet > 0
+            ? [
+                { name: '取り分', value: coins(match.bet * 2, settings), inline: true },
+                { name: '負けた人', value: `<@${loserId}> −${match.bet.toLocaleString('ja-JP')}`, inline: true },
+              ]
+            : undefined,
       }),
     ],
     components: [],

@@ -147,14 +147,13 @@ async function handleRoll(ix, ctx, match) {
   const frames = throws.map((dice, index) => ({
     after: index === 0 ? 700 : 800,
     payload: {
-      content: '',
+      // サイコロは content に絵文字だけ。Discord がいちばん大きく描いてくれる
+      content: diceLine(dice, faces),
       embeds: [
         embed({
           color: 0xe67e22,
-          title: '🎲 チンチロ',
-          description:
-            `<@${ix.userId}> が振っています…\n\n# ${diceLine(dice, faces)}\n` +
-            `${index + 1}回目：${index === throws.length - 1 ? handLabel(hand) : '役なし、振り直し！'}`,
+          title: index === throws.length - 1 ? handLabel(hand) : `${index + 1}回目：役なし、振り直し！`,
+          description: `<@${ix.userId}> が振りました`,
         }),
       ],
       components: [],
@@ -178,12 +177,12 @@ async function handleRoll(ix, ctx, match) {
   ctx.animate(ix, frames);
 
   return update({
-    content: '',
+    content: rolling(faces),
     embeds: [
       embed({
         color: 0xe67e22,
-        title: '🎲 チンチロ',
-        description: `<@${ix.userId}> がサイコロを振りました…\n\n# ${rolling(faces)}`,
+        title: '🎲 ころころ…',
+        description: `<@${ix.userId}> がサイコロを振りました`,
       }),
     ],
     components: [],
@@ -205,25 +204,35 @@ export async function resolveMatch(ctx, match, settings, faces = null) {
   }
   const { prize } = await settle(ctx.db, match, result.winner, result.multiplier);
 
-  const lines = [
-    `<@${match.challenger_id}>　${diceLine(challengerHand.dice, dice)}　${handLabel(challengerHand)}`,
-    `<@${match.opponent_id}>　${diceLine(opponentHand.dice, dice)}　${handLabel(opponentHand)}`,
-    '',
-  ];
-  if (result.winner === 'draw') {
-    lines.push(`🤝 **引き分け**（${result.reason}）。預かった額はそのまま返しました。`);
-  } else {
-    const winnerId = result.winner === 'challenger' ? match.challenger_id : match.opponent_id;
-    const loserId = result.winner === 'challenger' ? match.opponent_id : match.challenger_id;
-    lines.push(
-      `🏆 **<@${winnerId}> の勝ち！**（${result.reason}・×${result.multiplier}）`,
-      `<@${loserId}> から ${coins(prize, settings)} を受け取りました。`,
-    );
-  }
+  const winnerId = result.winner === 'challenger' ? match.challenger_id : match.opponent_id;
+  const loserId = result.winner === 'challenger' ? match.opponent_id : match.challenger_id;
+
+  // 勝った方の出目を大きく見せる（引き分けなら挑戦者の出目）
+  const showHand = result.winner === 'opponent' ? opponentHand : challengerHand;
 
   return {
-    content: '',
-    embeds: [embed({ color: 0x2ecc71, title: '🎲 チンチロ 結果', description: lines.join('\n') })],
+    content: diceLine(showHand.dice, dice),
+    embeds: [
+      embed({
+        color: result.winner === 'draw' ? 0x95a5a6 : 0x2ecc71,
+        title:
+          result.winner === 'draw'
+            ? `🤝 引き分け（${result.reason}）`
+            : `🏆 ${result.reason}　×${result.multiplier}`,
+        description:
+          result.winner === 'draw'
+            ? '預かった額はそのまま返しました。'
+            : `**<@${winnerId}> の勝ち！**\n<@${loserId}> から ${coins(prize, settings)} を受け取りました。`,
+        fields: [
+          {
+            name: '出目',
+            value:
+              `<@${match.challenger_id}>　${diceLine(challengerHand.dice, dice)}　${handLabel(challengerHand)}\n` +
+              `<@${match.opponent_id}>　${diceLine(opponentHand.dice, dice)}　${handLabel(opponentHand)}`,
+          },
+        ],
+      }),
+    ],
     components: [],
   };
 }
