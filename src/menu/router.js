@@ -10,6 +10,7 @@ import * as highlow from './highlow.js';
 import * as doors from './doors.js';
 import * as lottery from './lottery.js';
 import * as poll from './poll.js';
+import * as fishing from './fishing.js';
 import { MENU_PREFIX } from './common.js';
 
 /** 画面名 → 操作名 → ハンドラ。customId は `m:<画面>:<操作>:<引数...>`。 */
@@ -30,6 +31,7 @@ export const screens = {
   poll: poll.actions,
   doors: doors.actions,
   lot: lottery.actions,
+  fish: fishing.actions,
   bj: games.bj,
   rr: games.rr,
   cs: games.cs,

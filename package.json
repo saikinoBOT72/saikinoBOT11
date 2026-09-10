@@ -6,7 +6,7 @@
   "type": "module",
   "main": "src/index.js",
   "scripts": {
-    "test": "node test/run-tests.mjs && node test/menu-tests.mjs",
+    "test": "node test/run-tests.mjs && node test/menu-tests.mjs && node test/fishing-tests.mjs",
     "check": "wrangler deploy --dry-run",
     "deploy": "wrangler deploy",
     "register": "node scripts/register-commands.mjs",

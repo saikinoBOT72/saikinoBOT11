@@ -7,7 +7,7 @@ import { loadEmoji } from './lib/emoji.js';
 /**
  * 1リクエストぶんの道具箱。DB・Discord API・サーバー設定をまとめて持ち回る。
  */
-export function createContext(env, executionCtx) {
+export function createContext(env, executionCtx, origin = null) {
   const db = wrapD1(env.DB);
   const rest = createRest(env.DISCORD_TOKEN);
   const settingsCache = new Map();
@@ -18,6 +18,9 @@ export function createContext(env, executionCtx) {
     env,
     rest,
     timezone: env.TIMEZONE ?? 'Asia/Tokyo',
+
+    /** この Worker 自身の URL。釣りゲームのリンクを作るのに使う。 */
+    origin: origin ?? env.GAME_ORIGIN ?? null,
 
     /**
      * 「1日」の数え方。DAY_START_HOUR に 4 を入れると 4:00〜翌3:59 が同じ日になる。
