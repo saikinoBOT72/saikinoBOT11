@@ -2035,11 +2035,10 @@ await test('どの画面にも同じ custom_id のボタンが2つ無い', async
   }
 });
 
-await test('釣りは管理メニューからだけ開ける', async () => {
-  assert.ok(customIds(await press('m:admin:open', { admin: true })).includes('m:fish:open'), '管理メニューに置く');
+await test('釣りはゲームの中にあり、誰でも開ける', async () => {
+  assert.ok(customIds(await press('m:games:open')).includes('m:fish:open'), 'あそぶに置く');
   assert.ok(!customIds(await press('m:home:open')).includes('m:fish:open'), 'ホームには置かない');
-  const denied = await press('m:fish:open', { admin: false });
-  assert.match(screenText(denied), /試運転中/, '管理者以外は入れない');
+  assert.match(screenText(await press('m:fish:open', { admin: false })), /釣り/, '管理者でなくても入れる');
 });
 
 await test('ランキングはお財布、持ち物はショップから開ける', async () => {
@@ -2307,6 +2306,7 @@ await test('停止・再開・削除ができる', async () => {
 section('[報告パネル]');
 
 const reportPanel = await import(src('menu/report-panel.js'));
+const catalog = await import(src('lib/game-catalog.js'));
 
 async function pressPanel(customId, options = {}) {
   const ix = new Ix(rawInteraction({ customId, ...options }));
@@ -2376,6 +2376,125 @@ await test('名前に : が入っていても正しく引ける', async () => {
   });
   const response = await pressPanel('rp:do:朝:散歩', { userId: 'u-colon' });
   assert.match(screenText(response), /朝:散歩 を報告しました/);
+});
+
+await test('報告が流れたあと、パネルは消されて下に貼り直される', async () => {
+  // パネルを置いた場所を覚えているところから始める
+  const placed = await press('m:admin:panelch', { admin: true, values: ['ch-sticky'] });
+  assert.match(screenText(placed), /報告パネルを置きました/);
+  assert.equal(ctx.sent.at(-1).channelId, 'ch-sticky', 'パネルが ch-sticky に置かれている');
+
+  const remembered = await reportPanel.getPanel(db, GUILD);
+  assert.equal(remembered.channel_id, 'ch-sticky');
+  assert.ok(remembered.message_id, 'どのメッセージがパネルかを覚えている');
+
+  const activities = await act.listActivities(db, GUILD);
+  const target = activities[0];
+  const sentBefore = ctx.sent.length;
+  const deletedBefore = ctx.deleted.length;
+
+  await pressPanel(`rp:do:${target.name}`, { userId: 'u-sticky', channelId: 'ch-sticky' });
+
+  // 報告1件 ＋ 貼り直したパネル1件
+  assert.equal(ctx.sent.length, sentBefore + 2, '報告と新しいパネルの2件が流れる');
+  const [announced, restuck] = ctx.sent.slice(-2);
+  assert.equal(announced.channelId, 'ch-sticky');
+  assert.ok(restuck.payload.components?.length > 0, 'あとから来るほうがパネル（ボタン付き）');
+
+  // 古いパネルは片付ける
+  assert.equal(ctx.deleted.length, deletedBefore + 1, '古いパネルを1件消す');
+  assert.equal(ctx.deleted.at(-1).messageId, remembered.message_id);
+
+  // 覚えている message_id も新しいものに入れ替わっている
+  const after = await reportPanel.getPanel(db, GUILD);
+  assert.notEqual(after.message_id, remembered.message_id);
+  assert.equal(after.channel_id, 'ch-sticky');
+});
+
+await test('パネルの無いチャンネルでは貼り直しの通信をしない', async () => {
+  const activities = await act.listActivities(db, GUILD);
+  const target = activities[0];
+  const sentBefore = ctx.sent.length;
+  const deletedBefore = ctx.deleted.length;
+
+  await pressPanel(`rp:do:${target.name}`, { userId: 'u-other-ch', channelId: 'ch-zatsudan' });
+
+  assert.equal(ctx.sent.length, sentBefore + 1, '報告の1件だけ');
+  assert.equal(ctx.deleted.length, deletedBefore, '何も消さない');
+});
+
+await test('置き直すと前のパネルは片付けられる', async () => {
+  const before = await reportPanel.getPanel(db, GUILD);
+  const deletedBefore = ctx.deleted.length;
+
+  await press('m:admin:panelch', { admin: true, values: ['ch-sticky2'] });
+  await ctx.settle();
+
+  assert.equal(ctx.deleted.length, deletedBefore + 1, '前のパネルを消す');
+  assert.equal(ctx.deleted.at(-1).messageId, before.message_id);
+  const after = await reportPanel.getPanel(db, GUILD);
+  assert.equal(after.channel_id, 'ch-sticky2');
+});
+
+section('[ゲームのオンオフ]');
+
+await test('管理メニューからゲームのオンオフに行ける', async () => {
+  assert.ok(customIds(await press('m:admin:open', { admin: true })).includes('m:admin:gm'));
+  const screen = await press('m:admin:gm', { admin: true });
+  const ids = customIds(screen);
+  for (const game of catalog.GAMES) {
+    assert.ok(ids.includes(`m:admin:gmtoggle:${game.key}`), `${game.name} の切り替えボタンがある`);
+  }
+});
+
+await test('オフにするとボタンも説明も「あそぶ」から消える', async () => {
+  const before = await press('m:games:open');
+  assert.ok(customIds(before).includes('m:rr:open'));
+
+  await press('m:admin:gmtoggle:rr', { admin: true });
+
+  const after = await press('m:games:open');
+  assert.ok(!customIds(after).includes('m:rr:open'), 'ボタンが消える');
+  assert.ok(
+    !firstEmbed(after).fields.some((field) => field.name.includes('ロシアンルーレット')),
+    '遊び方の説明も消える',
+  );
+  // セレクター（画面そのもの）は消さない
+  assert.ok(customIds(after).includes('m:slot:open'), '他のゲームはそのまま');
+});
+
+await test('オフのゲームは古いボタンから入ろうとしても弾かれる', async () => {
+  const blocked = await press('m:rr:open');
+  assert.match(screenText(blocked), /ロシアンルーレット/);
+  assert.match(screenText(blocked), /遊べません/);
+  assert.ok(customIds(blocked).includes('m:slot:open'), 'あそぶに戻す');
+});
+
+await test('もう一度押すとオンに戻る', async () => {
+  await press('m:admin:gmtoggle:rr', { admin: true });
+  assert.ok(customIds(await press('m:games:open')).includes('m:rr:open'));
+});
+
+await test('釣りもオンオフできる', async () => {
+  await press('m:admin:gmtoggle:fish', { admin: true });
+  assert.ok(!customIds(await press('m:games:open')).includes('m:fish:open'));
+  assert.match(screenText(await press('m:fish:shop')), /遊べません/, '中の画面にも入れない');
+  await press('m:admin:gmtoggle:fish', { admin: true });
+  assert.ok(customIds(await press('m:games:open')).includes('m:fish:open'));
+});
+
+await test('管理者でなければ切り替えられない', async () => {
+  const denied = await press('m:admin:gmtoggle:slot', { admin: false });
+  assert.doesNotMatch(screenText(denied), /オフにしました/);
+  assert.ok(customIds(await press('m:games:open')).includes('m:slot:open'), 'オンのまま');
+});
+
+await test('全部オフにしても画面は壊れない', async () => {
+  for (const game of catalog.GAMES) await press(`m:admin:gmtoggle:${game.key}`, { admin: true });
+  const empty = await press('m:games:open');
+  assert.match(screenText(empty), /遊べるゲームがありません/);
+  for (const game of catalog.GAMES) await press(`m:admin:gmtoggle:${game.key}`, { admin: true });
+  assert.equal(customIds(await press('m:games:open')).length, catalog.GAMES.length + 1, '全部戻る（＋戻るボタン）');
 });
 
 runner.done();

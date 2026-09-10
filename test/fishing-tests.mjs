@@ -18,7 +18,7 @@ const GUILD = 'g1';
 const ME = 'u1';
 
 async function press(customId, options = {}) {
-  // 釣りは管理者だけが開けるので、テストは管理者として押す
+  // オンオフの切り替えも押すので、既定では管理者として押す
   const ix = new Ix(rawInteraction({ customId, admin: true, ...options }));
   const response = await handleComponent(ix, ctx);
   await ctx.settle();
@@ -222,15 +222,23 @@ await test('どの応答にも島の様子が相乗りしてくる（別途の�
 
 section('Discord の釣りメニュー');
 
-await test('管理メニューから釣りに入れる', async () => {
-  assert.ok(customIds(await press('m:admin:open')).includes('m:fish:open'));
+await test('あそぶメニューから釣りに入れる', async () => {
+  assert.ok(customIds(await press('m:games:open')).includes('m:fish:open'));
   const payload = await press('m:fish:open');
   assert.match(screenText(payload), /釣り/);
 });
 
-await test('管理者でなければ開けない', async () => {
+await test('管理者でなくても開ける', async () => {
   const payload = await press('m:fish:open', { admin: false });
-  assert.match(screenText(payload), /試運転中/);
+  assert.match(screenText(payload), /🎣 釣り/);
+});
+
+await test('管理メニューでオフにすると入れなくなる', async () => {
+  await press('m:admin:gmtoggle:fish', { admin: true });
+  assert.match(screenText(await press('m:fish:open')), /遊べません/);
+  assert.match(screenText(await press('m:fish:shop')), /遊べません/, '釣り具屋にも入れない');
+  await press('m:admin:gmtoggle:fish', { admin: true });
+  assert.match(screenText(await press('m:fish:open')), /🎣 釣り/, 'オンに戻せる');
 });
 
 await test('どの画面にも同じ custom_id のボタンが2つ無い', async () => {

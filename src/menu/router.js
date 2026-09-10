@@ -12,31 +12,38 @@ import * as lottery from './lottery.js';
 import * as poll from './poll.js';
 import * as fishing from './fishing.js';
 import { MENU_PREFIX } from './common.js';
+import { gated, gatedAll } from './games.js';
 
-/** 画面名 → 操作名 → ハンドラ。customId は `m:<画面>:<操作>:<引数...>`。 */
+/**
+ * 画面名 → 操作名 → ハンドラ。customId は `m:<画面>:<操作>:<引数...>`。
+ *
+ * ゲームの入口は gated() で包む。管理メニューでオフにされていたら
+ * 「あそぶ」に戻す。始まってしまった勝負の画面（doors など）は包まない。
+ * 途中でオフにされても、進行中の勝負は最後まで終われるようにするため。
+ */
 export const screens = {
   home: home.actions,
   report: report.actions,
   games: games.games,
-  slot: games.slot,
-  cf: games.cf,
-  rps: games.rps,
-  cc: games.cc,
+  slot: gated('slot', games.slot),
+  cf: gated('cf', games.cf),
+  rps: gated('rps', games.rps),
+  cc: gated('cc', games.cc),
   shop: shop.actions,
   wallet: wallet.actions,
   admin: admin.actions,
   privacy: privacy.actions,
   titles: titles.actions,
-  hl: highlow.actions,
-  poll: poll.actions,
+  hl: gated('hl', highlow.actions),
+  poll: gated('poll', poll.actions),
   doors: doors.actions,
-  lot: lottery.actions,
-  fish: fishing.actions,
-  bj: games.bj,
-  rr: games.rr,
-  cs: games.cs,
-  mine: games.mine,
-  dd: games.dd,
+  lot: gated('lot', lottery.actions),
+  fish: gatedAll('fish', fishing.actions),
+  bj: gated('bj', games.bj),
+  rr: gated('rr', games.rr),
+  cs: gated('cs', games.cs),
+  mine: gated('mine', games.mine),
+  dd: gated('dd', games.dd),
 };
 
 export const namespace = MENU_PREFIX;

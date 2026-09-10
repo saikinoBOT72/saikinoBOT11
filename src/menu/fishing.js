@@ -16,20 +16,6 @@ import { button, embed, id, row, show, withNotice } from './common.js';
 
 const PAGE = 26;   // 図鑑1ページの魚の数
 
-/**
- * 釣りは試運転中なので、管理者だけが開ける。
- * ボタンを隠すだけでは custom_id を打てば入れてしまうので、入口で弾く。
- */
-function guard(handler) {
-  return async (ix, args, ctx) => {
-    if (!ix.isAdmin) {
-      const { openHome } = await import('./router.js');
-      return openHome(ix, [], ctx, '釣りはまだ試運転中です。');
-    }
-    return handler(ix, args, ctx);
-  };
-}
-
 /** 戻る先。ホームと同じ宛先のボタンを2つ置くと Discord に弾かれるので、行き先を分ける。 */
 function backTo(screen) {
   return button(id(screen, 'open'), '戻る', { emoji: '◀️' });
@@ -88,7 +74,7 @@ export async function open(ix, _args, ctx, notice = null) {
         button(id('fish', 'sell'), '魚を売る', { emoji: '💴', disabled: held === 0 }),
         button(id('fish', 'dex', '0'), '図鑑', { emoji: '📖' }),
       ),
-      row(backTo('admin'), homeButton()),
+      row(backTo('games'), homeButton()),
     ],
   });
 }
@@ -296,6 +282,5 @@ export async function dex(ix, [rawPage], ctx) {
   });
 }
 
-export const actions = Object.fromEntries(
-  Object.entries({ open, url, shop, bait, rod, sell, sold, dex }).map(([name, fn]) => [name, guard(fn)]),
-);
+// オンオフの見張りは router.js が入口（open）に付ける
+export const actions = { open, url, shop, bait, rod, sell, sold, dex };

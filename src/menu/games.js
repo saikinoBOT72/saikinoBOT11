@@ -6,6 +6,7 @@ import { startChallenge } from './rps-challenge.js';
 import { startChallenge as startDuel, findGame } from './duel-board.js';
 import { openTable as openBlackjack } from './blackjack-table.js';
 import { MAX_PLAYERS as BJ_MAX_PLAYERS } from '../lib/blackjack.js';
+import { enabledGames, GAME_BY_KEY, isGameEnabled } from '../lib/game-catalog.js';
 import { startChallenge as startChinchiro } from './chinchiro-match.js';
 import { escrowFor } from '../lib/chinchiro.js';
 import { MAX_MULTIPLIER as DICE_MAX } from '../lib/dice.js';
@@ -34,6 +35,38 @@ import { EMOJI as em } from '../lib/emoji.js';
 export async function open(ix, _args, ctx, notice = null) {
   const settings = await ctx.settings(ix.guildId);
   const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
+  const playable = enabledGames(settings);
+
+  if (playable.length === 0) {
+    return show(ix, {
+      embeds: [
+        withNotice(
+          embed({
+            color: 0xe67e22,
+            title: '🎮 あそぶ',
+            description: 'いま遊べるゲームがありません。\nサーバー管理者が **⚙️ 管理 → 🎮 ゲームのオンオフ** で開けられます。',
+          }),
+          notice,
+        ),
+      ],
+      components: [row(backButton())],
+    });
+  }
+
+  // ボタンは1行5個まで。名簿の順に詰めていく
+  const rows = [];
+  for (let index = 0; index < playable.length; index += 5) {
+    rows.push(
+      row(
+        ...playable.slice(index, index + 5).map((game) =>
+          button(id(game.key, 'open'), game.name, {
+            emoji: game.emoji,
+            style: game.style === 'PRIMARY' ? ButtonStyle.PRIMARY : ButtonStyle.SUCCESS,
+          }),
+        ),
+      ),
+    );
+  }
 
   return show(ix, {
     embeds: [
@@ -42,48 +75,50 @@ export async function open(ix, _args, ctx, notice = null) {
           color: 0xe67e22,
           title: '🎮 あそぶ',
           description: `所持金 ${coins(balance, settings)}\n\n遊びたいものを選んでください。`,
-          fields: [
-            { name: `${em.slot} スロット`, value: '3つ揃いで最大 x3000', inline: true },
-            { name: `${em.coinflip} コイントス`, value: '当たれば2倍', inline: true },
-            { name: `${em.highlow} ハイ&ロー`, value: '連勝で倍率上昇。降り際が勝負', inline: true },
-            { name: `${em.rps} じゃんけん`, value: '1対1。勝てば総取り', inline: true },
-            { name: `${em.chinchiro} チンチロ`, value: '1対1。役で倍率が変わる', inline: true },
-            { name: `${em.poll} 予想大会`, value: 'みんなで賭けて、正解者で山分け', inline: true },
-            { name: `${em.doors} 運命の扉`, value: '**2人用**。当て続けて倍率を伸ばし、最後は山分けか裏切りか（1人でも可）', inline: true },
-            { name: `${em.roulette} ロシアンルーレット`, value: '1対1。引くほど当たる確率が上がる', inline: true },
-            { name: `${em.charge} チャージ＆シュート`, value: '1対1。ためて撃つ読み合い', inline: true },
-            { name: `${em.mines} 地雷＆陣取り`, value: '1対1。3×3のマスを取り合う', inline: true },
-            { name: `${em.lottery} 宝くじ`, value: '毎週日曜に抽選。当たれば持ち越しごと総取り', inline: true },
-            { name: `${em.joker} ブラックジャック`, value: `対ディーラー。${BJ_MAX_PLAYERS}人まで同じ卓で遊べる`, inline: true },
-          ],
+          fields: playable.map((game) => ({
+            name: `${game.emoji} ${game.name}`,
+            value: game.hint,
+            inline: true,
+          })),
         }),
         notice,
       ),
     ],
-    components: [
-      row(
-        button(id('slot', 'open'), 'スロット', { emoji: em.slot, style: ButtonStyle.PRIMARY }),
-        button(id('cf', 'open'), 'コイントス', { emoji: em.coinflip, style: ButtonStyle.PRIMARY }),
-        button(id('hl', 'open'), 'ハイ&ロー', { emoji: em.highlow, style: ButtonStyle.PRIMARY }),
-      ),
-      row(
-        button(id('bj', 'open'), 'ブラックジャック', { emoji: em.joker, style: ButtonStyle.PRIMARY }),
-        button(id('lot', 'open'), '宝くじ', { emoji: em.lottery, style: ButtonStyle.PRIMARY }),
-        button(id('poll', 'open'), '予想大会', { emoji: em.poll, style: ButtonStyle.SUCCESS }),
-      ),
-      row(
-        button(id('dd', 'open'), '運命の扉', { emoji: em.doors, style: ButtonStyle.SUCCESS }),
-        button(id('rps', 'open'), 'じゃんけん', { emoji: em.rps, style: ButtonStyle.SUCCESS }),
-        button(id('cc', 'open'), 'チンチロ', { emoji: em.chinchiro, style: ButtonStyle.SUCCESS }),
-        button(id('rr', 'open'), 'ロシアンルーレット', { emoji: em.roulette, style: ButtonStyle.SUCCESS }),
-        button(id('cs', 'open'), 'チャージ＆シュート', { emoji: em.charge, style: ButtonStyle.SUCCESS }),
-      ),
-      row(
-        button(id('mine', 'open'), '地雷＆陣取り', { emoji: em.mines, style: ButtonStyle.SUCCESS }),
-      ),
-      row(backButton()),
-    ],
+    components: [...rows, row(backButton())],
   });
+}
+
+/**
+ * オフにされたゲームには入れない。
+ * ボタンを消しても、前に貼られたメッセージのボタンは残るので入口でも見る。
+ */
+export function gate(key, handler) {
+  return async (ix, args, ctx) => {
+    const settings = await ctx.settings(ix.guildId);
+    if (!isGameEnabled(settings, key)) {
+      const game = GAME_BY_KEY.get(key);
+      return open(ix, [], ctx, `${game?.name ?? 'そのゲーム'}はいま遊べません。`);
+    }
+    return handler(ix, args, ctx);
+  };
+}
+
+/**
+ * 入口（open）だけ見張る。
+ * 中の操作まで止めると、賭けている途中でオフにされた人が降りられなくなる
+ * （ハイ&ロー・予想大会・宝くじなど）。始めた勝負は終われるようにしておく。
+ */
+export function gated(key, actions) {
+  return actions.open ? { ...actions, open: gate(key, actions.open) } : actions;
+}
+
+/**
+ * 画面まるごと見張る。
+ * 釣りのように、中の操作でもコインが動く（餌や竿を買う・魚を売る）のに、
+ * 賭けの途中という状態が無いものに使う。古いメッセージのボタンからも入れない。
+ */
+export function gatedAll(key, actions) {
+  return Object.fromEntries(Object.entries(actions).map(([name, fn]) => [name, gate(key, fn)]));
 }
 
 export const games = { open };

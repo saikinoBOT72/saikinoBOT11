@@ -17,7 +17,8 @@ import {
 import { adjust, getBalance, ledgerFor, setBalance, updateSettings } from '../lib/economy.js';
 import { coins, duration, truncate } from '../lib/format.js';
 import { channelSelect, modal, stringSelect, textInput, userSelect } from '../discord/builders.js';
-import { panelPayload } from './report-panel.js';
+import { getPanel, panelPayload, rememberPanel } from './report-panel.js';
+import { disabledSet, disabledText, GAME_BY_KEY, GAMES } from '../lib/game-catalog.js';
 import {
   WEEKDAYS,
   createAnnouncement,
@@ -100,7 +101,7 @@ export async function open(ix, _args, ctx, notice = null) {
       row(
         button(id('admin', 'lot'), '宝くじ', { emoji: '🎫' }),
         button(id('admin', 'emoji'), '絵文字を確認', { emoji: '😀' }),
-        button(id('fish', 'open'), '釣り（試運転中）', { emoji: '🎣' }),
+        button(id('admin', 'gm'), 'ゲームのオンオフ', { emoji: '🎮' }),
       ),
       row(
         button(id('admin', 'panel'), '報告パネルを置く', { emoji: '📌', style: ButtonStyle.PRIMARY }),
@@ -818,6 +819,70 @@ export async function annnew(ix, _args, ctx) {
   });
 }
 
+/* ------------------------------------------------------------------ ゲームのオンオフ */
+
+/**
+ * 遊べるゲームを1つずつ切り替える画面。
+ *
+ * オフにするとボタンが「🎮 あそぶ」から消え、入口でも弾かれる。
+ * 遊び方の説明も一緒に消えるので、メンバーからは最初から無いように見える。
+ * 進行中の勝負は、途中でオフにしても最後まで終われる。
+ */
+export async function gm(ix, _args, ctx, notice = null) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const settings = await ctx.settings(ix.guildId);
+  const off = disabledSet(settings);
+
+  const lines = GAMES.map((game) => `${off.has(game.key) ? '⬜' : '✅'}　${game.emoji} **${game.name}**`);
+
+  // ボタンは1行5個まで。押すたびにその1つが切り替わる
+  const rows = [];
+  for (let index = 0; index < GAMES.length; index += 5) {
+    rows.push(
+      row(
+        ...GAMES.slice(index, index + 5).map((game) =>
+          button(id('admin', 'gmtoggle', game.key), truncate(game.name, 20), {
+            emoji: game.emoji,
+            style: off.has(game.key) ? ButtonStyle.SECONDARY : ButtonStyle.SUCCESS,
+          }),
+        ),
+      ),
+    );
+  }
+
+  return show(ix, {
+    embeds: [
+      withNotice(
+        embed({
+          color: 0xe67e22,
+          title: '🎮 ゲームのオンオフ',
+          description: `押すと切り替わります。\n\n${lines.join('\n')}`,
+          footer: { text: '✅ が遊べるもの／⬜ は「🎮 あそぶ」に出ません' },
+        }),
+        notice,
+      ),
+    ],
+    components: [...rows, row(backButton('admin'))],
+  });
+}
+
+export async function gmtoggle(ix, [key], ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const game = GAME_BY_KEY.get(key);
+  if (!game) return gm(ix, [], ctx, 'そのゲームは見つかりませんでした。');
+
+  const settings = await ctx.settings(ix.guildId);
+  const off = disabledSet(settings);
+  const nowOff = !off.has(key);
+  if (nowOff) off.add(key);
+  else off.delete(key);
+
+  await updateSettings(ctx.db, ix.guildId, { disabled_games: disabledText(off) });
+  ctx.forgetSettings(ix.guildId);
+
+  return gm(ix, [], ctx, `${game.emoji} ${game.name} を${nowOff ? 'オフにしました' : 'オンにしました'}。`);
+}
+
 /**
  * 専用チャンネルに報告パネルを貼る。
  * ボタンだけのメッセージを1つ置いておけば、みんな `/menu` を開かずに報告できる。
@@ -832,8 +897,9 @@ export async function panel(ix, _args, ctx) {
         description:
           'アクションのボタンを並べたメッセージを、選んだチャンネルに置きます。\n' +
           'メンバーはボタンを押すだけで報告できます（結果は押した本人にだけ見えます）。\n\n' +
-          '**このメッセージは消さない限りずっと残ります。** 貼り直すと古いものも押せますが、\n' +
-          'アクションを増やしたら貼り直したほうが分かりやすくなります。',
+          '**報告が流れても、パネルは自動でいちばん下に移動します。**\n' +
+          'アクションを増やしたときも次の報告で中身が新しくなります。\n' +
+          '置き直すと前のパネルは片付けます。',
       }),
     ],
     components: [channelSelect(id('admin', 'panelch'), 'パネルを置くチャンネルを選ぶ'), row(backButton('admin', 'やめる'))],
@@ -846,11 +912,24 @@ export async function panelch(ix, _args, ctx) {
   const payload = await panelPayload(ctx, ix.guildId);
   if (payload.error) return open(ix, [], ctx, payload.error);
 
+  const previous = await getPanel(ctx.db, ix.guildId);
+
+  let message;
   try {
-    await ctx.rest.createMessage(channelId, payload);
+    message = await ctx.rest.createMessage(channelId, payload);
   } catch (error) {
     console.error('報告パネルを置けませんでした:', error);
     return open(ix, [], ctx, `<#${channelId}> に投稿できませんでした。Bot がそのチャンネルに書き込めるか確認してください。`);
+  }
+  await rememberPanel(ctx.db, ix.guildId, channelId, message.id);
+
+  // 前のパネルは片付ける。2枚あると、報告のたびに下に来るのは新しいほうだけで紛らわしい
+  if (previous?.message_id) {
+    ctx.waitUntil(
+      ctx.rest.deleteMessage(previous.channel_id, previous.message_id).catch(() => {
+        // すでに手で消されていることもある。消せなくても困らない
+      }),
+    );
   }
   return open(ix, [], ctx, `<#${channelId}> に報告パネルを置きました。`);
 }
@@ -1205,6 +1284,8 @@ export async function lottoggle(ix, _args, ctx) {
 export const actions = {
   open,
   emoji,
+  gm,
+  gmtoggle,
   lot,
   lotch,
   lottoggle,
