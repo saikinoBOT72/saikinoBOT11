@@ -356,7 +356,9 @@ async function handleSettle(ix, ctx, poll) {
 
 /** 結果発表。 */
 export function resultPayload(poll, options, answerIdx, result, settings) {
-  const lines = [`正解は ${LETTERS[answerIdx]} **${options[answerIdx]?.label ?? '—'}**！`, ''];
+  // いちばん見せたいのは「正解が何だったか」。title に置いて先に読ませる
+  const answer = `正解 ${LETTERS[answerIdx]} ${options[answerIdx]?.label ?? '—'}`;
+  const lines = [];
 
   if (result.refunded) {
     lines.push(
@@ -383,8 +385,9 @@ export function resultPayload(poll, options, answerIdx, result, settings) {
     embeds: [
       embed({
         color: 0xf1c40f,
-        title: `🏆 ${truncate(poll.question, 100)}`,
+        title: `🏆 ${truncate(answer, 100)}`,
         description: lines.join('\n'),
+        fields: [{ name: 'お題', value: truncate(poll.question, 1000) }],
         footer: { text: '予想大会' },
       }),
     ],

@@ -145,13 +145,12 @@ async function table(ix, ctx, game, notice = null) {
   const current = payout(game.bet, game.multiplier);
 
   return show(ix, {
+    content: cardLabel(card, em),
     embeds: [
       withNotice(
         embed({
           color: 0x2980b9,
-          title: '🃏 ハイ&ロー',
-          description:
-            `# ${cardLabel(card, em)}\n次のカードは **上（HIGH）** か **下（LOW）** か？`,
+          title: '次のカードは 上か 下か？',
           fields: [
             {
               name: '⬆️ HIGH',
@@ -202,16 +201,21 @@ export async function pick(ix, [choice], ctx) {
   const next = drawCard();
   const result = judge(card, next, choice);
 
-  const flipping = embed({
-    color: 0x2980b9,
-    title: '🃏 ハイ&ロー',
-    description: `# ${cardLabel(card, em)} → ${em.card_back}\n**${choice === 'high' ? '⬆️ HIGH' : '⬇️ LOW'}** に賭けました。めくっています…`,
-  });
+  // カードは content に絵文字だけ。ここがいちばん大きく出る
+  const flipping = {
+    content: `${cardLabel(card, em)}${em.card_back}`,
+    embeds: [
+      embed({
+        color: 0x2980b9,
+        title: `${choice === 'high' ? '⬆️ HIGH' : '⬇️ LOW'} に賭けた — めくっています…`,
+      }),
+    ],
+  };
 
   if (result === 'draw') {
     await saveGame(ctx, ix, { bet: game.bet, card: next, multiplier: game.multiplier, steps: game.steps });
     ctx.animate(ix, [{ after: 900, payload: await drawFrame(ix, ctx, card, next, game, '同じ数字！ 引き分けでもう1枚。') }]);
-    return show(ix, { embeds: [flipping], components: [] });
+    return show(ix, { ...flipping, components: [] });
   }
 
   if (result === 'lose') {
@@ -221,13 +225,12 @@ export async function pick(ix, [choice], ctx) {
       {
         after: 900,
         payload: {
+          content: `${cardLabel(card, em)}${cardLabel(next, em)}`,
           embeds: [
             embed({
               color: 0x95a5a6,
-              title: '🃏 ハイ&ロー',
-              description:
-                `# ${cardLabel(card, em)} → ${cardLabel(next, em)}\n` +
-                `外れ… ${coins(game.bet, settings)} を失いました。`,
+              title: '💧 はずれ',
+              description: `${coins(game.bet, settings)} を失いました。`,
               fields: [
                 { name: 'そこまでの倍率', value: `×${game.multiplier}（${game.steps}連勝）`, inline: true },
                 { name: '所持金', value: coins(balance, settings), inline: true },
@@ -238,7 +241,7 @@ export async function pick(ix, [choice], ctx) {
         },
       },
     ]);
-    return show(ix, { embeds: [flipping], components: [] });
+    return show(ix, { ...flipping, components: [] });
   }
 
   // 当たり
@@ -255,13 +258,12 @@ export async function pick(ix, [choice], ctx) {
       {
         after: 900,
         payload: {
+          content: `${cardLabel(card, em)}${cardLabel(next, em)}`,
           embeds: [
             embed({
               color: 0xf1c40f,
-              title: '🃏 ハイ&ロー — 上限到達！',
-              description:
-                `# ${cardLabel(card, em)} → ${cardLabel(next, em)}\n` +
-                `🎉 **${steps}連勝・×${total}**！ ここまでで自動的に確定しました。\n${coins(won, settings)} を獲得！`,
+              title: `🎉 ${steps}連勝・×${total} で上限到達！`,
+              description: `ここまでで自動的に確定しました。${coins(won, settings)} を獲得！`,
               fields: [{ name: '所持金', value: coins(balance, settings), inline: true }],
             }),
           ],
@@ -278,14 +280,14 @@ export async function pick(ix, [choice], ctx) {
         }),
       ],
     });
-    return show(ix, { embeds: [flipping], components: [] });
+    return show(ix, { ...flipping, components: [] });
   }
 
   await saveGame(ctx, ix, { bet: game.bet, card: next, multiplier: total, steps });
   ctx.animate(ix, [
     { after: 900, payload: await drawFrame(ix, ctx, card, next, { ...game, multiplier: total, steps }, '当たり！') },
   ]);
-  return show(ix, { embeds: [flipping], components: [] });
+  return show(ix, { ...flipping, components: [] });
 }
 
 /** めくったあとの場（次の予想を選べる状態）を、演出の最終コマとして作る。 */
@@ -295,11 +297,12 @@ async function drawFrame(ix, ctx, previous, next, game, headline) {
   const current = payout(game.bet, game.multiplier);
 
   return {
+    content: `${cardLabel(previous, em)}${cardLabel(next, em)}`,
     embeds: [
       embed({
         color: 0x2ecc71,
-        title: '🃏 ハイ&ロー',
-        description: `# ${cardLabel(previous, em)} → ${cardLabel(next, em)}\n${headline} 次はどっち？`,
+        title: headline,
+        description: '次はどっち？',
         fields: [
           {
             name: '⬆️ HIGH',
@@ -351,11 +354,12 @@ export async function stop(ix, _args, ctx) {
   const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
 
   return show(ix, {
+    content: cardLabel({ rank: game.card_rank, suit: game.card_suit }, em),
     embeds: [
       embed({
         color: 0x2ecc71,
-        title: '🃏 ハイ&ロー — 確定！',
-        description: `${game.steps}連勝・**×${game.multiplier}** で降りました。\n${coins(won, settings)} を獲得！`,
+        title: `🏆 ${game.steps}連勝・×${game.multiplier} で確定！`,
+        description: `${coins(won, settings)} を獲得しました。`,
         fields: [
           { name: '賭け金', value: `${game.bet.toLocaleString('ja-JP')}`, inline: true },
           { name: '所持金', value: coins(balance, settings), inline: true },

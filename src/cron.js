@@ -235,10 +235,10 @@ function lotteryEmbed(result, before, settings, em) {
   if (result.winnerId) {
     return embed({
       color: 0xf1c40f,
-      title: `${em.lottery} 宝くじ 当選！`,
+      title: `🎉 ${number} — 当選者あり！`,
       description:
-        `# ${number}\n\n` +
-        `🎉 **<@${result.winnerId}> が当てました！**\n` +
+        `# ${number}\n` +
+        `**<@${result.winnerId}> が当てました！**\n` +
         `${settings.currency_emoji} **${result.prize.toLocaleString('ja-JP')}** ${settings.currency_name} を総取りです。`,
       fields: [
         { name: '今回の売上', value: `${result.pool.toLocaleString('ja-JP')}（${result.tickets}枚）`, inline: true },
@@ -251,9 +251,9 @@ function lotteryEmbed(result, before, settings, em) {
   const nextPot = result.carryover + result.pool;
   return embed({
     color: 0x16a085,
-    title: `${em.lottery} 宝くじ 抽選結果`,
+    title: result.tickets > 0 ? `${number} — 当たりなし、来週へ持ち越し` : `${number} — 今回は売れませんでした`,
     description:
-      `# ${number}\n\n` +
+      `# ${number}\n` +
       (result.tickets > 0
         ? '当たった人はいませんでした。売上はまるごと**来週に持ち越し**です。'
         : '今回は1枚も売れませんでした。'),

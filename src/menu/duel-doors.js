@@ -184,12 +184,12 @@ async function refreshBoard(ctx, duel, state, settings) {
 
 function openingFrame(duel, userId, choice) {
   return {
-    content: '',
+    content: `${DOORS[choice].emoji}❓`,
     embeds: [
       embed({
         color,
-        title: `${em[emojiSlot]} ${title}`,
-        description: `<@${userId}> が ${DOORS[choice].emoji} **${DOORS[choice].label}** に手をかけました…\n\n# 🚪 ❓ 🚪`,
+        title: `${DOORS[choice].label} に手をかけた…`,
+        description: `<@${userId}> が開けようとしています`,
       }),
     ],
     components: [],
@@ -282,16 +282,14 @@ function shareStatus(userId, choice) {
 function lostPayload(duel, state, settings) {
   const { choice, winning } = state.opened;
   return {
-    content: '',
+    content: `${em.miss}${DOORS[winning].emoji}`,
     embeds: [
       embed({
         color: 0x95a5a6,
-        title: `${em[emojiSlot]} ${title} — 終了`,
+        title: 'はずれ！ ここで終わり',
         description:
-          `${MISS_HEADLINE}\n` +
-          `選んだのは ${DOORS[choice].emoji}、当たりは ${DOORS[winning].emoji} でした。\n\n` +
-          `**${state.steps}枚**まで進みましたが、ここで終わりです。\n` +
-          `${coins(duel.escrow * 2, settings)} は消えました。`,
+          `選んだのは ${DOORS[choice].emoji}、当たりは ${DOORS[winning].emoji} でした。\n` +
+          `**${state.steps}枚**まで進みましたが、${coins(duel.escrow * 2, settings)} は消えました。`,
       }),
     ],
     components: [],
@@ -299,31 +297,37 @@ function lostPayload(duel, state, settings) {
 }
 
 function resultPayload(duel, state, share, prize, settings) {
-  const lines = [
-    `<@${duel.challenger_id}>　${SHARE[state.choice.challenger].emoji} ${SHARE[state.choice.challenger].label}`,
-    `<@${duel.opponent_id}>　${SHARE[state.choice.opponent].emoji} ${SHARE[state.choice.opponent].label}`,
-    '',
-  ];
+  let verdict;
   if (share.kind === 'split') {
-    lines.push(`🤝 **山分け成立！** ${coins(prize, settings)} を分け合いました。`);
+    verdict = `🤝 山分け成立！ ${coins(prize, settings)} を分け合った`;
   } else if (share.kind === 'both-steal') {
-    lines.push(`😈 **二人ともひとりじめ**。${coins(prize, settings)} は誰の手にも渡りませんでした。`);
+    verdict = '😈 二人ともひとりじめ — 全額パー';
   } else {
     const winnerId = share.kind === 'challenger-steal' ? duel.challenger_id : duel.opponent_id;
-    lines.push(`😈 **<@${winnerId}> がひとりじめ！** ${coins(prize, settings)} を持っていきました。`);
+    verdict = `😈 <@${winnerId}> がひとりじめ！`;
   }
-  lines.push(
-    '',
-    `<@${duel.challenger_id}> → ${share.challenger}　/　<@${duel.opponent_id}> → ${share.opponent}`,
-  );
 
   return {
-    content: '',
+    // 二人が選んだ札を content に絵文字だけで置く
+    content: `${SHARE[state.choice.challenger].emoji}${SHARE[state.choice.opponent].emoji}`,
     embeds: [
       embed({
         color: share.kind === 'split' ? 0x2ecc71 : 0xe74c3c,
-        title: `${em[emojiSlot]} ${title} 結果`,
-        description: lines.join('\n'),
+        title: verdict,
+        fields: [
+          {
+            name: '選んだもの',
+            value:
+              `<@${duel.challenger_id}>　${SHARE[state.choice.challenger].emoji} ${SHARE[state.choice.challenger].label}\n` +
+              `<@${duel.opponent_id}>　${SHARE[state.choice.opponent].emoji} ${SHARE[state.choice.opponent].label}`,
+          },
+          {
+            name: '取り分',
+            value:
+              `<@${duel.challenger_id}> → ${share.challenger}\n` +
+              `<@${duel.opponent_id}> → ${share.opponent}`,
+          },
+        ],
       }),
     ],
     components: [],

@@ -280,17 +280,21 @@ function cellRows(duel, state) {
 function resultPayload(duel, state, settings, winner, pot, headline) {
   const winnerId = userIdOf(duel, winner);
   return {
-    content: '',
+    // 盤面を content に絵文字だけで置く。3x3 がそのまま大きく出る
+    content: grid(state, { reveal: true }),
     embeds: [
       embed({
         color: 0xf1c40f,
-        title: `${em[emojiSlot]} ${title} 決着`,
-        description:
-          `${grid(state, { reveal: true })}\n\n` +
-          `${headline}\n\n` +
-          `${em.cell_challenger} <@${duel.challenger_id}> **${countOwned(state.board, 'challenger')}** マス　` +
-          `${em.cell_opponent} <@${duel.opponent_id}> **${countOwned(state.board, 'opponent')}** マス\n\n` +
-          `🏆 **<@${winnerId}> の勝ち！** ${coins(pot, settings)} を総取りしました。`,
+        title: `🏆 <@${winnerId}> の勝ち！`,
+        description: `${headline}\n${coins(pot, settings)} を総取りしました。`,
+        fields: [
+          {
+            name: '取ったマス',
+            value:
+              `${em.cell_challenger} <@${duel.challenger_id}> **${countOwned(state.board, 'challenger')}** マス\n` +
+              `${em.cell_opponent} <@${duel.opponent_id}> **${countOwned(state.board, 'opponent')}** マス`,
+          },
+        ],
       }),
     ],
     components: [],

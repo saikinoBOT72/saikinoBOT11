@@ -324,7 +324,7 @@ await test('進行中は新しい勝負を始められない', async () => {
   const before = await eco.getBalance(db, GUILD, ME);
   const payload = await press('m:hl:bet:100');
   assert.equal(await eco.getBalance(db, GUILD, ME), before, '二重に賭け金を取られない');
-  assert.match(firstEmbed(payload).description, /すでに勝負が進んでいます|次のカード/);
+  assert.match(screenText(payload), /すでに勝負が進んでいます|前回の続き|次のカード/);
 });
 
 await test('予想すると勝ち負けが決まり、外れると勝負が終わる', async () => {
@@ -627,8 +627,9 @@ await test('正解を選ぶと山分けされ、コインの総量は変わら�
   const otherBefore = await eco.getBalance(db, GUILD, OTHER);
 
   const result = await pressPoll(`pl:settle:${globalThis.__pollId}`, { userId: ME, values: ['0'] });
-  assert.match(result.data.embeds[0].title, /今日Aは来る/);
-  assert.match(result.data.embeds[0].description, /正解は/);
+  // 結果画面は「正解が何だったか」を先に読ませる。お題は下の欄に置く
+  assert.match(result.data.embeds[0].title, /正解.*来る/);
+  assert.match(screenText(result), /今日Aは来る/, 'お題も分かる');
 
   // OTHER が選択肢0に500（300＋上乗せ200）、ME が選択肢1に100 → 正解0なので OTHER が600を総取り
   assert.equal(await eco.getBalance(db, GUILD, OTHER), otherBefore + 600);
@@ -1064,7 +1065,7 @@ await test('2人プレイ: 二人ともひとりじめなら誰ももらえな�
   await pressDuel(`d:share:${current.id}:steal`, { userId: ME });
   const payload = await pressDuel(`d:share:${current.id}:steal`, { userId: OTHER });
 
-  assert.match(JSON.stringify(payload), /誰の手にも渡りませんでした/);
+  assert.match(JSON.stringify(payload), /二人ともひとりじめ/);
   assert.equal(await eco.getBalance(db, GUILD, ME), meBefore, '増えない');
   assert.equal(await eco.getBalance(db, GUILD, OTHER), otherBefore);
 });
@@ -1982,9 +1983,12 @@ await test('どの画面にも同じ custom_id のボタンが2つ無い', async
     'm:poll:open', 'm:fish:open', 'm:fish:shop', 'm:fish:dex:0', 'm:fish:url',
   ];
   for (const screen of screensToCheck) {
-    const ids = customIds(await press(screen, { admin: true }));
+    const payload = await press(screen, { admin: true });
+    const ids = customIds(payload);
     const duplicated = ids.filter((value, index) => ids.indexOf(value) !== index);
     assert.deepEqual(duplicated, [], `${screen} に同じ custom_id が2つある: ${duplicated.join(', ')}`);
+    // 文章の組み立てを間違えると "null がそろって" のような表示が出てしまう
+    assert.doesNotMatch(screenText(payload), /\bnull\b|\bundefined\b|NaN/, `${screen} に null/undefined が出ている`);
   }
 });
 

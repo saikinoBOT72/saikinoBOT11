@@ -213,17 +213,27 @@ function resultPayload(duel, entry, state, settings, winner, pot) {
   const winnerId = userIdOf(duel, winner);
   const loserId = userIdOf(duel, otherRole(winner));
   return {
-    content: '',
+    // 最後に出し合った手を content に絵文字だけで置く
+    content: `${MOVES[entry.moves.challenger].emoji}${MOVES[entry.moves.opponent].emoji}`,
     embeds: [
       embed({
         color: 0xf1c40f,
-        title: `${em[emojiSlot]} ${title} 決着`,
-        description:
-          `<@${duel.challenger_id}>　${MOVES[entry.moves.challenger].emoji} ${MOVES[entry.moves.challenger].label}\n` +
-          `<@${duel.opponent_id}>　${MOVES[entry.moves.opponent].emoji} ${MOVES[entry.moves.opponent].label}\n\n` +
-          `**${entry.reason}**\n\n` +
-          `<@${duel.challenger_id}> ${hearts(state.hp.challenger)}　/　<@${duel.opponent_id}> ${hearts(state.hp.opponent)}\n\n` +
-          `🏆 **<@${winnerId}> の勝ち！** ${coins(pot, settings)} を総取りしました。`,
+        title: `🏆 <@${winnerId}> の勝ち！`,
+        description: `**${entry.reason}**\n${coins(pot, settings)} を総取りしました。`,
+        fields: [
+          {
+            name: '最後の手',
+            value:
+              `<@${duel.challenger_id}>　${MOVES[entry.moves.challenger].emoji} ${MOVES[entry.moves.challenger].label}\n` +
+              `<@${duel.opponent_id}>　${MOVES[entry.moves.opponent].emoji} ${MOVES[entry.moves.opponent].label}`,
+          },
+          {
+            name: '体力',
+            value:
+              `<@${duel.challenger_id}> ${hearts(state.hp.challenger)}\n` +
+              `<@${duel.opponent_id}> ${hearts(state.hp.opponent)}`,
+          },
+        ],
       }),
     ],
     components: [],

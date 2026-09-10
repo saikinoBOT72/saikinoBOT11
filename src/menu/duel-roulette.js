@@ -126,15 +126,15 @@ function resultPayload(duel, state, settings, winner, pot) {
   const loserId = userIdOf(duel, otherRole(winner));
   const winnerId = userIdOf(duel, winner);
   return {
-    content: '',
+    // 弾倉を content に絵文字だけで置く。ここがいちばん大きく出る
+    content: cylinder(state.pulled),
     embeds: [
       embed({
         color: 0xf1c40f,
-        title: `💥 ${title} 決着`,
+        title: `🏆 <@${winnerId}> の勝ち！`,
         description:
-          `${cylinder(state.pulled)}\n\n` +
-          `**${state.pulled}発目で実弾**。<@${loserId}> に当たりました。\n\n` +
-          `🏆 **<@${winnerId}> の勝ち！** ${coins(pot, settings)} を総取りしました。`,
+          `**${state.pulled}発目で実弾**。<@${loserId}> に当たりました。\n` +
+          `${coins(pot, settings)} を総取りしました。`,
       }),
     ],
     components: [],

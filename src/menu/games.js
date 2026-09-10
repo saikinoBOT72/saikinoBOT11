@@ -212,7 +212,8 @@ function slotVerdict(result) {
 }
 
 function slotDetail(result, payout, settings) {
-  if (result.kind === 'none') return 'そろいませんでした。もう一度どうぞ。';
+  // 揃わなかったときの kind は 'lose'（'none' ではない）
+  if (result.kind === 'lose') return 'そろいませんでした。もう一度どうぞ。';
   return `${result.symbol} がそろって ${coins(payout, settings)} 獲得。`;
 }
 

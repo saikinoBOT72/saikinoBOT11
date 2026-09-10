@@ -276,9 +276,10 @@ const RULES = [
 
 function dealingPayload(em) {
   return {
-    content: '',
+    // 伏せ札を content に絵文字だけで置く。ここがいちばん大きく出る
+    content: `${em.card_back}${em.card_back}`,
     embeds: [
-      embed({ color: COLOR, title: `${em.joker} ブラックジャック`, description: `配っています…\n\n# ${em.card_back} ${em.card_back}` }),
+      embed({ color: COLOR, title: `${em.joker} 配っています…` }),
     ],
     components: [],
   };
@@ -294,16 +295,16 @@ function tablePayload(table, state, settings, em, { hideDealer = true, frozen = 
   });
 
   return {
-    content: turnPlayer ? `<@${turnPlayer.userId}>` : '',
+    // 手番の人の手札を content に置いて大きく見せる。まだ誰も居なければディーラーの場
+    content: turnPlayer ? renderHand(em, turnPlayer.cards) : renderHand(em, state.dealer, { hideFrom: hideDealer ? 1 : null }),
     embeds: [
       embed({
         color: COLOR,
-        title: `${em.joker} ブラックジャック`,
+        title: turnPlayer ? `▶️ <@${turnPlayer.userId}> の番　${describeValue(turnPlayer.cards)}` : 'ディーラーの番です…',
         description:
           `**ディーラー**　${renderHand(em, state.dealer, { hideFrom: hideDealer ? 1 : null })}　` +
           `${hideDealer ? '**?**' : `**${describeValue(state.dealer)}**`}\n\n` +
-          `${lines.join('\n')}\n\n` +
-          (turnPlayer ? `<@${turnPlayer.userId}> の番です。` : 'ディーラーの番です…'),
+          lines.join('\n'),
         footer: { text: `参加費 ${table.bet}・ディーラーは17以上で止まります` },
       }),
     ],
@@ -330,14 +331,12 @@ function moveRow(table, hand) {
 
 function revealPayload(table, state, settings, em) {
   return {
-    content: '',
+    content: renderHand(em, state.dealer),
     embeds: [
       embed({
         color: COLOR,
-        title: `${em.joker} ブラックジャック`,
-        description:
-          `**ディーラー**　${renderHand(em, state.dealer)}　**${describeValue(state.dealer)}**\n\n` +
-          'ディーラーの手が開きました…',
+        title: `ディーラー ${describeValue(state.dealer)}`,
+        description: 'ディーラーの手が開きました…',
       }),
     ],
     components: [],
@@ -357,14 +356,27 @@ function resultPayload(table, state, results, settings, em, headline = null) {
     );
   });
 
+  // 収支をひとことにまとめて、いちばん先に読ませる
+  const totals = state.players.map((player) => {
+    const result = byUser.get(player.userId);
+    return (result?.amount ?? 0) - (result?.stake ?? player.bet);
+  });
+  const winners = totals.filter((gain) => gain > 0).length;
+  const verdict =
+    winners === 0
+      ? '💥 ディーラーの勝ち'
+      : winners === state.players.length
+        ? '🎉 全員がディーラーに勝った！'
+        : `🏆 ${winners}人がディーラーに勝った`;
+
   return {
-    content: '',
+    // ディーラーの手を content に置いて大きく見せる
+    content: renderHand(em, state.dealer),
     embeds: [
       embed({
         color: 0xf1c40f,
-        title: `${em.joker} ブラックジャック 結果`,
+        title: headline ?? verdict,
         description:
-          (headline ? `${headline}\n\n` : '') +
           `**ディーラー**　${renderHand(em, state.dealer)}　**${describeValue(state.dealer)}**\n\n` +
           lines.join('\n\n'),
         footer: { text: `参加費 ${table.bet}` },

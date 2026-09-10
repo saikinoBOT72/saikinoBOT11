@@ -7,9 +7,7 @@ import { checkBet } from '../lib/wager.js';
 import { coins } from '../lib/format.js';
 import {
   DOORS,
-  HIT_HEADLINE,
   MAX_STEPS,
-  MISS_HEADLINE,
   STEP_MULTIPLIER,
   isCapped,
   multiply,
@@ -135,14 +133,12 @@ async function table(ix, ctx, game, notice = null) {
   const current = payout(game.bet, game.multiplier);
 
   return show(ix, {
+    content: `${DOORS.red.emoji}${DOORS.blue.emoji}`,
     embeds: [
       withNotice(
         embed({
           color: 0x8e44ad,
-          title: `${em.doors} 運命の扉`,
-          description:
-            `# ${DOORS.red.emoji} 　 ${DOORS.blue.emoji}\n` +
-            `**${game.steps + 1}枚目の扉**。どちらを開けますか？`,
+          title: `${game.steps + 1}枚目の扉 — どちらを開ける？`,
           fields: [
             { name: '賭け金', value: `${game.bet.toLocaleString('ja-JP')}`, inline: true },
             { name: 'いまの倍率', value: `×${game.multiplier}（${game.steps}枚）`, inline: true },
@@ -176,11 +172,16 @@ export async function pick(ix, [choice], ctx) {
   const winning = openDoor();
   const hit = winning === choice;
 
-  const opening = embed({
-    color: 0x8e44ad,
-    title: `${em.doors} 運命の扉`,
-    description: `${DOORS[choice].emoji} **${DOORS[choice].label}** に手をかけました…\n\n# 🚪 ❓ 🚪`,
-  });
+  // 扉は content に絵文字だけ。ここがいちばん大きく出る
+  const opening = {
+    content: `${DOORS[choice].emoji}❓`,
+    embeds: [
+      embed({
+        color: 0x8e44ad,
+        title: `${DOORS[choice].label} に手をかけた…`,
+      }),
+    ],
+  };
 
   if (!hit) {
     await clearGame(ctx, ix);
@@ -189,12 +190,12 @@ export async function pick(ix, [choice], ctx) {
       {
         after: 1000,
         payload: {
+          content: `${em.miss}${DOORS[winning].emoji}`,
           embeds: [
             embed({
               color: 0x95a5a6,
-              title: `${em.doors} 運命の扉`,
+              title: 'はずれ！',
               description:
-                `${MISS_HEADLINE}\n` +
                 `選んだのは ${DOORS[choice].emoji}、当たりは ${DOORS[winning].emoji} でした。\n` +
                 `${coins(game.bet, settings)} を失いました。`,
               fields: [
@@ -207,7 +208,7 @@ export async function pick(ix, [choice], ctx) {
         },
       },
     ]);
-    return show(ix, { embeds: [opening], components: [] });
+    return show(ix, { ...opening, components: [] });
   }
 
   const multiplier = multiply(game.multiplier);
@@ -222,13 +223,12 @@ export async function pick(ix, [choice], ctx) {
       {
         after: 1000,
         payload: {
+          content: `${em.hit}${DOORS[winning].emoji}`,
           embeds: [
             embed({
               color: 0xf1c40f,
-              title: `${em.doors} 運命の扉 — 最後の扉！`,
-              description:
-                `${HIT_HEADLINE}\n` +
-                `🎉 **${steps}枚・×${multiplier}**！ ここが終点です。\n${coins(won, settings)} を持ち帰りました！`,
+              title: `🎉 あたり！ ${steps}枚・×${multiplier} で終点`,
+              description: `${coins(won, settings)} を持ち帰りました！`,
               fields: [{ name: '所持金', value: coins(balance, settings), inline: true }],
             }),
           ],
@@ -245,14 +245,14 @@ export async function pick(ix, [choice], ctx) {
         }),
       ],
     });
-    return show(ix, { embeds: [opening], components: [] });
+    return show(ix, { ...opening, components: [] });
   }
 
   await saveGame(ctx, ix, { bet: game.bet, multiplier, steps });
   ctx.animate(ix, [
     { after: 1000, payload: await openedFrame(ix, ctx, choice, { bet: game.bet, multiplier, steps }) },
   ]);
-  return show(ix, { embeds: [opening], components: [] });
+  return show(ix, { ...opening, components: [] });
 }
 
 /** 当たったあとの扉。次を選べる状態を、演出の最後のコマとして作る。 */
@@ -261,15 +261,12 @@ async function openedFrame(ix, ctx, choice, game) {
   const current = payout(game.bet, game.multiplier);
 
   return {
+    content: `${em.hit}${DOORS[choice].emoji}`,
     embeds: [
       embed({
         color: 0x2ecc71,
-        title: `${em.doors} 運命の扉`,
-        description:
-          `${HIT_HEADLINE}\n` +
-          `${DOORS[choice].emoji} の扉が開きました。\n\n` +
-          `${DOORS.red.emoji} 　 ${DOORS.blue.emoji}\n` +
-          `**${game.steps + 1}枚目の扉**。次はどちら？`,
+        title: 'あたり！ 次の扉へ',
+        description: `**${game.steps + 1}枚目の扉**。${DOORS.red.emoji} と ${DOORS.blue.emoji}、次はどちら？`,
         fields: [
           { name: 'いまの倍率', value: `×${game.multiplier}（${game.steps}枚）`, inline: true },
           { name: '持ち帰ると', value: coins(current, settings), inline: true },
@@ -298,11 +295,12 @@ export async function stop(ix, _args, ctx) {
   const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
 
   return show(ix, {
+    content: `${em.hit}${em.doors}`,
     embeds: [
       embed({
         color: 0x2ecc71,
-        title: `${em.doors} 運命の扉 — 持ち帰り`,
-        description: `${game.steps}枚・**×${game.multiplier}** で引き上げました。\n${coins(won, settings)} を持ち帰りました！`,
+        title: `🏆 ${game.steps}枚・×${game.multiplier} で持ち帰り`,
+        description: `${coins(won, settings)} を持ち帰りました！`,
         fields: [
           { name: '賭け金', value: `${game.bet.toLocaleString('ja-JP')}`, inline: true },
           { name: '所持金', value: coins(balance, settings), inline: true },
