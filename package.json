@@ -10,7 +10,8 @@
     "check": "wrangler deploy --dry-run",
     "deploy": "wrangler deploy",
     "register": "node scripts/register-commands.mjs",
-    "migrate": "wrangler d1 migrations apply saikinobot --remote"
+    "migrate": "wrangler d1 migrations apply saikinobot --remote",
+    "usage": "node scripts/usage.mjs"
   },
   "engines": {
     "node": ">=20"
