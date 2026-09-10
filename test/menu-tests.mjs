@@ -1110,6 +1110,49 @@ async function openBjTable(bet = 100) {
   return db.get('SELECT * FROM blackjack_tables ORDER BY created_at DESC, rowid DESC');
 }
 
+await test('金額を選ぶと「1人で」か「みんなで」かを聞かれる', async () => {
+  await eco.setBalance(db, GUILD, ME, 1000, 'test');
+  const payload = await press('m:bj:mode:100');
+  const ids = customIds(payload);
+  assert.ok(ids.includes('m:bj:solo:100'), '1人で遊ぶボタン');
+  assert.ok(ids.includes('m:bj:go:100'), 'みんなでボタン');
+  assert.equal(await eco.getBalance(db, GUILD, ME), 1000, 'この時点ではまだ引かれない');
+});
+
+await test('1人で遊ぶと、誰も待たずにその場で配られる', async () => {
+  await eco.setBalance(db, GUILD, ME, 1000, 'test');
+  const sentBefore = ctx.sent.length;
+  await press('m:bj:solo:100');
+  await ctx.settle();
+
+  const table = await db.get('SELECT * FROM blackjack_tables ORDER BY created_at DESC, rowid DESC');
+  assert.equal(table.status, 'playing', '待たずに始まっている');
+  assert.equal(await eco.getBalance(db, GUILD, ME), 900, '参加費が引かれる');
+  assert.equal(ctx.sent.length, sentBefore + 1);
+
+  const state = bjTableLib.stateOf(table);
+  assert.deepEqual(state.players.map((p) => p.userId), [ME], '自分ひとり');
+  assert.equal(state.players[0].cards.length, 2, '2枚配られている');
+  assert.equal(state.dealer.length, 2, 'ディーラーにも2枚');
+
+  const posted = JSON.stringify(ctx.sent.at(-1).payload);
+  assert.doesNotMatch(posted, /bj:join|bj:start/, '座る・始めるボタンは出さない');
+});
+
+await test('1人プレイでも、そのままヒットやスタンドが押せる', async () => {
+  await eco.setBalance(db, GUILD, ME, 1000, 'test');
+  await press('m:bj:solo:100');
+  await ctx.settle();
+  const table = await db.get('SELECT * FROM blackjack_tables ORDER BY created_at DESC, rowid DESC');
+  const state = bjTableLib.stateOf(table);
+
+  if (state.turn < 0) return;   // 配られた2枚が21なら押す場面が無い
+  const payload = await pressBj(`bj:stand:${table.id}`, { userId: ME });
+  assert.doesNotMatch(screenText(payload), /あなたの番ではありません|参加していません/);
+  const after = await db.get('SELECT * FROM blackjack_tables WHERE id = ?1', table.id);
+  assert.equal(after.status, 'done', 'ひとりなのでスタンドで決着する');
+});
+
 await test('卓を立てるとチャンネルに投稿され、立てた人が座る', async () => {
   const sentBefore = ctx.sent.length;
   const table = await openBjTable();

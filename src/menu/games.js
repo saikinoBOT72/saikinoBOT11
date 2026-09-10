@@ -709,9 +709,10 @@ async function bjOpen(ix, _args, ctx, notice = null) {
           title: `${em.joker} ブラックジャック`,
           description:
             `所持金 ${coins(balance, settings)}\n\n` +
-            `21を超えない範囲で、**ディーラー（Bot）より大きい手**を作れば勝ちです。\n` +
-            `卓を立てるとチャンネルに投稿され、**${BJ_MAX_PLAYERS}人まで**座れます。\n` +
-            'ここで決めた額が、そのまま全員の参加費になります。',
+            `21を超えない範囲で、**ディーラー（Bot）より大きい手**を作れば勝ちです。\n\n` +
+            `**みんなで**：卓を立てるとチャンネルに投稿され、**${BJ_MAX_PLAYERS}人まで**座れます。\n` +
+            '**1人で**：誰も待たずに、その場ですぐ配ります。\n\n' +
+            'まず金額を選んでください。ここで決めた額が参加費になります。',
           fields: [
             { name: 'ブラックジャック', value: '最初の2枚で21なら **2.5倍**', inline: true },
             { name: 'ふつうの勝ち', value: '**2倍**', inline: true },
@@ -721,11 +722,46 @@ async function bjOpen(ix, _args, ctx, notice = null) {
         notice,
       ),
     ],
-    components: amountRows(['bj', 'go'], balance, {
+    components: amountRows(['bj', 'mode'], balance, {
       maxBet: settings.max_bet,
       customId: id('bj', 'custom'),
       extra: [backButton('games')],
     }),
+  });
+}
+
+/** 金額を決めたあと、1人で遊ぶかみんなでやるかを選ぶ。 */
+async function bjMode(ix, [rawBet], ctx) {
+  const bet = Number(rawBet);
+  const settings = await ctx.settings(ix.guildId);
+  const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
+
+  const check = checkBet(bet, balance, settings);
+  if (!check.ok) return bjOpen(ix, [], ctx, check.message);
+
+  return show(ix, {
+    embeds: [
+      embed({
+        color: 0x1abc9c,
+        title: `${em.joker} 参加費 ${coins(bet, settings)}`,
+        description: 'どちらで遊びますか？',
+        fields: [
+          { name: '👤 1人で遊ぶ', value: '誰も待たずに、その場ですぐ配ります。', inline: true },
+          {
+            name: `👥 みんなで（${BJ_MAX_PLAYERS}人まで）`,
+            value: 'チャンネルに卓を投稿して、座る人を待ちます。',
+            inline: true,
+          },
+        ],
+      }),
+    ],
+    components: [
+      row(
+        button(id('bj', 'solo', String(bet)), '1人で遊ぶ', { emoji: '👤', style: ButtonStyle.SUCCESS }),
+        button(id('bj', 'go', String(bet)), 'みんなで', { emoji: '👥', style: ButtonStyle.PRIMARY }),
+      ),
+      row(button(id('bj', 'open'), '金額を変える', { emoji: '💰' }), homeButton()),
+    ],
   });
 }
 
@@ -737,10 +773,13 @@ async function bjAmount(ix, _args, ctx) {
   const value = readInt(ix, 'amount', { min: 1 });
   if (isError(value)) return bjOpen(ix, [], ctx, value.error);
   if (value === null) return bjOpen(ix, [], ctx, '参加費を入力してください。');
-  return bjGo(ix, [String(value)], ctx);
+  return bjMode(ix, [String(value)], ctx);
 }
 
-async function bjGo(ix, [rawBet], ctx) {
+const bjGo = (ix, args, ctx) => bjStart(ix, args, ctx, false);
+const bjSolo = (ix, args, ctx) => bjStart(ix, args, ctx, true);
+
+async function bjStart(ix, [rawBet], ctx, solo) {
   const bet = Number(rawBet);
   const settings = await ctx.settings(ix.guildId);
   const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
@@ -754,6 +793,7 @@ async function bjGo(ix, [rawBet], ctx) {
     hostId: ix.userId,
     bet,
     settings,
+    solo,
   });
   if (!opened.ok) {
     const messages = {
@@ -767,14 +807,15 @@ async function bjGo(ix, [rawBet], ctx) {
     embeds: [
       embed({
         color: 0x1abc9c,
-        title: '卓を立てました',
-        description:
-          `参加費 ${coins(bet, settings)} の卓をチャンネルに投稿しました。\n` +
-          `ほかの人が座るのを待って、**▶️ 始める** を押してください（${BJ_MAX_PLAYERS}人そろえば自動で始まります）。`,
+        title: solo ? '配りました' : '卓を立てました',
+        description: solo
+          ? `参加費 ${coins(bet, settings)} で配りました。\nチャンネルのメッセージで **ヒット / スタンド** を押してください。`
+          : `参加費 ${coins(bet, settings)} の卓をチャンネルに投稿しました。\n` +
+            `ほかの人が座るのを待って、**▶️ 始める** を押してください（${BJ_MAX_PLAYERS}人そろえば自動で始まります）。`,
       }),
     ],
     components: [row(backButton('games'), homeButton())],
   });
 }
 
-export const bj = { open: bjOpen, custom: bjCustom, amount: bjAmount, go: bjGo };
+export const bj = { open: bjOpen, custom: bjCustom, amount: bjAmount, mode: bjMode, go: bjGo, solo: bjSolo };

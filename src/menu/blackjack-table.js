@@ -38,8 +38,13 @@ export const namespace = 'bj';
 
 const COLOR = 0x1abc9c;
 
-/** 卓を立ててチャンネルに投稿する。 */
-export async function openTable(ctx, { guildId, channelId, hostId, bet, settings }) {
+/**
+ * 卓を立ててチャンネルに投稿する。
+ *
+ * solo なら人を待たずにその場で配る。投稿されるメッセージが最初から
+ * 「あなたの番」の状態になるので、押すのはヒット／スタンドだけになる。
+ */
+export async function openTable(ctx, { guildId, channelId, hostId, bet, settings, solo = false }) {
   const id = crypto.randomUUID();
   await createTable(ctx.db, { id, guildId, channelId, hostId, bet });
 
@@ -50,10 +55,22 @@ export async function openTable(ctx, { guildId, channelId, hostId, bet, settings
   }
 
   const em = await ctx.emoji();
+  const first = solo
+    ? await dealSolo(ctx, id, settings, em)
+    : { payload: lobbyPayload(await getTable(ctx.db, id), joined.state, settings, em) };
+
   try {
-    const table = await getTable(ctx.db, id);
-    const message = await ctx.rest.createMessage(channelId, lobbyPayload(table, joined.state, settings, em));
+    const message = await ctx.rest.createMessage(channelId, first.payload);
     await setMessageId(ctx.db, id, message.id);
+    // 1人プレイで、配った時点で決着していたら結果まで見せる
+    if (first.after) {
+      ctx.waitUntil(
+        (async () => {
+          await new Promise((resolve) => setTimeout(resolve, 1200));
+          await ctx.rest.editMessage(channelId, message.id, first.after);
+        })(),
+      );
+    }
     return { ok: true, message };
   } catch (error) {
     console.error('ブラックジャックの卓の投稿に失敗:', error);
@@ -61,6 +78,32 @@ export async function openTable(ctx, { guildId, channelId, hostId, bet, settings
     await setStatus(ctx.db, id, 'cancelled');
     return { ok: false, reason: 'post' };
   }
+}
+
+/**
+ * 1人ぶんを配る。
+ * 最初の2枚で21だと自分の番が無いので、その場でディーラーまで進めて
+ * 結果まで作っておく（あとから差し替える）。
+ */
+async function dealSolo(ctx, id, settings, em) {
+  const dealt = await mutate(
+    ctx.db,
+    id,
+    ({ state }) => (state.players.length === 0 ? { reject: 'empty' } : { state: deal(state), status: 'playing' }),
+    { allow: ['joining'] },
+  );
+  if (!dealt.ok) return { payload: lobbyPayload(await getTable(ctx.db, id), stateOf(await getTable(ctx.db, id)), settings, em) };
+
+  if (dealt.state.turn >= 0) {
+    return { payload: tablePayload(dealt.table, dealt.state, settings, em) };
+  }
+
+  const played = playDealer(dealt.state);
+  const results = await settleTable(ctx.db, dealt.table, played);
+  return {
+    payload: tablePayload(dealt.table, dealt.state, settings, em, { hideDealer: true, frozen: true }),
+    after: results ? resultPayload(dealt.table, played, results, settings, em) : undefined,
+  };
 }
 
 export async function handleComponent(ix, ctx) {
@@ -294,13 +337,19 @@ function tablePayload(table, state, settings, em, { hideDealer = true, frozen = 
     return `${mark} <@${player.userId}>　${hand}　**${describeValue(player.cards)}**${doubled}`;
   });
 
+  // 手番の人の手札を content に置いて大きく見せる。
+  // ただし複数人の卓では、手番が回ったことを知らせるメンションのほうが大事なので
+  // そちらを優先する（文字が混ざるぶん、絵文字は通常の大きさになる）。
+  const hand = turnPlayer ? renderHand(em, turnPlayer.cards) : renderHand(em, state.dealer, { hideFrom: hideDealer ? 1 : null });
+  const needsPing = turnPlayer && state.players.length > 1;
+
   return {
-    // 手番の人の手札を content に置いて大きく見せる。まだ誰も居なければディーラーの場
-    content: turnPlayer ? renderHand(em, turnPlayer.cards) : renderHand(em, state.dealer, { hideFrom: hideDealer ? 1 : null }),
+    content: needsPing ? `<@${turnPlayer.userId}> ${hand}` : hand,
     embeds: [
       embed({
+        // embed の見出しではメンションが素の文字列で出てしまうので、名前は入れない
         color: COLOR,
-        title: turnPlayer ? `▶️ <@${turnPlayer.userId}> の番　${describeValue(turnPlayer.cards)}` : 'ディーラーの番です…',
+        title: turnPlayer ? `▶️ 手番　${describeValue(turnPlayer.cards)}` : 'ディーラーの番です…',
         description:
           `**ディーラー**　${renderHand(em, state.dealer, { hideFrom: hideDealer ? 1 : null })}　` +
           `${hideDealer ? '**?**' : `**${describeValue(state.dealer)}**`}\n\n` +
