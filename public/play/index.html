@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#08131f">
+<link rel="icon" href="data:,">
+<title>夕凪島</title>
+<style>
+  :root {
+    --abyss:#08131F; --deep:#0F2739; --line:#24546B; --line-soft:#1A3D52;
+    --ink:#F1E6D2; --ink-dim:#A9BDC6; --ink-faint:#6E8A97;
+    --sun:#F2A65A; --dusk:#C96F81; --lagoon:#35B0A8; --danger:#E8837E;
+  }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body {
+    margin:0; height:100%; overflow:hidden; background:var(--abyss); color:var(--ink);
+    font-family:"Hiragino Kaku Gothic ProN","Noto Sans JP",system-ui,sans-serif;
+    font-size:15px; user-select:none; overscroll-behavior:none;
+  }
+  #stage { position:fixed; inset:0; display:grid; place-items:center; }
+  #screen { position:relative; }
+  canvas { display:block; image-rendering:pixelated; background:#0E2A3C; }
+
+  /* --- 画面の上に重ねる UI。Bot のメニューに寄せた見た目 --- */
+  .hud { position:absolute; display:flex; gap:.5rem; align-items:center; pointer-events:none; }
+  #topLeft  { left:2%; top:3%; }
+  #topRight { right:2%; top:3%; }
+  .chip {
+    background:rgba(8,19,31,.82); border:1px solid var(--line); color:var(--ink);
+    padding:.35em .7em; font-size:clamp(11px,1.5vh,15px); letter-spacing:.03em;
+    font-variant-numeric:tabular-nums; white-space:nowrap;
+  }
+  .chip b { color:var(--sun); font-weight:700; }
+  .chip.warn { border-color:var(--danger); color:var(--danger); }
+
+  #act {
+    position:absolute; right:2%; bottom:5%; pointer-events:auto;
+    background:var(--sun); color:#12101C; border:2px solid #12101C;
+    font:700 clamp(13px,2.2vh,20px)/1 inherit; letter-spacing:.06em;
+    padding:.85em 1.6em; cursor:pointer; touch-action:none;
+  }
+  #act:disabled { background:var(--line-soft); color:var(--ink-faint); border-color:var(--abyss); cursor:default; }
+  #act.hold { background:var(--dusk); transform:translateY(2px); }
+
+  #hint {
+    position:absolute; left:0; right:0; bottom:1%; text-align:center;
+    color:var(--ink-dim); font-size:clamp(10px,1.5vh,13px); pointer-events:none;
+    text-shadow:0 1px 2px rgba(8,19,31,.9);
+  }
+
+  /* --- 中央に出すお知らせ（釣果・エラー） --- */
+  #card {
+    position:absolute; left:50%; top:34%; transform:translate(-50%,-50%);
+    min-width:min(78vw,340px); max-width:88vw;
+    background:rgba(8,19,31,.94); border:2px solid var(--line);
+    padding:1.1em 1.3em; text-align:center; display:none;
+  }
+  #card.show { display:block; }
+  #card.n  { border-color:#9AA7B2; }
+  #card.r  { border-color:var(--lagoon); }
+  #card.sr { border-color:var(--sun); box-shadow:0 0 0 4px rgba(242,166,90,.18); }
+  #card .kind { font-size:clamp(10px,1.4vh,12px); letter-spacing:.18em; color:var(--ink-faint); }
+  #card .name { font-size:clamp(18px,3.2vh,30px); font-weight:800; margin:.25em 0 .1em; }
+  #card .meta { font-size:clamp(11px,1.7vh,15px); color:var(--ink-dim); }
+  #card .miss { color:var(--danger); font-weight:700; }
+
+  #boot {
+    position:fixed; inset:0; display:grid; place-items:center; background:var(--abyss);
+    color:var(--ink-dim); font-size:14px; text-align:center; padding:2rem; line-height:2;
+  }
+  #boot a { color:var(--lagoon); }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <div id="screen">
+      <canvas id="cv" width="1280" height="720"></canvas>
+      <div class="hud" id="topLeft">
+        <span class="chip" id="baitChip">🪱 <b>—</b></span>
+        <span class="chip" id="rodChip">—</span>
+      </div>
+      <div class="hud" id="topRight">
+        <span class="chip" id="statChip">—</span>
+      </div>
+      <button id="act" disabled>よみこみ中</button>
+      <div id="hint"></div>
+      <div id="card"></div>
+    </div>
+  </div>
+  <div id="boot">よみこみ中…</div>
+  <script src="./game.js"></script>
+</body>
+</html>

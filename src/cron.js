@@ -33,6 +33,7 @@ import {
 } from './lib/lottery.js';
 import { embed } from './discord/builders.js';
 import { EMOJI as em } from './lib/emoji.js';
+import { sweepSessions } from './lib/fishing-store.js';
 
 /** 定期処理の一覧。増えたらここに足す。 */
 export const STEPS = [
@@ -43,7 +44,13 @@ export const STEPS = [
   sweepPolls,
   postDueAnnouncements,
   drawLotteries,
+  sweepFishingSessions,
 ];
+
+/** 期限切れの釣りの合鍵を片付ける。 */
+async function sweepFishingSessions(ctx) {
+  await sweepSessions(ctx.db);
+}
 
 export async function runScheduled(ctx) {
   for (const step of STEPS) {

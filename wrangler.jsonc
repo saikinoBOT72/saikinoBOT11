@@ -15,6 +15,13 @@
       "migrations_dir": "migrations"
     }
   ],
+  // 釣りゲームの画面と画像。静的アセットは Worker を起こさずに配信されるので、
+  // ここに置いたものは Worker のリクエスト数（無料枠 10万/日）に数えられない。
+  // Discord の Interaction は POST / に来るので、public/ の直下には何も置かない。
+  "assets": {
+    "directory": "./public",
+    "not_found_handling": "none"
+  },
   "triggers": {
     // じゃんけんの時間切れ返金のために1分ごとに起こす
     "crons": ["* * * * *"]

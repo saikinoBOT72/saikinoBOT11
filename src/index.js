@@ -11,10 +11,19 @@ import { handleComponent as handleDuel } from './menu/duel-board.js';
 import { handleComponent as handleBlackjack } from './menu/blackjack-table.js';
 import { findCommand } from './commands.js';
 import { runScheduled } from './cron.js';
+import { handleFishingApi } from './game/api.js';
+
+const FISHING_API = '/api/fishing/';
 
 export default {
   /** Discord からの Interaction を受け取る入口。 */
   async fetch(request, env, executionCtx) {
+    // 釣りゲームからの呼び出し。Discord の署名確認より先に振り分ける。
+    const url = new URL(request.url);
+    if (url.pathname.startsWith(FISHING_API)) {
+      return handleFishingApi(request, url.pathname.slice(FISHING_API.length), createContext(env, executionCtx, url.origin));
+    }
+
     if (request.method === 'GET') {
       return new Response('saikinoBOT11 は動いています。', { headers: { 'content-type': 'text/plain; charset=utf-8' } });
     }
@@ -34,7 +43,7 @@ export default {
     if (raw.type === InteractionType.PING) return pong();
 
     const ix = new Ix(raw);
-    const ctx = createContext(env, executionCtx);
+    const ctx = createContext(env, executionCtx, url.origin);
 
     try {
       return await dispatch(ix, ctx);

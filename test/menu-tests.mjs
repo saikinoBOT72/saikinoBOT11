@@ -1612,6 +1612,9 @@ await test('サイコロとトランプが揃うと、ゲームの表示が入�
       items.push({ id: `2${suitIndex}${String(rankIndex).padStart(16, '0')}`, name: `${suit}_${rank}`, animated: false });
     }
   }
+  for (let id = 1; id <= 78; id++) {
+    items.push({ id: `3${String(id).padStart(17, '0')}`, name: `fish_${id}`, animated: false });
+  }
   ctx.applicationEmojis.items = items;
 
   const payload = await press('m:admin:emoji', { admin: true });
@@ -1927,13 +1930,14 @@ await test('削除後にまた遊ぶと初期残高から始まる', async () =>
 
 section('[ホーム画面の整理]');
 
-await test('ホームは6つのボタンだけ（ランキング・持ち物・使い方は置かない）', async () => {
+await test('ホームは7つのボタンだけ（ランキング・持ち物・使い方は置かない）', async () => {
   const payload = await press('m:home:open', { admin: true });
   const ids = customIds(payload);
   assert.deepEqual(ids, [
     'm:report:open',
     'm:games:open',
     'm:shop:open',
+    'm:fish:open',
     'm:wallet:open',
     'm:home:open',
     'm:admin:open',

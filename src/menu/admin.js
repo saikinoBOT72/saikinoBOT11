@@ -35,6 +35,7 @@ import {
   setChannel as setLotteryChannel,
   setEnabled as setLotteryEnabled,
 } from '../lib/lottery.js';
+import { FISH, fishSlot } from '../lib/fishing.js';
 import { SUIT_KEYS, cardSlot, diceSlot, saveCustomEmoji } from '../lib/emoji.js';
 import { METRICS, rankingTitle } from '../lib/ranking.js';
 import { ButtonStyle } from '../discord/constants.js';
@@ -1007,6 +1008,7 @@ function expectedEmojiNames() {
   for (const suit of SUIT_KEYS) {
     for (let rank = 1; rank <= 13; rank++) names.push(cardSlot(suit, rank));
   }
+  for (const fish of FISH) names.push(fishSlot(fish.id));
   return names;
 }
 
