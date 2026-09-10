@@ -99,6 +99,9 @@ export async function open(ix, _args, ctx, notice = null) {
       row(
         button(id('admin', 'lot'), '宝くじ', { emoji: '🎫' }),
         button(id('admin', 'emoji'), '絵文字を確認', { emoji: '😀' }),
+        button(id('fish', 'open'), '釣り（試運転中）', { emoji: '🎣' }),
+      ),
+      row(
         backButton(),
       ),
     ],

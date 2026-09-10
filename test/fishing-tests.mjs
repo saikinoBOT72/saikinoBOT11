@@ -18,7 +18,8 @@ const GUILD = 'g1';
 const ME = 'u1';
 
 async function press(customId, options = {}) {
-  const ix = new Ix(rawInteraction({ customId, ...options }));
+  // 釣りは管理者だけが開けるので、テストは管理者として押す
+  const ix = new Ix(rawInteraction({ customId, admin: true, ...options }));
   const response = await handleComponent(ix, ctx);
   await ctx.settle();
   return response.json();
@@ -221,10 +222,23 @@ await test('どの応答にも島の様子が相乗りしてくる（別途の�
 
 section('Discord の釣りメニュー');
 
-await test('ホームから釣りに入れる', async () => {
-  assert.ok(customIds(await press('m:home:open')).includes('m:fish:open'));
+await test('管理メニューから釣りに入れる', async () => {
+  assert.ok(customIds(await press('m:admin:open')).includes('m:fish:open'));
   const payload = await press('m:fish:open');
   assert.match(screenText(payload), /釣り/);
+});
+
+await test('管理者でなければ開けない', async () => {
+  const payload = await press('m:fish:open', { admin: false });
+  assert.match(screenText(payload), /試運転中/);
+});
+
+await test('どの画面にも同じ custom_id のボタンが2つ無い', async () => {
+  for (const screen of ['m:fish:open', 'm:fish:shop', 'm:fish:sell', 'm:fish:dex:0', 'm:fish:url']) {
+    const ids = customIds(await press(screen));
+    const duplicated = ids.filter((value, index) => ids.indexOf(value) !== index);
+    assert.deepEqual(duplicated, [], `${screen} が重複している: ${duplicated.join(', ')}`);
+  }
 });
 
 await test('置いてあるボタンがすべて実在の操作に届く', async () => {

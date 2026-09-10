@@ -39,7 +39,6 @@ export async function open(ix, _args, ctx, notice = null) {
         button(id('shop', 'open'), 'ショップ', { emoji: '🛍️', style: ButtonStyle.PRIMARY }),
       ),
       row(
-        button(id('fish', 'open'), '釣り', { emoji: '🎣', style: ButtonStyle.PRIMARY }),
         button(id('wallet', 'open'), 'お財布', { emoji: '💰' }),
         button(id('home', 'open'), '更新', { emoji: '🔄' }),
         ix.isAdmin ? button(id('admin', 'open'), '管理', { emoji: '⚙️', style: ButtonStyle.DANGER }) : null,
@@ -90,13 +89,6 @@ export async function help(ix, _args, ctx) {
             name: '🛍️ ショップ',
             value:
               '自分で値段を決めて出品できます。売れた代金はそのまま出品者に入ります。画像URLを設定すると一覧で見栄えがよくなります。',
-          },
-          {
-            name: '🎣 釣り',
-            value:
-              'ブラウザの島で釣りをします。「島へ行く」で自分専用のURLを出し、席に座って糸を垂らします。' +
-              '釣った魚はクーラーボックスに溜まり、**売って初めてコインになります**。' +
-              '餌は1回投げるごとに1つ必要です。図鑑は売っても残ります。',
           },
           { name: '💰 お財布', value: '所持金の確認、他のメンバーへの送金、増減の履歴が見られます。' },
         ],
