@@ -81,18 +81,20 @@
   #card {
     position:absolute; left:50%; top:34%; transform:translate(-50%,-50%);
     min-width:min(78vw,340px); max-width:88vw;
-    background:rgba(8,19,31,.94); border:2px solid var(--line);
+    background:#F0E2C6;                        /* 砂に寄せたベージュ */
+    color:#231B12; border:3px solid #12101C;
+    box-shadow:5px 5px 0 rgba(18,16,28,.45);
     padding:1.1em 1.3em; text-align:center; display:none;
   }
   #card.show { display:block; }
-  #card.n  { border-color:#9AA7B2; }
-  #card.r  { border-color:var(--lagoon); }
-  #card.sr { border-color:var(--sun); box-shadow:0 0 0 4px rgba(242,166,90,.18); }
-  #card .kind { font-size:clamp(10px,1.4vh,12px); letter-spacing:.18em; color:var(--ink-faint); }
-  #card .name { font-size:clamp(18px,3.2vh,30px); font-weight:800; margin:.25em 0 .1em; }
-  #card .meta { font-size:clamp(11px,1.7vh,15px); color:var(--ink-dim); }
-  #card .miss { color:var(--danger); font-weight:700; }
-  #card .pic { width:clamp(52px,9vh,84px); height:clamp(52px,9vh,84px); image-rendering:pixelated; }
+  #card.n  { border-color:#5E6C79; }
+  #card.r  { border-color:#1E6B7A; }
+  #card.sr { border-color:#C97A15; box-shadow:5px 5px 0 rgba(18,16,28,.45), 0 0 0 5px rgba(242,166,90,.35); }
+  #card .kind { font-size:clamp(10px,1.4vh,12px); letter-spacing:.18em; color:#7A6A55; font-weight:700; }
+  #card .name { font-size:clamp(20px,3.6vh,34px); font-weight:800; margin:.15em 0 .1em; color:#231B12; }
+  #card .meta { font-size:clamp(12px,1.8vh,16px); color:#4A3D2C; font-weight:600; }
+  #card .miss { color:#A8322B; font-weight:800; }
+  #card .pic { width:clamp(60px,11vh,104px); height:clamp(60px,11vh,104px); image-rendering:pixelated; }
 
   #boot {
     position:fixed; inset:0; display:grid; place-items:center; background:var(--abyss);

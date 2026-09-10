@@ -507,6 +507,7 @@ async function finish(landed, why = '') {
 /* ------------------------------------------------------------------ 操作 */
 
 function press() {
+  markActive();
   if (S.phase === 'ready') return doCast();
   if (S.phase === 'bite') return startFight();
   if (S.phase === 'fight') { S.holding = true; el.act.classList.add('hold'); }
@@ -537,8 +538,14 @@ addEventListener('keydown', (event) => {
 });
 addEventListener('keyup', (event) => { if (event.code === 'Space') release(); });
 
-/** 席をクリックして座る。 */
-cv.addEventListener('click', async (event) => {
+// iPhone は canvas を長押しすると虫めがね（選択カーソル）が出る。
+// touchstart を止めれば出なくなるが、ボタンの反応まで消さないよう
+// canvas にだけ効かせる。
+cv.addEventListener('touchstart', (event) => event.preventDefault(), { passive: false });
+
+/** 席を押して座る。touch でも動くよう pointerdown で拾う。 */
+cv.addEventListener('pointerdown', async (event) => {
+  markActive();
   if (S.phase !== 'sitting' || S.busy) return;
   // getBoundingClientRect は回転すると外接四角になって使えないので、
   // 要素そのものの座標系で来る offsetX/offsetY を使う。
@@ -564,17 +571,38 @@ cv.addEventListener('click', async (event) => {
 
 /**
  * 何もしていないときだけ、20秒に1回だけ様子を見る。
- * タブを見ていない間は止める（無料枠を無駄に食わないため）。
+ *
+ * 【無料枠を守るための決めごと】
+ * ・タブを見ていない間は止める
+ * ・3分さわらなければ完全に止める。ページを開きっぱなしで放置されても
+ *   リクエストは1件も飛ばない（さわればすぐ再開する）
+ * この2つが無いと、開きっぱなしの人が1人いるだけで
+ *   1日 4,300 リクエスト（20秒ごと × 24時間）を無言で使ってしまう。
  */
+const IDLE_STOP_MS = 3 * 60 * 1000;
+let lastActive = performance.now();
+
+function markActive() {
+  const wasIdle = performance.now() - lastActive > IDLE_STOP_MS;
+  lastActive = performance.now();
+  if (wasIdle) S.lastPing = 0;   // 戻ってきたらすぐ様子を見に行く
+}
+for (const type of ['pointerdown', 'keydown', 'touchstart']) {
+  addEventListener(type, markActive, { passive: true });
+}
+
 async function heartbeat() {
   if (document.hidden || S.busy) return;
+  if (performance.now() - lastActive > IDLE_STOP_MS) return;   // 放置中は黙る
   if (S.phase !== 'ready' && S.phase !== 'sitting' && S.phase !== 'waiting') return;
   if (performance.now() - S.lastPing < 20000) return;
   S.lastPing = performance.now();
   try { absorb(await call('ping')); } catch { /* つながらなくても釣りは続けられる */ }
 }
 setInterval(heartbeat, 5000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) S.lastPing = 0; });
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) { markActive(); S.lastPing = 0; }
+});
 
 /* ------------------------------------------------------------------ 起動 */
 

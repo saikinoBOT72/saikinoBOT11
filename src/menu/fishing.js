@@ -260,11 +260,12 @@ export async function dex(ix, [rawPage], ctx) {
   const page = Math.min(Math.max(Number(rawPage) || 0, 0), pages - 1);
   const slice = FISH.slice(page * PAGE, (page + 1) * PAGE);
 
+  // まだ釣っていない魚は絵文字も伏せる。中身が見えていると集める楽しみが無い。
   const lines = slice.map((fish) => {
     const seen = found.get(fish.id);
-    if (!seen) return `${fishEmoji(emoji, fish.id)} ???`;
+    if (!seen) return '⬛ ???';
     const best = actualSize(fish, seen.best_mul);
-    return `${fishEmoji(emoji, fish.id)} ${fish.name}　×${seen.count}　最大 ${best}cm（${sizeLabel(seen.best_mul)}）`;
+    return `${fishEmoji(emoji, fish.id)} **${fish.name}**　×${seen.count}　最大 ${best}cm（${sizeLabel(seen.best_mul)}）`;
   });
 
   const counts = { n: [0, 0], r: [0, 0], sr: [0, 0] };
