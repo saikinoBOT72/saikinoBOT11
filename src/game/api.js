@@ -17,6 +17,7 @@ import {
   priceOf, rollFish, rollSizeMultiplier, sizeLabel,
 } from '../lib/fishing.js';
 import * as store from '../lib/fishing-store.js';
+import { emojiId, loadEmoji } from '../lib/emoji.js';
 
 const SEATS = 3;
 /** あたりが出るまでの待ち時間（ミリ秒）。 */
@@ -60,6 +61,20 @@ export async function handleFishingApi(request, action, ctx) {
     case 'resolve': return resolve(session, body, ctx);
     case 'ping':    return ping(session, ctx);
     default:        return bad('知らない操作です。', 404);
+  }
+}
+
+/**
+ * Discord に上げてある魚の絵文字の ID。
+ * ブラウザからは cdn.discordapp.com/emojis/<id>.png で画像として出せるので、
+ * 図鑑用に描いた絵をそのままゲーム画面でも使える。
+ */
+async function fishEmojiId(fishId, ctx) {
+  try {
+    const emoji = await (ctx.emoji ? ctx.emoji() : loadEmoji(ctx.db));
+    return emojiId(emoji[`fish_${fishId}`]);
+  } catch {
+    return null;   // 取り込み前でも釣りは続けられる
   }
 }
 
@@ -203,6 +218,7 @@ async function resolve(session, body, ctx) {
       size: actualSize(fish, pending.sizeMul),
       sizeLabel: sizeLabel(pending.sizeMul),
       price: priceOf(fish, pending.sizeMul),
+      emoji: await fishEmojiId(fish.id, ctx),
     },
     island: await islandView(session, ctx),
     you: await playerView(session, ctx),

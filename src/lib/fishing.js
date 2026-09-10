@@ -146,12 +146,15 @@ export function rodRank(key) {
  * ・safe   安全な帯の広さ（0〜1 のうちどれだけ）
  * ・needed 取り込みに必要な進み（秒あたり 1 として何秒ぶんか）
  *
- * 数字は「ふつうに遊んだ人が、だいたい下の landRate に落ち着く」ように置いてある。
+ * 帯は狭く、引きは強く、必要な時間も長くしてあるので、遊ぶ側は手応えがある。
+ * ただし「気を抜かなければ landRate くらいは取れる」ところを狙っている
+ * （難しさは"操作の忙しさ"で出し、"取り逃がす率"では出さない）。
+ * landRate はお金の設計に直結するので、ここを動かすと稼ぎが変わる。
  */
 const FIGHT = {
-  n:  { pull: 0.85, ease: 0.62, safe: 0.52, needed: 3.2, landRate: 0.98 },
-  r:  { pull: 1.12, ease: 0.70, safe: 0.36, needed: 5.0, landRate: 0.90 },
-  sr: { pull: 1.45, ease: 0.78, safe: 0.26, needed: 7.0, landRate: 0.75 },
+  n:  { pull: 0.95, ease: 0.68, safe: 0.38, needed: 3.8, landRate: 0.98 },
+  r:  { pull: 1.30, ease: 0.80, safe: 0.25, needed: 6.0, landRate: 0.90 },
+  sr: { pull: 1.70, ease: 0.92, safe: 0.17, needed: 8.5, landRate: 0.75 },
 };
 
 /** 大きい個体ほど強い。size 倍率 0.5〜1.5 を 0.85〜1.15 の補正に落とす。 */
@@ -165,7 +168,7 @@ export function fightParams(fish, sizeMultiplier) {
   return {
     pull: round3(base.pull * boost),
     ease: round3(base.ease),
-    safe: round3(Math.max(0.16, base.safe / boost)),
+    safe: round3(Math.max(0.11, base.safe / boost)),
     needed: round3(base.needed * boost),
   };
 }

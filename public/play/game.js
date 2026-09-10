@@ -34,7 +34,10 @@ for (const tier of ['bamboo', 'glass', 'carbon', 'legend']) {
 
 const img = {};
 const cv = document.getElementById('cv');
-const g = cv.getContext('2d');
+const g = cv.getContext('2d', { alpha: false });
+// ドット絵を5倍に拡大して描くので、にじませる補間を切る。
+// これを入れ忘れるとキャラも竿もウキもぼやける。
+g.imageSmoothingEnabled = false;
 const el = {
   boot: document.getElementById('boot'),
   act: document.getElementById('act'),
@@ -94,7 +97,7 @@ function paintHud() {
   if (!S.you) return;
   const low = S.you.bait <= 0;
   el.bait.className = 'chip' + (low ? ' warn' : '');
-  el.bait.innerHTML = `🪱 <b>${S.you.bait}</b>`;
+  el.bait.innerHTML = `<img src="assets/bait.png" alt="餌"><b>${S.you.bait}</b>`;
   el.rod.textContent = S.you.rodName;
   el.stat.textContent = `${S.you.landed} 匹`;
 }
@@ -115,16 +118,26 @@ function setAction(label, enabled, hint = '') {
 
 /* ------------------------------------------------------------------ 描画 */
 
+/**
+ * 画面の大きさに合わせる。
+ * iOS の Safari では向きを固定できないので、縦に持っていたら
+ * 画面ごと90度回して横画面として使う。当たり判定は offsetX/offsetY で
+ * 取るため、回しても押した場所はずれない。
+ */
 function fit() {
-  const pad = 8;
-  const w = window.innerWidth - pad * 2;
-  const h = window.innerHeight - pad * 2;
-  const k = Math.min(w / 1280, h / 720);
+  const portrait = window.innerHeight > window.innerWidth;
+  const availW = (portrait ? window.innerHeight : window.innerWidth) - 10;
+  const availH = (portrait ? window.innerWidth : window.innerHeight) - 10;
+  const k = Math.min(availW / 1280, availH / 720);
+  const w = Math.round(1280 * k);
+  const h = Math.round(720 * k);
   const screen = document.getElementById('screen');
-  screen.style.width = `${Math.round(1280 * k)}px`;
-  screen.style.height = `${Math.round(720 * k)}px`;
-  cv.style.width = `${Math.round(1280 * k)}px`;
-  cv.style.height = `${Math.round(720 * k)}px`;
+  screen.style.width = `${w}px`;
+  screen.style.height = `${h}px`;
+  screen.style.transform = `translate(-50%, -50%)${portrait ? ' rotate(90deg)' : ''}`;
+  cv.style.width = `${w}px`;
+  cv.style.height = `${h}px`;
+  g.imageSmoothingEnabled = false;   // 大きさを変えると戻ることがある
 }
 
 /** ドット絵を SCALE 倍で、左上ではなく「足元の中心」を指定して置く。 */
@@ -279,59 +292,66 @@ function drawSeatMarks(now) {
   }
 }
 
-/** 取り込み中のゲージ。上が張りすぎ、下がゆるみすぎ。 */
-function drawFight() {
-  const x = 1090, y = 168, w = 44, h = 360;
-  g.fillStyle = 'rgba(8,19,31,.88)';
-  g.fillRect(x - 46, y - 36, w + 92, h + 52);
-  g.strokeStyle = '#24546B'; g.lineWidth = 2;
-  g.strokeRect(x - 46, y - 36, w + 92, h + 52);
+/**
+ * 取り込み中のゲージ。画面右のこれ1本だけ。
+ *
+ * どれだけ引き寄せたかは「わざと見せない」。かわりに、
+ * 糸が切れそうになるほど枠が赤くなって震える。
+ * 数字ではなく手応えで危なさを伝える。
+ */
+function drawFight(now) {
+  const f = S.cast.fight;
+  const danger = Math.min(1, S.slip / 3);          // 0=安全 1=切れる寸前
 
-  g.fillStyle = '#A9BDC6';
-  g.font = '600 16px "Hiragino Kaku Gothic ProN", sans-serif';
+  // 危ないほど大きく震える
+  const shake = danger > 0.12 ? danger * 7 : 0;
+  const sx = shake ? (Math.random() - 0.5) * shake : 0;
+  const sy = shake ? (Math.random() - 0.5) * shake : 0;
+
+  const w = 54, h = 420;
+  const x = 1150 + sx, y = 150 + sy;
+  const padX = 26, padY = 34;
+
+  // 枠。危ないほど赤く濃くなる
+  const heat = danger * danger;                     // じわっと来て最後に一気に
+  g.fillStyle = `rgba(${Math.round(8 + 180 * heat)},${Math.round(19 + 20 * heat)},${Math.round(31 + 26 * heat)},${0.86 + 0.1 * heat})`;
+  g.fillRect(x - padX, y - padY, w + padX * 2, h + padY * 2);
+  g.lineWidth = 2 + 3 * heat;
+  g.strokeStyle = danger < 0.05
+    ? '#24546B'
+    : `rgb(${Math.round(36 + 196 * heat)},${Math.round(84 - 53 * heat)},${Math.round(107 - 81 * heat)})`;
+  g.strokeRect(x - padX, y - padY, w + padX * 2, h + padY * 2);
+
   g.textAlign = 'center';
-  g.fillText('テンション', x + w / 2, y - 14);
+  g.font = '600 17px "Hiragino Kaku Gothic ProN", sans-serif';
+  g.fillStyle = danger > 0.55 ? '#FFD2CE' : '#A9BDC6';
+  g.fillText(danger > 0.55 ? '切れる！' : 'テンション', x + w / 2, y - 13);
 
   // 目盛りの土台
   g.fillStyle = '#0E2A3C';
   g.fillRect(x, y, w, h);
 
-  // 安全な帯（ここに針を合わせ続ける）
-  const half = S.cast.fight.safe / 2;
+  // 安全な帯。ここに針を合わせ続ける
+  const half = f.safe / 2;
   const lo = Math.max(0, S.band - half), hi = Math.min(1, S.band + half);
-  g.fillStyle = 'rgba(53,176,168,.55)';
+  g.fillStyle = danger > 0.5 ? 'rgba(232,131,126,.5)' : 'rgba(53,176,168,.55)';
   g.fillRect(x, y + (1 - hi) * h, w, (hi - lo) * h);
 
-  // 危険域
-  g.fillStyle = 'rgba(232,131,126,.22)';
-  g.fillRect(x, y, w, h * 0.1);
-  g.fillRect(x, y + h * 0.9, w, h * 0.1);
+  // 上下の端は張りすぎ・ゆるみすぎ
+  g.fillStyle = 'rgba(232,131,126,.2)';
+  g.fillRect(x, y, w, h * 0.08);
+  g.fillRect(x, y + h * 0.92, w, h * 0.08);
 
   // いまのテンション
   const ty = y + (1 - S.tension) * h;
   const inBand = S.tension >= lo && S.tension <= hi;
-  g.fillStyle = inBand ? '#F2A65A' : '#E8837E';
-  g.fillRect(x - 6, ty - 4, w + 12, 8);
+  g.fillStyle = inBand ? '#F2A65A' : '#E8443A';
+  g.fillRect(x - 7, ty - 5, w + 14, 10);
+  g.fillStyle = '#12101C';
+  g.fillRect(x - 7, ty - 5, w + 14, 2);
 
   g.strokeStyle = '#12101C'; g.lineWidth = 2;
   g.strokeRect(x, y, w, h);
-
-  // 取り込みの進み
-  const pw = 300, px = 1280 / 2 - pw / 2, py = 640;
-  g.fillStyle = 'rgba(8,19,31,.85)';
-  g.fillRect(px - 8, py - 8, pw + 16, 40);
-  g.fillStyle = '#0E2A3C';
-  g.fillRect(px, py, pw, 24);
-  g.fillStyle = '#35B0A8';
-  g.fillRect(px, py, pw * Math.min(1, S.progress / S.cast.fight.needed), 24);
-  g.strokeStyle = '#12101C'; g.lineWidth = 2;
-  g.strokeRect(px, py, pw, 24);
-
-  // バラしそうな度合い
-  if (S.slip > 0.15) {
-    g.fillStyle = 'rgba(232,131,126,.9)';
-    g.fillRect(px, py + 28, pw * Math.min(1, S.slip / 3), 6);
-  }
 }
 
 function render(now) {
@@ -356,7 +376,7 @@ function render(now) {
     if (self && S.phase === 'bite') drawAlert(now, person.seat);
   }
 
-  if (S.phase === 'fight' && S.cast) drawFight();
+  if (S.phase === 'fight' && S.cast) drawFight(now);
   requestAnimationFrame(render);
 }
 
@@ -426,8 +446,8 @@ function tick() {
   const f = S.cast.fight;
 
   // 魚が暴れて帯が動く。レアで大きいほど速い。
-  S.bandV += (Math.random() - 0.5) * f.pull * dt * 5;
-  S.bandV *= 0.94;
+  S.bandV += (Math.random() - 0.5) * f.pull * dt * 7.5;
+  S.bandV *= 0.95;
   S.band += S.bandV * dt;
   if (S.band < 0.18) { S.band = 0.18; S.bandV = Math.abs(S.bandV); }
   if (S.band > 0.82) { S.band = 0.82; S.bandV = -Math.abs(S.bandV); }
@@ -460,8 +480,13 @@ async function finish(landed, why = '') {
     absorb(data);
     if (data.landed) {
       const kind = data.fish.rarity;
+      // 図鑑用に Discord へ上げた絵文字を、そのままここでも使う
+      const pic = data.fish.emoji
+        ? `<img class="pic" src="https://cdn.discordapp.com/emojis/${data.fish.emoji}.png?size=128" alt="">`
+        : '';
       showCard(
         `<div class="kind">${kind === 'sr' ? 'SUPER RARE' : kind === 'r' ? 'RARE' : 'NORMAL'}</div>
+         ${pic}
          <div class="name">${data.fish.name}</div>
          <div class="meta">${data.fish.size} cm（${data.fish.sizeLabel}）　${data.fish.price} コイン</div>`,
         kind,
@@ -490,6 +515,18 @@ function release() {
   if (S.phase === 'fight') { S.holding = false; el.act.classList.remove('hold'); }
 }
 
+// ダブルタップ拡大・ピンチ・長押しメニュー・ドラッグを止める
+for (const type of ['gesturestart', 'gesturechange', 'gestureend', 'contextmenu', 'dragstart']) {
+  addEventListener(type, (event) => event.preventDefault(), { passive: false });
+}
+addEventListener('touchmove', (event) => { if (event.touches.length > 1) event.preventDefault(); }, { passive: false });
+let lastTap = 0;
+addEventListener('touchend', (event) => {
+  const now = Date.now();
+  if (now - lastTap < 320) event.preventDefault();   // ダブルタップ拡大
+  lastTap = now;
+}, { passive: false });
+
 el.act.addEventListener('pointerdown', (event) => { event.preventDefault(); press(); });
 el.act.addEventListener('pointerup', release);
 el.act.addEventListener('pointercancel', release);
@@ -503,9 +540,10 @@ addEventListener('keyup', (event) => { if (event.code === 'Space') release(); })
 /** 席をクリックして座る。 */
 cv.addEventListener('click', async (event) => {
   if (S.phase !== 'sitting' || S.busy) return;
-  const rect = cv.getBoundingClientRect();
-  const x = (event.clientX - rect.left) * (1280 / rect.width);
-  const y = (event.clientY - rect.top) * (720 / rect.height);
+  // getBoundingClientRect は回転すると外接四角になって使えないので、
+  // 要素そのものの座標系で来る offsetX/offsetY を使う。
+  const x = event.offsetX * (1280 / cv.offsetWidth);
+  const y = event.offsetY * (720 / cv.offsetHeight);
   const seat = SEAT_X.findIndex((sx) => Math.abs(x - sx) < 60 && y > SEAT_Y - 120 && y < SEAT_Y + 30);
   if (seat < 0) return;
   S.busy = true;

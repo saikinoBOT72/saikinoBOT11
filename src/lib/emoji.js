@@ -157,6 +157,15 @@ export async function loadEmoji(db) {
   return merged;
 }
 
+/**
+ * `<:name:12345>` から数字だけを取り出す。
+ * ブラウザ側では cdn.discordapp.com/emojis/<id>.png として画像で出せる。
+ */
+export function emojiId(code) {
+  const found = /^<a?:[^:]+:(\d+)>$/.exec(code ?? '');
+  return found ? found[1] : null;
+}
+
 /** サイコロの目6つ。1が添字1になるよう、先頭は空にしてある。 */
 export function diceFaces(emoji = EMOJI) {
   return ['', 1, 2, 3, 4, 5, 6].map((value, index) => (index === 0 ? '' : emoji[diceSlot(value)] ?? EMOJI[diceSlot(value)]));

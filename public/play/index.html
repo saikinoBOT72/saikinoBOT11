@@ -2,8 +2,13 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<!-- ズーム禁止・切り欠きまで使う・ホーム画面から開いたときは全画面 -->
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#08131f">
+<meta name="format-detection" content="telephone=no">
 <link rel="icon" href="data:,">
 <title>夕凪島</title>
 <style>
@@ -12,15 +17,36 @@
     --ink:#F1E6D2; --ink-dim:#A9BDC6; --ink-faint:#6E8A97;
     --sun:#F2A65A; --dusk:#C96F81; --lagoon:#35B0A8; --danger:#E8837E;
   }
-  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-  html, body {
-    margin:0; height:100%; overflow:hidden; background:var(--abyss); color:var(--ink);
-    font-family:"Hiragino Kaku Gothic ProN","Noto Sans JP",system-ui,sans-serif;
-    font-size:15px; user-select:none; overscroll-behavior:none;
+
+  /* --- スマホで邪魔になるブラウザの挙動をまとめて止める --- */
+  * {
+    box-sizing:border-box;
+    -webkit-tap-highlight-color:transparent;   /* タップ時の青い影 */
+    -webkit-touch-callout:none;                /* 長押しの保存メニュー */
+    -webkit-user-select:none; user-select:none;/* 長押しの文字選択 */
+    -webkit-user-drag:none;                    /* 画像のドラッグ */
+    touch-action:none;                         /* ダブルタップ拡大・ピンチ */
   }
-  #stage { position:fixed; inset:0; display:grid; place-items:center; }
-  #screen { position:relative; }
-  canvas { display:block; image-rendering:pixelated; background:#0E2A3C; }
+  html, body {
+    margin:0; padding:0; width:100%; height:100%;
+    position:fixed; inset:0;                   /* 端のバウンドを止める */
+    overflow:hidden; overscroll-behavior:none;
+    background:var(--abyss); color:var(--ink);
+    font-family:"Hiragino Kaku Gothic ProN","Noto Sans JP",system-ui,sans-serif;
+    font-size:15px;
+  }
+  ::-webkit-scrollbar { width:0; height:0; display:none; }
+  html { scrollbar-width:none; -ms-overflow-style:none; }
+  img { -webkit-user-drag:none; pointer-events:none; }
+
+  #stage { position:fixed; inset:0; }
+  /* 回したときも中心に来るよう、中央に置いてから transform でずらす */
+  #screen { position:absolute; left:50%; top:50%; transform-origin:center center; }
+  canvas {
+    display:block;
+    image-rendering:pixelated; image-rendering:crisp-edges;
+    background:#0E2A3C;
+  }
 
   /* --- 画面の上に重ねる UI。Bot のメニューに寄せた見た目 --- */
   .hud { position:absolute; display:flex; gap:.5rem; align-items:center; pointer-events:none; }
@@ -30,15 +56,17 @@
     background:rgba(8,19,31,.82); border:1px solid var(--line); color:var(--ink);
     padding:.35em .7em; font-size:clamp(11px,1.5vh,15px); letter-spacing:.03em;
     font-variant-numeric:tabular-nums; white-space:nowrap;
+    display:flex; align-items:center; gap:.4em;
   }
   .chip b { color:var(--sun); font-weight:700; }
   .chip.warn { border-color:var(--danger); color:var(--danger); }
+  .chip img { width:1.15em; height:1.15em; image-rendering:pixelated; }
 
   #act {
     position:absolute; right:2%; bottom:5%; pointer-events:auto;
     background:var(--sun); color:#12101C; border:2px solid #12101C;
     font:700 clamp(13px,2.2vh,20px)/1 inherit; letter-spacing:.06em;
-    padding:.85em 1.6em; cursor:pointer; touch-action:none;
+    padding:.85em 1.6em; cursor:pointer;
   }
   #act:disabled { background:var(--line-soft); color:var(--ink-faint); border-color:var(--abyss); cursor:default; }
   #act.hold { background:var(--dusk); transform:translateY(2px); }
@@ -64,12 +92,12 @@
   #card .name { font-size:clamp(18px,3.2vh,30px); font-weight:800; margin:.25em 0 .1em; }
   #card .meta { font-size:clamp(11px,1.7vh,15px); color:var(--ink-dim); }
   #card .miss { color:var(--danger); font-weight:700; }
+  #card .pic { width:clamp(52px,9vh,84px); height:clamp(52px,9vh,84px); image-rendering:pixelated; }
 
   #boot {
     position:fixed; inset:0; display:grid; place-items:center; background:var(--abyss);
-    color:var(--ink-dim); font-size:14px; text-align:center; padding:2rem; line-height:2;
+    color:var(--ink-dim); font-size:14px; text-align:center; padding:2rem; line-height:2; z-index:10;
   }
-  #boot a { color:var(--lagoon); }
 </style>
 </head>
 <body>
