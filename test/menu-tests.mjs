@@ -1930,18 +1930,42 @@ await test('削除後にまた遊ぶと初期残高から始まる', async () =>
 
 section('[ホーム画面の整理]');
 
-await test('ホームは7つのボタンだけ（ランキング・持ち物・使い方は置かない）', async () => {
+await test('ホームは6つのボタンだけ（ランキング・持ち物・使い方は置かない）', async () => {
   const payload = await press('m:home:open', { admin: true });
   const ids = customIds(payload);
   assert.deepEqual(ids, [
     'm:report:open',
     'm:games:open',
     'm:shop:open',
-    'm:fish:open',
     'm:wallet:open',
     'm:home:open',
     'm:admin:open',
   ]);
+});
+
+// Discord は同じメッセージの中に同じ custom_id のボタンが2つあると、
+// エラーも返さずメッセージごと拒否する（画面が「応答しませんでした」になる）。
+// 静かに壊れるので、主要な画面を機械的に見張る。
+await test('どの画面にも同じ custom_id のボタンが2つ無い', async () => {
+  const screensToCheck = [
+    'm:home:open', 'm:home:help', 'm:report:open', 'm:games:open', 'm:shop:open',
+    'm:wallet:open', 'm:wallet:rank', 'm:titles:open', 'm:privacy:open',
+    'm:admin:open', 'm:admin:acts', 'm:admin:streak', 'm:admin:ach', 'm:admin:ann',
+    'm:admin:lot', 'm:admin:emoji', 'm:lot:open', 'm:hl:open', 'm:doors:open',
+    'm:poll:open', 'm:fish:open', 'm:fish:shop', 'm:fish:dex:0', 'm:fish:url',
+  ];
+  for (const screen of screensToCheck) {
+    const ids = customIds(await press(screen, { admin: true }));
+    const duplicated = ids.filter((value, index) => ids.indexOf(value) !== index);
+    assert.deepEqual(duplicated, [], `${screen} に同じ custom_id が2つある: ${duplicated.join(', ')}`);
+  }
+});
+
+await test('釣りは管理メニューからだけ開ける', async () => {
+  assert.ok(customIds(await press('m:admin:open', { admin: true })).includes('m:fish:open'), '管理メニューに置く');
+  assert.ok(!customIds(await press('m:home:open')).includes('m:fish:open'), 'ホームには置かない');
+  const denied = await press('m:fish:open', { admin: false });
+  assert.match(screenText(denied), /試運転中/, '管理者以外は入れない');
 });
 
 await test('ランキングはお財布、持ち物はショップから開ける', async () => {
