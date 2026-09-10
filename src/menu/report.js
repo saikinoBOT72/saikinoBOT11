@@ -5,7 +5,6 @@ import { describeDayStart } from '../lib/calendar.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { stringSelect } from '../discord/builders.js';
 import { backButton, button, embed, homeButton, id, row, show, withNotice } from './common.js';
-import { announceReport } from './report-panel.js';
 
 export async function open(ix, _args, ctx, notice = null) {
   const settings = await ctx.settings(ix.guildId);
@@ -88,22 +87,17 @@ export async function pick(ix, _args, ctx) {
   });
   if (!result.ok) return open(ix, [], ctx, result.message);
 
-  // 報告パネルのあるチャンネルなら、流したあとパネルを下に貼り直す
-  announceReport(ctx, {
-    guildId: ix.guildId,
-    channelId: ix.channelId,
-    payload: {
-      embeds: [
-        reportEmbed({
-          user: ix.user,
-          displayName: ix.displayName,
-          avatarUrl: ix.avatar,
-          activity,
-          result,
-          settings,
-        }),
-      ],
-    },
+  ctx.announce(ix.channelId, {
+    embeds: [
+      reportEmbed({
+        user: ix.user,
+        displayName: ix.displayName,
+        avatarUrl: ix.avatar,
+        activity,
+        result,
+        settings,
+      }),
+    ],
   });
 
   return show(ix, {

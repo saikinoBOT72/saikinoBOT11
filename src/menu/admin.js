@@ -17,7 +17,7 @@ import {
 import { adjust, getBalance, ledgerFor, setBalance, updateSettings } from '../lib/economy.js';
 import { coins, duration, truncate } from '../lib/format.js';
 import { channelSelect, modal, stringSelect, textInput, userSelect } from '../discord/builders.js';
-import { getPanel, panelPayload, rememberPanel } from './report-panel.js';
+import { panelPayload } from './report-panel.js';
 import { disabledSet, disabledText, GAME_BY_KEY, GAMES } from '../lib/game-catalog.js';
 import {
   WEEKDAYS,
@@ -897,9 +897,8 @@ export async function panel(ix, _args, ctx) {
         description:
           'アクションのボタンを並べたメッセージを、選んだチャンネルに置きます。\n' +
           'メンバーはボタンを押すだけで報告できます（結果は押した本人にだけ見えます）。\n\n' +
-          '**報告が流れても、パネルは自動でいちばん下に移動します。**\n' +
-          'アクションを増やしたときも次の報告で中身が新しくなります。\n' +
-          '置き直すと前のパネルは片付けます。',
+          '**このメッセージは消さない限りずっと残ります。** 貼り直すと古いものも押せますが、\n' +
+          'アクションを増やしたら貼り直したほうが分かりやすくなります。',
       }),
     ],
     components: [channelSelect(id('admin', 'panelch'), 'パネルを置くチャンネルを選ぶ'), row(backButton('admin', 'やめる'))],
@@ -912,24 +911,11 @@ export async function panelch(ix, _args, ctx) {
   const payload = await panelPayload(ctx, ix.guildId);
   if (payload.error) return open(ix, [], ctx, payload.error);
 
-  const previous = await getPanel(ctx.db, ix.guildId);
-
-  let message;
   try {
-    message = await ctx.rest.createMessage(channelId, payload);
+    await ctx.rest.createMessage(channelId, payload);
   } catch (error) {
     console.error('報告パネルを置けませんでした:', error);
     return open(ix, [], ctx, `<#${channelId}> に投稿できませんでした。Bot がそのチャンネルに書き込めるか確認してください。`);
-  }
-  await rememberPanel(ctx.db, ix.guildId, channelId, message.id);
-
-  // 前のパネルは片付ける。2枚あると、報告のたびに下に来るのは新しいほうだけで紛らわしい
-  if (previous?.message_id) {
-    ctx.waitUntil(
-      ctx.rest.deleteMessage(previous.channel_id, previous.message_id).catch(() => {
-        // すでに手で消されていることもある。消せなくても困らない
-      }),
-    );
   }
   return open(ix, [], ctx, `<#${channelId}> に報告パネルを置きました。`);
 }

@@ -26,10 +26,6 @@ export function createRest(token) {
     editMessage(channelId, messageId, payload) {
       return call('PATCH', `/channels/${channelId}/messages/${messageId}`, payload);
     },
-    /** メッセージを消す（報告パネルを下に貼り直すときに使う）。 */
-    deleteMessage(channelId, messageId) {
-      return call('DELETE', `/channels/${channelId}/messages/${messageId}`);
-    },
     /**
      * 返事として出したメッセージを後から書き換える。
      * 「回転中…」→「結果」のような演出に使う（トークンは15分間有効）。

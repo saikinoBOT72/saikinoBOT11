@@ -2378,64 +2378,6 @@ await test('名前に : が入っていても正しく引ける', async () => {
   assert.match(screenText(response), /朝:散歩 を報告しました/);
 });
 
-await test('報告が流れたあと、パネルは消されて下に貼り直される', async () => {
-  // パネルを置いた場所を覚えているところから始める
-  const placed = await press('m:admin:panelch', { admin: true, values: ['ch-sticky'] });
-  assert.match(screenText(placed), /報告パネルを置きました/);
-  assert.equal(ctx.sent.at(-1).channelId, 'ch-sticky', 'パネルが ch-sticky に置かれている');
-
-  const remembered = await reportPanel.getPanel(db, GUILD);
-  assert.equal(remembered.channel_id, 'ch-sticky');
-  assert.ok(remembered.message_id, 'どのメッセージがパネルかを覚えている');
-
-  const activities = await act.listActivities(db, GUILD);
-  const target = activities[0];
-  const sentBefore = ctx.sent.length;
-  const deletedBefore = ctx.deleted.length;
-
-  await pressPanel(`rp:do:${target.name}`, { userId: 'u-sticky', channelId: 'ch-sticky' });
-
-  // 報告1件 ＋ 貼り直したパネル1件
-  assert.equal(ctx.sent.length, sentBefore + 2, '報告と新しいパネルの2件が流れる');
-  const [announced, restuck] = ctx.sent.slice(-2);
-  assert.equal(announced.channelId, 'ch-sticky');
-  assert.ok(restuck.payload.components?.length > 0, 'あとから来るほうがパネル（ボタン付き）');
-
-  // 古いパネルは片付ける
-  assert.equal(ctx.deleted.length, deletedBefore + 1, '古いパネルを1件消す');
-  assert.equal(ctx.deleted.at(-1).messageId, remembered.message_id);
-
-  // 覚えている message_id も新しいものに入れ替わっている
-  const after = await reportPanel.getPanel(db, GUILD);
-  assert.notEqual(after.message_id, remembered.message_id);
-  assert.equal(after.channel_id, 'ch-sticky');
-});
-
-await test('パネルの無いチャンネルでは貼り直しの通信をしない', async () => {
-  const activities = await act.listActivities(db, GUILD);
-  const target = activities[0];
-  const sentBefore = ctx.sent.length;
-  const deletedBefore = ctx.deleted.length;
-
-  await pressPanel(`rp:do:${target.name}`, { userId: 'u-other-ch', channelId: 'ch-zatsudan' });
-
-  assert.equal(ctx.sent.length, sentBefore + 1, '報告の1件だけ');
-  assert.equal(ctx.deleted.length, deletedBefore, '何も消さない');
-});
-
-await test('置き直すと前のパネルは片付けられる', async () => {
-  const before = await reportPanel.getPanel(db, GUILD);
-  const deletedBefore = ctx.deleted.length;
-
-  await press('m:admin:panelch', { admin: true, values: ['ch-sticky2'] });
-  await ctx.settle();
-
-  assert.equal(ctx.deleted.length, deletedBefore + 1, '前のパネルを消す');
-  assert.equal(ctx.deleted.at(-1).messageId, before.message_id);
-  const after = await reportPanel.getPanel(db, GUILD);
-  assert.equal(after.channel_id, 'ch-sticky2');
-});
-
 section('[ゲームのオンオフ]');
 
 await test('管理メニューからゲームのオンオフに行ける', async () => {
