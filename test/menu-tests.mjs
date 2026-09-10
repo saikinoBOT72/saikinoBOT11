@@ -2261,5 +2261,79 @@ await test('停止・再開・削除ができる', async () => {
   assert.equal(await annLib.getAnnouncement(db, GUILD, target.id), null);
 });
 
+section('[報告パネル]');
+
+const reportPanel = await import(src('menu/report-panel.js'));
+
+async function pressPanel(customId, options = {}) {
+  const ix = new Ix(rawInteraction({ customId, ...options }));
+  const response = await reportPanel.handleComponent(ix, ctx);
+  await ctx.settle();
+  return response.json();
+}
+
+await test('管理メニューからチャンネルを選んでパネルを置ける', async () => {
+  assert.ok(customIds(await press('m:admin:open', { admin: true })).includes('m:admin:panel'));
+  const picker = await press('m:admin:panel', { admin: true });
+  assert.match(screenText(picker), /報告パネル/);
+
+  const before = ctx.sent.length;
+  const done = await press('m:admin:panelch', { admin: true, values: ['ch-report'] });
+  assert.match(screenText(done), /報告パネルを置きました/);
+  assert.equal(ctx.sent.length, before + 1, 'チャンネルに1件だけ投稿する');
+
+  const posted = ctx.sent.at(-1);
+  assert.equal(posted.channelId, 'ch-report');
+  assert.ok(posted.payload.components.length > 0, 'ボタンが並んでいる');
+  for (const line of posted.payload.components) {
+    for (const item of line.components) assert.match(item.custom_id, /^rp:do:/);
+  }
+});
+
+await test('管理者でなければ置けない', async () => {
+  const denied = await press('m:admin:panelch', { admin: false, values: ['ch-report'] });
+  assert.doesNotMatch(screenText(denied), /報告パネルを置きました/);
+});
+
+await test('パネルのボタンを押すと報告できて、パネルは書き換わらない', async () => {
+  const activities = await act.listActivities(db, GUILD);
+  const target = activities[0];
+  const before = await eco.getBalance(db, GUILD, ME);
+
+  const response = await pressPanel(`rp:do:${target.name}`, { userId: ME });
+  // type 4 = 新しいメッセージ（本人にだけ見える）。7 だと押したパネルを書き換えてしまう
+  assert.equal(response.type, 4, 'パネルを書き換えず、本人にだけ返す');
+  assert.ok((response.data.flags & 64) === 64, '本人にだけ見える');
+  assert.match(screenText(response), new RegExp(target.name));
+  assert.ok((await eco.getBalance(db, GUILD, ME)) > before, '報酬が入る');
+});
+
+await test('休憩中に押すと理由が本人にだけ返る', async () => {
+  const activities = await act.listActivities(db, GUILD);
+  const target = activities.find((activity) => activity.cooldown_sec > 0) ?? activities[0];
+  await pressPanel(`rp:do:${target.name}`, { userId: 'u-cooldown' });
+  const again = await pressPanel(`rp:do:${target.name}`, { userId: 'u-cooldown' });
+  assert.equal(again.type, 4);
+  assert.ok((again.data.flags & 64) === 64);
+});
+
+await test('消えたアクションのボタンでも壊れない', async () => {
+  const response = await pressPanel('rp:do:もう無いアクション', { userId: ME });
+  assert.match(screenText(response), /貼り直し/);
+});
+
+await test('名前に : が入っていても正しく引ける', async () => {
+  await act.upsertActivity(db, GUILD, {
+    name: '朝:散歩',
+    emoji: '🚶',
+    reward: 10,
+    cooldownSec: 0,
+    dailyLimit: 0,
+    description: null,
+  });
+  const response = await pressPanel('rp:do:朝:散歩', { userId: 'u-colon' });
+  assert.match(screenText(response), /朝:散歩 を報告しました/);
+});
+
 runner.done();
 db.close();

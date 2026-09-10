@@ -370,8 +370,9 @@ function resultPayload(table, state, results, settings, em, headline = null) {
         : `🏆 ${winners}人がディーラーに勝った`;
 
   return {
-    // ディーラーの手を content に置いて大きく見せる
-    content: renderHand(em, state.dealer),
+    // 決着したあとは、誰がいくら勝ったかを読ませたい。
+    // ディーラーの手を大きく出すと、そちらに目が行って邪魔になる。
+    content: '',
     embeds: [
       embed({
         color: 0xf1c40f,

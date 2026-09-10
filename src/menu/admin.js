@@ -17,6 +17,7 @@ import {
 import { adjust, getBalance, ledgerFor, setBalance, updateSettings } from '../lib/economy.js';
 import { coins, duration, truncate } from '../lib/format.js';
 import { channelSelect, modal, stringSelect, textInput, userSelect } from '../discord/builders.js';
+import { panelPayload } from './report-panel.js';
 import {
   WEEKDAYS,
   createAnnouncement,
@@ -102,6 +103,7 @@ export async function open(ix, _args, ctx, notice = null) {
         button(id('fish', 'open'), '釣り（試運転中）', { emoji: '🎣' }),
       ),
       row(
+        button(id('admin', 'panel'), '報告パネルを置く', { emoji: '📌', style: ButtonStyle.PRIMARY }),
         backButton(),
       ),
     ],
@@ -816,6 +818,43 @@ export async function annnew(ix, _args, ctx) {
   });
 }
 
+/**
+ * 専用チャンネルに報告パネルを貼る。
+ * ボタンだけのメッセージを1つ置いておけば、みんな `/menu` を開かずに報告できる。
+ */
+export async function panel(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  return show(ix, {
+    embeds: [
+      embed({
+        color: 0x2ecc71,
+        title: '📌 報告パネルを置く',
+        description:
+          'アクションのボタンを並べたメッセージを、選んだチャンネルに置きます。\n' +
+          'メンバーはボタンを押すだけで報告できます（結果は押した本人にだけ見えます）。\n\n' +
+          '**このメッセージは消さない限りずっと残ります。** 貼り直すと古いものも押せますが、\n' +
+          'アクションを増やしたら貼り直したほうが分かりやすくなります。',
+      }),
+    ],
+    components: [channelSelect(id('admin', 'panelch'), 'パネルを置くチャンネルを選ぶ'), row(backButton('admin', 'やめる'))],
+  });
+}
+
+export async function panelch(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const channelId = ix.values[0];
+  const payload = await panelPayload(ctx, ix.guildId);
+  if (payload.error) return open(ix, [], ctx, payload.error);
+
+  try {
+    await ctx.rest.createMessage(channelId, payload);
+  } catch (error) {
+    console.error('報告パネルを置けませんでした:', error);
+    return open(ix, [], ctx, `<#${channelId}> に投稿できませんでした。Bot がそのチャンネルに書き込めるか確認してください。`);
+  }
+  return open(ix, [], ctx, `<#${channelId}> に報告パネルを置きました。`);
+}
+
 export async function annch(ix, _args, ctx) {
   if (!ix.isAdmin) return denied(ix, ctx);
   const channelId = ix.values[0];
@@ -1172,6 +1211,8 @@ export const actions = {
   ann,
   annnew,
   annch,
+  panel,
+  panelch,
   annmetric,
   annwhen,
   annsave,

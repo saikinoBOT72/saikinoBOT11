@@ -9,6 +9,7 @@ import { handleComponent as handleChinchiro } from './menu/chinchiro-match.js';
 import { handleComponent as handlePoll } from './menu/poll-board.js';
 import { handleComponent as handleDuel } from './menu/duel-board.js';
 import { handleComponent as handleBlackjack } from './menu/blackjack-table.js';
+import { handleComponent as handleReportPanel } from './menu/report-panel.js';
 import { findCommand } from './commands.js';
 import { runScheduled } from './cron.js';
 import { handleFishingApi } from './game/api.js';
@@ -76,6 +77,7 @@ async function dispatch(ix, ctx) {
     if (namespace === 'pl') return handlePoll(ix, ctx);
     if (namespace === 'd') return handleDuel(ix, ctx);
     if (namespace === 'bj') return handleBlackjack(ix, ctx);
+    if (namespace === 'rp') return handleReportPanel(ix, ctx);
     return reply({ content: 'この操作はもう使えません。`/menu` を開き直してください。' });
   }
 
