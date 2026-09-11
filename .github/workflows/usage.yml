@@ -6,9 +6,8 @@
 #   1分ほどで終わるので、出てきた行をクリックすると結果が出ます。
 #
 # 必要なシークレットはデプロイと同じものを使い回します（追加設定は不要）。
-# ただし CLOUDFLARE_API_TOKEN に「Account Analytics: Read」の権限が
-# 付いていないと Cloudflare がエラーを返します。その場合は
-# dash.cloudflare.com → API トークン から権限を足してください。
+# 実際に動くことは確認済みです。もし将来トークンを作り直してエラーが出たら、
+# dash.cloudflare.com → API トークン で「Account Analytics: Read」を足してください。
 name: 無料枠の残りを見る
 
 on:

@@ -4,8 +4,11 @@
  *   CLOUDFLARE_ACCOUNT_ID=... CLOUDFLARE_API_TOKEN=... node scripts/usage.mjs
  *   node scripts/usage.mjs 7      # 7日ぶんさかのぼって1日ずつ出す
  *
- * トークンは dash.cloudflare.com の「API トークン」で作る。
- * 必要な権限は アカウント → Account Analytics: Read だけ（読むだけなので安全）。
+ * ふだんは PC を使わずに GitHub の Actions タブから動かせばよい
+ * （.github/workflows/usage.yml のボタン）。デプロイ用のトークンで動くのは確認済み。
+ *
+ * 自分で新しくトークンを作る場合、必要な権限は
+ * アカウント → Account Analytics: Read だけ（読むだけなので安全）。
  *
  * 無料枠のリセットは UTC の 0時 = 日本時間の朝9時。
  * なので「今日」は日本時間の朝9時から翌朝9時までのこと。
