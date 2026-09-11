@@ -1120,13 +1120,20 @@ await test('金額を選ぶと「1人で」か「みんなで」かを聞かれ�
 });
 
 await test('1人で遊ぶと、誰も待たずにその場で配られる', async () => {
-  await eco.setBalance(db, GUILD, ME, 1000, 'test');
-  const sentBefore = ctx.sent.length;
-  await press('m:bj:solo:100');
-  await ctx.settle();
-
-  const table = await db.get('SELECT * FROM blackjack_tables ORDER BY created_at DESC, rowid DESC');
-  assert.equal(table.status, 'playing', '待たずに始まっている');
+  // 最初の2枚が21だと配った時点で決着して配当まで入ってしまい、残高の確かめ方が変わる。
+  // ここで見たいのは配られるところなので、手番が残る卓が出るまで引き直す
+  let table;
+  let sentBefore;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    await eco.setBalance(db, GUILD, ME, 1000, 'test');
+    sentBefore = ctx.sent.length;
+    await press('m:bj:solo:100');
+    await ctx.settle();
+    table = await db.get('SELECT * FROM blackjack_tables ORDER BY created_at DESC, rowid DESC');
+    assert.notEqual(table.status, 'joining', '人待ちにはならない');
+    if (table.status === 'playing') break;
+  }
+  assert.equal(table.status, 'playing');
   assert.equal(await eco.getBalance(db, GUILD, ME), 900, '参加費が引かれる');
   assert.equal(ctx.sent.length, sentBefore + 1);
 
@@ -1181,7 +1188,9 @@ await test('席は3人まで、同じ人は二度座れない', async () => {
   // 3人目で満席 → そのまま開始
   await pressBj(`bj:join:${table.id}`, { userId: 'u9' });
   const started = await db.get('SELECT * FROM blackjack_tables WHERE id = ?1', table.id);
-  assert.equal(started.status, 'playing', '満席で自動的に始まる');
+  // 全員がナチュラルブラックジャックだと配った時点で決着する。
+  // ここで見たいのは「人待ちのまま止まらない」こと
+  assert.ok(['playing', 'done'].includes(started.status), `満席で自動的に始まる（${started.status}）`);
 
   const state = bjTableLib.stateOf(started);
   assert.equal(state.players.length, 3);
@@ -1193,15 +1202,22 @@ await test('席は3人まで、同じ人は二度座れない', async () => {
 });
 
 await test('始められるのは卓を立てた人だけ', async () => {
-  const table = await openBjTable();
-  await eco.setBalance(db, GUILD, OTHER, 1000, 'test');
-  await pressBj(`bj:join:${table.id}`, { userId: OTHER });
+  // 続くテストがこの卓で手を打つので、手番が残る卓を用意する。
+  // 二人ともナチュラルブラックジャックだと配った時点で終わってしまうため、その場合は引き直す
+  let table;
+  let started;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    table = await openBjTable();
+    await eco.setBalance(db, GUILD, OTHER, 1000, 'test');
+    await pressBj(`bj:join:${table.id}`, { userId: OTHER });
 
-  const denied = await pressBj(`bj:start:${table.id}`, { userId: OTHER });
-  assert.match(screenText(denied), /卓を立てた人だけ/);
+    const denied = await pressBj(`bj:start:${table.id}`, { userId: OTHER });
+    assert.match(screenText(denied), /卓を立てた人だけ/);
 
-  await pressBj(`bj:start:${table.id}`, { userId: ME });
-  const started = await db.get('SELECT * FROM blackjack_tables WHERE id = ?1', table.id);
+    await pressBj(`bj:start:${table.id}`, { userId: ME });
+    started = await db.get('SELECT * FROM blackjack_tables WHERE id = ?1', table.id);
+    if (started.status === 'playing') break;
+  }
   assert.equal(started.status, 'playing');
   globalThis.__bjId = table.id;
 });
@@ -2378,6 +2394,172 @@ await test('名前に : が入っていても正しく引ける', async () => {
   assert.match(screenText(response), /朝:散歩 を報告しました/);
 });
 
+section('[おみくじ]');
+
+const omiLib = await import(src('lib/omikuji.js'));
+const omiData = await import(src('lib/omikuji-data.js'));
+const OMI = 'u-omikuji';
+
+await test('文言が揃っている', () => {
+  let sentences = 0;
+  for (const item of omiData.OMIKUJI_ITEMS) {
+    for (const tier of ['low', 'mid', 'high']) {
+      const pool = omiData.OMIKUJI_TEXT[item][tier];
+      assert.ok(pool.length > 0, `${item}/${tier} が空`);
+      sentences += pool.length;
+    }
+  }
+  assert.equal(omiData.OMIKUJI_ITEMS.length, 6);
+  assert.equal(sentences, 540);
+  assert.equal(omiData.LUCKY_ITEMS.length, 300);
+  assert.equal(omiData.LUCKY_COLORS.length, 50);
+  assert.equal(new Set(omiData.LUCKY_ITEMS).size, 300, 'アイテムに重複なし');
+  assert.equal(new Set(omiData.LUCKY_COLORS).size, 50, 'カラーに重複なし');
+});
+
+await test('総合運の重みの合計と段階の確率が揃っている', () => {
+  for (const rank of omiLib.RANKS) {
+    const sum = rank.odds.low + rank.odds.mid + rank.odds.high;
+    assert.equal(sum, 100, `${rank.name} の確率の合計が ${sum}`);
+    assert.ok(rank.weight > 0, `${rank.name} の重みが0`);
+  }
+  assert.equal(omiLib.RANKS.length, 11);
+});
+
+await test('段階は固定個数ではなく確率で散る', () => {
+  // 大吉でも凶が混じりうる（固定個数だと絶対に起きない）
+  const daikichi = omiLib.RANK_BY_NAME.get('大吉');
+  const seen = new Set();
+  for (let i = 0; i < 3000; i++) seen.add(omiLib.rollTier(daikichi));
+  assert.deepEqual([...seen].sort(), ['high', 'low', 'mid'], '大吉でも3段階すべて出る');
+
+  // 大凶からは幸運が出ない（確率0にしてある）
+  const daikyo = omiLib.RANK_BY_NAME.get('大凶');
+  for (let i = 0; i < 2000; i++) assert.notEqual(omiLib.rollTier(daikyo), 'high');
+
+  // 同じ総合運でも引くたび内訳が変わる
+  const mixes = new Set();
+  for (let i = 0; i < 200; i++) {
+    mixes.add([...Array(6)].map(() => omiLib.rollTier(daikichi)).join(''));
+  }
+  assert.ok(mixes.size > 5, `内訳が ${mixes.size} 通りしかない`);
+});
+
+await test('引いた結果は6項目そろって範囲内', () => {
+  for (let i = 0; i < 500; i++) {
+    const drawn = omiLib.drawOmikuji();
+    assert.ok(omiLib.RANK_BY_NAME.has(drawn.rank));
+    assert.equal(drawn.picks.length, 6);
+    assert.ok(drawn.number >= 0 && drawn.number <= 999);
+    const paper = omiLib.readOmikuji(drawn);
+    assert.equal(paper.lines.length, 6);
+    for (const line of paper.lines) {
+      assert.ok(line.text && line.text.length > 0, '文が空');
+      assert.ok(['low', 'mid', 'high'].includes(line.tier));
+    }
+    assert.match(paper.number, /^\d{3}$/);
+    assert.ok(paper.item && paper.color);
+  }
+});
+
+await test('壊れた記録でも落ちない', () => {
+  const paper = omiLib.readOmikuji({ rank: '無い運勢', picks: [{ tier: 'nope', index: 99999 }], number: null });
+  assert.equal(paper.lines.length, 6);
+  for (const line of paper.lines) assert.ok(line.text, '文が埋まる');
+  assert.equal(paper.number, '000');
+});
+
+await test('あそぶメニューから引ける', async () => {
+  assert.ok(customIds(await press('m:games:open')).includes('m:omi:open'));
+  const waiting = await press('m:omi:open', { userId: OMI });
+  assert.ok(customIds(waiting).includes('m:omi:draw'), 'まだ引いていないので引くボタンが出る');
+  assert.match(screenText(waiting), /1日1回/);
+});
+
+await test('引くと結果が出て、コインは動かない', async () => {
+  await eco.setBalance(db, GUILD, OMI, 500, 'test');
+  const drawn = await press('m:omi:draw', { userId: OMI });
+  assert.equal(await eco.getBalance(db, GUILD, OMI), 500, 'コインは増減しない');
+
+  const text = screenText(drawn);
+  for (const item of omiData.OMIKUJI_ITEMS) assert.match(text, new RegExp(item), `${item} が出ている`);
+  assert.match(text, /ラッキーナンバー/);
+  assert.match(text, /ラッキーアイテム/);
+  assert.match(text, /ラッキーカラー/);
+  assert.ok(!customIds(drawn).includes('m:omi:draw'), '引いたあとは引くボタンを出さない');
+});
+
+await test('ラッキーアイテムと色が毎回ちゃんと変わる', async () => {
+  // 保存した行の列名（item_index）と読み出し側（itemIndex）が食い違うと
+  // 既定値の0に落ちて、毎回「墨」「赤」になる
+  const items = new Set();
+  const colors = new Set();
+  for (let i = 0; i < 60; i++) {
+    const user = `u-omi-var${i}`;
+    await press('m:omi:draw', { userId: user });
+    const shown = screenText(await press('m:omi:open', { userId: user }));
+    const saved = omiLib.readOmikuji(await omiLib.todaysDraw(db, GUILD, user, ctx.calendar));
+    assert.match(shown, new RegExp(saved.item.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), '保存したアイテムが出ている');
+    items.add(saved.item);
+    colors.add(saved.color);
+  }
+  assert.ok(items.size > 5, `アイテムが ${items.size} 種類しか出ていない`);
+  assert.ok(colors.size > 5, `色が ${colors.size} 種類しか出ていない`);
+});
+
+await test('同じ日は何度開いても同じ紙が出る', async () => {
+  const first = screenText(await press('m:omi:open', { userId: OMI }));
+  const again = screenText(await press('m:omi:open', { userId: OMI }));
+  assert.equal(first, again);
+
+  // もう一度引こうとしても引き直せない
+  const retry = await press('m:omi:draw', { userId: OMI });
+  assert.match(screenText(retry), /今日はもう引いています/);
+  const rows = await db.all('SELECT * FROM omikuji_draws WHERE guild_id = ?1 AND user_id = ?2', GUILD, OMI);
+  assert.equal(rows.length, 1, '記録は1日1行だけ');
+});
+
+await test('日が変われば引ける', async () => {
+  const todays = await omiLib.todaysDraw(db, GUILD, OMI, ctx.calendar);
+  assert.ok(todays, '今日ぶんはある');
+  // 昨日ぶんとして記録を移すと、今日はまた引ける扱いになる
+  await db.run("UPDATE omikuji_draws SET draw_date = '2000-01-01' WHERE guild_id = ?1 AND user_id = ?2", GUILD, OMI);
+  assert.equal(await omiLib.todaysDraw(db, GUILD, OMI, ctx.calendar), null);
+  assert.ok(customIds(await press('m:omi:open', { userId: OMI })).includes('m:omi:draw'));
+});
+
+await test('これまでの運勢に内訳が出る', async () => {
+  const rec = await press('m:omi:rec', { userId: OMI });
+  assert.match(screenText(rec), /これまでの運勢/);
+  assert.match(screenText(rec), /吉凶未分末大吉/, '番外枠も一覧に並ぶ');
+});
+
+await test('めったに出ない運勢だけチャンネルに流れる', async () => {
+  let rareSeen = false;
+  let plainSeen = false;
+  for (let i = 0; i < 3000 && !(rareSeen && plainSeen); i++) {
+    await db.run('DELETE FROM omikuji_draws WHERE user_id = ?1', 'u-omi-rare');
+    const before = ctx.sent.length;
+    await press('m:omi:draw', { userId: 'u-omi-rare' });
+    const row = await db.get("SELECT rank FROM omikuji_draws WHERE user_id = 'u-omi-rare'");
+    const rare = omiLib.RANK_BY_NAME.get(row.rank)?.rare === true;
+    const announced = ctx.sent.length > before;
+    assert.equal(announced, rare, `${row.rank} の告知が ${announced}`);
+    if (rare) rareSeen = true;
+    else plainSeen = true;
+  }
+  assert.ok(rareSeen && plainSeen, 'レアと通常の両方を確かめられた');
+});
+
+await test('管理画面でオフにすると引けない', async () => {
+  await press('m:admin:gmtoggle:omi', { admin: true });
+  assert.ok(!customIds(await press('m:games:open')).includes('m:omi:open'));
+  assert.match(screenText(await press('m:omi:open')), /遊べません/);
+  assert.match(screenText(await press('m:omi:draw')), /遊べません/, '引く操作も止まる');
+  await press('m:admin:gmtoggle:omi', { admin: true });
+  assert.ok(customIds(await press('m:games:open')).includes('m:omi:open'));
+});
+
 section('[称号の一括設定]');
 
 await test('貼り付け形式を読める', () => {
@@ -2656,7 +2838,7 @@ await test('ブラックジャックは決着後に同じ参加費で卓を立�
   const fresh = await db.get('SELECT * FROM blackjack_tables ORDER BY created_at DESC, rowid DESC');
   assert.notEqual(fresh.id, table.id);
   assert.equal(fresh.bet, 100, '同じ参加費');
-  assert.equal(fresh.status, 'playing', '1人だったので待たずに配る');
+  assert.ok(['playing', 'done'].includes(fresh.status), `1人だったので待たずに配る（${fresh.status}）`);
   assert.deepEqual(again.data.components, []);
 });
 
