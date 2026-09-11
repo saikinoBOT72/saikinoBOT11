@@ -31,6 +31,120 @@ export function describeCondition(achievement, settings) {
   }
 }
 
+/* ------------------------------------------------------- コピペで一括設定 */
+
+/**
+ * 貼り付け1行の形。DB の列と1対1にしてあるので、書き出したものをそのまま貼り戻せる。
+ *
+ *   名前 | 絵文字 | 条件 | 数 | 対象アクション | ボーナス
+ *   日記魔 | 📔 | activity_count | 100 | 日記を書く | 500
+ *   富豪   | 🪙 | balance        | 100000 |          | 10000
+ *
+ * ・区切りは | か ｜（全角）
+ * ・絵文字・対象・ボーナスは空でよい（対象は activity_ 系だけ必須）
+ * ・# で始まる行と空行は読み飛ばす
+ * ・名前が同じものは上書きされる（createAchievement が upsert なので貼り直し自由）
+ */
+export const BULK_COLUMNS = '名前 | 絵文字 | 条件 | 数 | 対象アクション | ボーナス';
+
+const BULK_SEPARATOR = /[|｜]/;
+
+/**
+ * 貼り付けたテキストを1行ずつ読む。DB には触らない。
+ * 悪い行は捨てて理由を集める（1行おかしいだけで全部が入らないのは不便なので）。
+ * @returns {{entries: object[], errors: {line: number, text: string, reason: string}[]}}
+ */
+export function parseAchievementLines(text) {
+  const entries = [];
+  const errors = [];
+  const seen = new Set();
+
+  const lines = String(text ?? '').split(/\r?\n/);
+  for (const [index, raw] of lines.entries()) {
+    const line = index + 1;
+    const trimmed = raw.trim();
+    if (trimmed === '' || trimmed.startsWith('#')) continue;
+
+    const columns = trimmed.split(BULK_SEPARATOR).map((column) => column.trim());
+    const [name, emoji, type, threshold, activity, reward] = columns;
+
+    if (columns.length < 4) {
+      errors.push({ line, text: trimmed, reason: `列が ${columns.length} 個しかありません（${BULK_COLUMNS}）` });
+      continue;
+    }
+    if (!name) {
+      errors.push({ line, text: trimmed, reason: '名前が空です' });
+      continue;
+    }
+    if (name.length > 32) {
+      errors.push({ line, text: trimmed, reason: `名前が長すぎます（${name.length}文字／32文字まで）` });
+      continue;
+    }
+    if (seen.has(name)) {
+      errors.push({ line, text: trimmed, reason: `「${name}」が同じ貼り付けの中で重複しています` });
+      continue;
+    }
+    const meta = CONDITION_TYPES[type];
+    if (!meta) {
+      errors.push({ line, text: trimmed, reason: `条件 "${type}" は不明です（${Object.keys(CONDITION_TYPES).join(' / ')}）` });
+      continue;
+    }
+    const count = toWholeNumber(threshold);
+    if (count === null || count < 1) {
+      errors.push({ line, text: trimmed, reason: `数 "${threshold}" は1以上の整数にしてください` });
+      continue;
+    }
+    if (meta.needsActivity && !activity) {
+      errors.push({ line, text: trimmed, reason: `${type} は対象アクション名が必要です` });
+      continue;
+    }
+    const bonus = reward ? toWholeNumber(reward) : 0;
+    if (bonus === null || bonus < 0) {
+      errors.push({ line, text: trimmed, reason: `ボーナス "${reward}" は0以上の整数にしてください` });
+      continue;
+    }
+
+    seen.add(name);
+    entries.push({
+      line,
+      name,
+      emoji: emoji || null,
+      condition_type: type,
+      threshold: count,
+      activity_name: meta.needsActivity ? activity : null,
+      reward: bonus,
+    });
+  }
+
+  return { entries, errors };
+}
+
+/** 全角数字と桁区切りも受ける。整数でなければ null。 */
+function toWholeNumber(input) {
+  const normalized = String(input ?? '')
+    .trim()
+    .replace(/[０-９]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0))
+    .replace(/[,，\s+＋]/g, '');
+  if (!/^\d+$/.test(normalized)) return null;
+  return Number(normalized);
+}
+
+/** いまの称号を貼り付け形式で書き出す。これをそのまま貼り戻せる。 */
+export function formatAchievementLines(achievements) {
+  return achievements
+    .map((achievement) =>
+      [
+        achievement.name,
+        achievement.emoji ?? '',
+        achievement.condition_type,
+        achievement.threshold,
+        achievement.activity_name ?? '',
+        achievement.reward || 0,
+      ].join(' | '),
+    )
+    .join('\n');
+}
+
 export async function listAchievements(db, guildId) {
   return db.all('SELECT * FROM achievements WHERE guild_id = ?1 ORDER BY threshold ASC, id ASC', guildId);
 }

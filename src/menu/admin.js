@@ -1,10 +1,13 @@
 import { PRESET_ACTIVITIES, getActivity, listActivities, removeActivity, upsertActivity } from '../lib/activities.js';
 import {
+  BULK_COLUMNS,
   CONDITION_EXAMPLES,
   CONDITION_TYPES,
   createAchievement,
   describeCondition,
+  formatAchievementLines,
   listAchievements,
+  parseAchievementLines,
   removeAchievement,
 } from '../lib/achievements.js';
 import {
@@ -34,13 +37,15 @@ import {
   drawKeyFor,
   getLottery,
   poolOf,
+  seedPoolOf,
   setChannel as setLotteryChannel,
   setEnabled as setLotteryEnabled,
+  setPool as setLotteryPool,
 } from '../lib/lottery.js';
 import { FISH, fishSlot } from '../lib/fishing.js';
 import { SUIT_KEYS, cardSlot, diceSlot, saveCustomEmoji } from '../lib/emoji.js';
 import { METRICS, rankingTitle } from '../lib/ranking.js';
-import { ButtonStyle } from '../discord/constants.js';
+import { ButtonStyle, TextInputStyle } from '../discord/constants.js';
 import {
   backButton,
   button,
@@ -284,11 +289,12 @@ export async function ach(ix, _args, ctx, notice = null) {
 
   const components = [];
   if (achievements.length > 0) {
+    // Discord のリストは25個までしか入らない。あふれた分は貼り付けで整えてもらう
     components.push(
       stringSelect(
         id('admin', 'achdel'),
-        '削除する称号を選ぶ',
-        achievements.map((achievement) => ({
+        achievements.length > 25 ? '削除する称号を選ぶ（先頭25件）' : '削除する称号を選ぶ',
+        achievements.slice(0, 25).map((achievement) => ({
           label: truncate(achievement.name, 100),
           value: String(achievement.id),
           emoji: achievement.emoji ?? undefined,
@@ -298,7 +304,11 @@ export async function ach(ix, _args, ctx, notice = null) {
     );
   }
   components.push(
-    row(button(id('admin', 'achnew'), '新しく作る', { emoji: '➕', style: ButtonStyle.SUCCESS })),
+    row(
+      button(id('admin', 'achnew'), '新しく作る', { emoji: '➕', style: ButtonStyle.SUCCESS }),
+      button(id('admin', 'achbulk'), '貼り付けて一括登録', { emoji: '📥', style: ButtonStyle.PRIMARY }),
+      button(id('admin', 'achout'), '書き出す', { emoji: '📤' }),
+    ),
     row(backButton('admin'), homeButton()),
   );
 
@@ -311,13 +321,7 @@ export async function ach(ix, _args, ctx, notice = null) {
           description:
             achievements.length === 0
               ? '条件を満たした人に自動で贈られる称号を作れます。\n獲得した人は名前の横に表示できます。\n\nまだ何も作られていません。'
-              : achievements
-                  .map(
-                    (achievement) =>
-                      `${achievement.emoji ?? '🏅'} **${achievement.name}** — ${describeCondition(achievement, settings)}` +
-                      (achievement.reward > 0 ? `（+${achievement.reward}）` : ''),
-                  )
-                  .join('\n'),
+              : achievementList(achievements, settings),
           footer: { text: '条件を満たすと自動で贈られ、チャンネルにも告知されます' },
         }),
         notice,
@@ -325,6 +329,22 @@ export async function ach(ix, _args, ctx, notice = null) {
     ],
     components,
   });
+}
+
+/** 称号の一覧。embed の説明は4096文字までなので、多すぎるときは件数だけ伝える。 */
+function achievementList(achievements, settings) {
+  const LIMIT = 40;
+  const lines = achievements
+    .slice(0, LIMIT)
+    .map(
+      (achievement) =>
+        `${achievement.emoji ?? '🏅'} **${achievement.name}** — ${describeCondition(achievement, settings)}` +
+        (achievement.reward > 0 ? `（+${achievement.reward}）` : ''),
+    );
+  if (achievements.length > LIMIT) {
+    lines.push(`…ほか ${achievements.length - LIMIT} 件（**📤 書き出す** で全部見られます）`);
+  }
+  return lines.join('\n');
 }
 
 export async function achnew(ix, _args, ctx) {
@@ -406,6 +426,97 @@ export async function achsave(ix, [type], ctx) {
     reward: reward ?? 0,
   });
   return ach(ix, [], ctx, `称号「${name}」を作りました`);
+}
+
+/* ---------------------------------------------- 称号をコピペで一括設定 */
+
+/**
+ * 貼り付け用のモーダル。
+ * 複数行入力は4000文字まで入るので、1行45文字なら80個ぶんくらい一度に貼れる。
+ */
+export async function achbulk(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const activities = await listActivities(ctx.db, ix.guildId);
+  const example = activities[0]?.name ?? '日記を書く';
+
+  return openModal(
+    modal(id('admin', 'achbulksave'), '称号を一括登録', [
+      textInput('text', BULK_COLUMNS, {
+        style: TextInputStyle.PARAGRAPH,
+        required: true,
+        max: 4000,
+        placeholder: `日記魔 | 📔 | activity_count | 100 | ${example} | 500`,
+      }),
+    ]),
+  );
+}
+
+export async function achbulksave(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const { entries, errors } = parseAchievementLines(readText(ix, 'text'));
+
+  // 対象アクションが本当にあるかは DB を見ないと分からないので、ここで弾く
+  const known = new Set((await listActivities(ctx.db, ix.guildId)).map((activity) => activity.name));
+  const ok = [];
+  for (const entry of entries) {
+    if (entry.activity_name && !known.has(entry.activity_name)) {
+      errors.push({
+        line: entry.line,
+        text: entry.name,
+        reason: `アクション「${entry.activity_name}」は登録されていません`,
+      });
+      continue;
+    }
+    ok.push(entry);
+  }
+
+  const before = new Set((await listAchievements(ctx.db, ix.guildId)).map((achievement) => achievement.name));
+  for (const entry of ok) await createAchievement(ctx.db, ix.guildId, entry);
+
+  const added = ok.filter((entry) => !before.has(entry.name)).length;
+  const updated = ok.length - added;
+
+  const report = [`新規 **${added}** 件／上書き **${updated}** 件`];
+  if (errors.length > 0) {
+    report.push(`飛ばした行 **${errors.length}** 件`);
+    // 全部は出さない（画面に入りきらないので最初の5件だけ）
+    for (const error of errors.slice(0, 5)) report.push(`・${error.line}行目: ${error.reason}`);
+    if (errors.length > 5) report.push(`・ほか ${errors.length - 5} 件`);
+  }
+  return ach(ix, [], ctx, report.join('\n'));
+}
+
+/** いまの称号を貼り付け形式で出す。これをコピーすればバックアップにも引っ越しにも使える。 */
+export async function achout(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const achievements = await listAchievements(ctx.db, ix.guildId);
+  if (achievements.length === 0) return ach(ix, [], ctx, 'まだ称号がありません。');
+
+  const activities = await listActivities(ctx.db, ix.guildId);
+  const text = formatAchievementLines(achievements);
+  // embed の説明は4096文字まで。あふれる分は切って、続きは消してから出し直してもらう
+  const body = text.length > 3400 ? `${text.slice(0, 3400)}\n…（長すぎるため以降は省略）` : text;
+
+  return show(ix, {
+    embeds: [
+      embed({
+        color: 0xf39c12,
+        title: '📤 称号の書き出し',
+        description:
+          `\`\`\`\n${BULK_COLUMNS}\n${body}\n\`\`\`\n` +
+          'このまま **📥 貼り付けて一括登録** に貼り戻せます。\n' +
+          'ChatGPT に渡して続きを考えてもらうときは、下のアクション名も一緒に伝えてください。',
+        fields: [
+          {
+            name: '使えるアクション名',
+            value: activities.map((activity) => `\`${activity.name}\``).join(' / ') || '（未登録）',
+          },
+          { name: '条件', value: Object.keys(CONDITION_TYPES).map((key) => `\`${key}\``).join(' / ') },
+        ],
+      }),
+    ],
+    components: [row(button(id('admin', 'ach'), '称号一覧へ', { emoji: '🏅' }), homeButton())],
+  });
 }
 
 export async function achdel(ix, _args, ctx) {
@@ -1226,11 +1337,14 @@ export async function lot(ix, _args, ctx, notice = null) {
           title: '🎫 宝くじの設定',
           description:
             `毎週日曜の **${LOTTERY_DRAW_HOUR}時** に自動で抽選します。\n` +
-            '**発表するチャンネルを決めるまで抽選は行われません**（買うことはできます）。',
+            '**発表するチャンネルを決めるまで抽選は行われません**（買うことはできます）。\n\n' +
+            '**プール金**＝いま積み上がっている持ち越し。当たりが出ると全部払い出します。\n' +
+            '**元プール金**＝払い出したあとに積み直す額。誰も買っていなくても賞金がここから始まります。',
           fields: [
             { name: '発表チャンネル', value: lottery.channel_id ? `<#${lottery.channel_id}>` : '未設定', inline: true },
             { name: '状態', value: lottery.enabled ? '🟢 有効' : '⚪ 停止中', inline: true },
-            { name: '持ち越し', value: `${lottery.carryover.toLocaleString('ja-JP')}`, inline: true },
+            { name: 'プール金（持ち越し）', value: `${lottery.carryover.toLocaleString('ja-JP')}`, inline: true },
+            { name: '元プール金', value: `${seedPoolOf(lottery).toLocaleString('ja-JP')}`, inline: true },
             { name: '今回の売上', value: `${pool.toLocaleString('ja-JP')}（${tickets}枚）`, inline: true },
             { name: '次の抽選日', value: drawKey, inline: true },
             { name: '最後に引いた回', value: lottery.last_draw_key ?? 'まだ', inline: true },
@@ -1242,6 +1356,7 @@ export async function lot(ix, _args, ctx, notice = null) {
     components: [
       channelSelect(id('admin', 'lotch'), '発表するチャンネルを選ぶ'),
       row(
+        button(id('admin', 'lotpool'), 'プール金を変更', { emoji: '💰', style: ButtonStyle.PRIMARY }),
         button(id('admin', 'lottoggle'), lottery.enabled ? '停止する' : '再開する', {
           emoji: lottery.enabled ? '⏸️' : '▶️',
           style: lottery.enabled ? ButtonStyle.SECONDARY : ButtonStyle.SUCCESS,
@@ -1260,6 +1375,49 @@ export async function lotch(ix, _args, ctx) {
   return lot(ix, [], ctx, `<#${channelId}> で発表します`);
 }
 
+/**
+ * プール金（持ち越し）と元プール金を直に書き換える。
+ * 空欄のままにした項目は変えない。
+ */
+export async function lotpool(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const lottery = await getLottery(ctx.db, ix.guildId);
+
+  return openModal(
+    modal(id('admin', 'lotpoolsave'), '宝くじのプール金', [
+      textInput('carryover', 'プール金（いまの持ち越し）', {
+        value: String(lottery.carryover),
+        placeholder: '例: 20000',
+        max: 12,
+      }),
+      textInput('seed', '元プール金（払い出し後に積み直す額）', {
+        value: String(seedPoolOf(lottery)),
+        placeholder: '例: 2000',
+        max: 12,
+      }),
+    ]),
+  );
+}
+
+export async function lotpoolsave(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const carryover = readInt(ix, 'carryover', { min: 0 });
+  const seed = readInt(ix, 'seed', { min: 0 });
+  if (isError(carryover)) return lot(ix, [], ctx, carryover.error);
+  if (isError(seed)) return lot(ix, [], ctx, seed.error);
+
+  const updated = await setLotteryPool(ctx.db, ix.guildId, {
+    carryover: carryover === null ? undefined : carryover,
+    seedPool: seed === null ? undefined : seed,
+  });
+  return lot(
+    ix,
+    [],
+    ctx,
+    `プール金 **${updated.carryover.toLocaleString('ja-JP')}** ／ 元プール金 **${seedPoolOf(updated).toLocaleString('ja-JP')}** にしました`,
+  );
+}
+
 export async function lottoggle(ix, _args, ctx) {
   if (!ix.isAdmin) return denied(ix, ctx);
   const lottery = await getLottery(ctx.db, ix.guildId);
@@ -1274,6 +1432,8 @@ export const actions = {
   gmtoggle,
   lot,
   lotch,
+  lotpool,
+  lotpoolsave,
   lottoggle,
   ann,
   annnew,
@@ -1297,6 +1457,9 @@ export const actions = {
   achnew,
   achtype,
   achsave,
+  achbulk,
+  achbulksave,
+  achout,
   achdel,
   acts,
   actpick,

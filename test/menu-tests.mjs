@@ -1339,19 +1339,19 @@ await test('番号を買うと引き落とされ、同じ番号は買えない',
   await eco.setBalance(db, GUILD, OTHER, 1000, 'test');
 
   const sentBefore = ctx.sent.length;
-  const bought = await press('m:lot:save', { type: 5, fields: { number: '777' } });
+  const bought = await press('m:lot:save', { type: 5, fields: { numbers: '777' } });
   assert.equal(await eco.getBalance(db, GUILD, ME), 900);
   assert.match(screenText(bought), /777/);
   assert.equal(ctx.sent.length, sentBefore + 1, 'チャンネルにも知らせる');
 
-  const taken = await press('m:lot:save', { type: 5, userId: OTHER, fields: { number: '７７７' } });
+  const taken = await press('m:lot:save', { type: 5, userId: OTHER, fields: { numbers: '７７７' } });
   assert.match(screenText(taken), /もう誰かが買っています/);
   assert.equal(await eco.getBalance(db, GUILD, OTHER), 1000, '買えなければ引かれない');
 });
 
 await test('おかしな番号は弾かれる', async () => {
   const before = await eco.getBalance(db, GUILD, ME);
-  const payload = await press('m:lot:save', { type: 5, fields: { number: 'あああ' } });
+  const payload = await press('m:lot:save', { type: 5, fields: { numbers: 'あああ' } });
   assert.match(screenText(payload), /000〜999/);
   assert.equal(await eco.getBalance(db, GUILD, ME), before);
 });
@@ -1359,7 +1359,7 @@ await test('おかしな番号は弾かれる', async () => {
 await test('おまかせで買うと空いている番号が当たる', async () => {
   const drawKey = lotteryLib.drawKeyFor(ctx.calendar);
   const before = (await lotteryLib.myTickets(db, GUILD, drawKey, OTHER)).length;
-  await press('m:lot:lucky', { userId: OTHER });
+  await press('m:lot:lucky:1', { userId: OTHER });
   const after = await lotteryLib.myTickets(db, GUILD, drawKey, OTHER);
   assert.equal(after.length, before + 1);
   assert.ok(after.every((row) => row.number >= 0 && row.number <= 999));
@@ -2376,6 +2376,305 @@ await test('名前に : が入っていても正しく引ける', async () => {
   });
   const response = await pressPanel('rp:do:朝:散歩', { userId: 'u-colon' });
   assert.match(screenText(response), /朝:散歩 を報告しました/);
+});
+
+section('[称号の一括設定]');
+
+await test('貼り付け形式を読める', () => {
+  const { entries, errors } = achLib.parseAchievementLines(
+    ['# コメントは飛ばす', '', '日記魔 | 📔 | activity_count | 100 | 日記 | 500', '富豪 | 🪙 | balance | １０，０００ | |'].join('\n'),
+  );
+  assert.equal(errors.length, 0);
+  assert.deepEqual(entries[0], {
+    line: 3, name: '日記魔', emoji: '📔', condition_type: 'activity_count',
+    threshold: 100, activity_name: '日記', reward: 500,
+  });
+  assert.equal(entries[1].threshold, 10000, '全角と桁区切りも読む');
+  assert.equal(entries[1].activity_name, null, 'balance に対象は不要');
+});
+
+await test('おかしな行は理由つきで飛ばす', () => {
+  const { entries, errors } = achLib.parseAchievementLines(
+    ['列たりない | 📔', ' | | balance | 5 | |', 'へんな条件 | | nope | 5 | |',
+     'ゼロ | | balance | 0 | |', '同名 | | balance | 1 | |', '同名 | | balance | 2 | |'].join('\n'),
+  );
+  assert.equal(entries.length, 1, '通るのは最初の「同名」だけ');
+  assert.equal(errors.length, 5);
+  assert.match(errors[0].reason, /列が/);
+  assert.match(errors[1].reason, /名前が空/);
+  assert.match(errors[2].reason, /不明/);
+  assert.match(errors[3].reason, /1以上/);
+  assert.match(errors[4].reason, /重複/);
+});
+
+await test('書き出したものをそのまま読み戻せる', () => {
+  const source = [
+    '日記魔 | 📔 | activity_count | 100 | 日記 | 500',
+    '富豪 | 🪙 | balance | 10000 |  | 0',
+  ].join('\n');
+  const { entries } = achLib.parseAchievementLines(source);
+  assert.equal(achLib.formatAchievementLines(entries), source, '往復して同じ形に戻る');
+});
+
+await test('管理メニューから貼り付けて一括登録できる', async () => {
+  await act.upsertActivity(db, GUILD, {
+    name: '日記を書く', emoji: '📔', reward: 50, cooldownSec: 0, dailyLimit: 1, description: null,
+  });
+  const screen = await press('m:admin:ach', { admin: true });
+  assert.ok(customIds(screen).includes('m:admin:achbulk'));
+  assert.ok(customIds(screen).includes('m:admin:achout'));
+
+  const paste = [
+    '一括A | 📔 | activity_count | 7 | 日記を書く | 70',
+    '一括B | 🪙 | balance | 12345 | |',
+    '一括C | | activity_count | 5 | 無いアクション |',
+  ].join('\n');
+  const done = await press('m:admin:achbulksave', { admin: true, type: 5, fields: { text: paste } });
+  assert.match(screenText(done), /新規 \*\*2\*\* 件/);
+  assert.match(screenText(done), /登録されていません/, '無いアクションは弾いて理由を出す');
+
+  const all = await achLib.listAchievements(db, GUILD);
+  const a = all.find((item) => item.name === '一括A');
+  assert.equal(a.threshold, 7);
+  assert.equal(a.activity_name, '日記を書く');
+  assert.equal(a.reward, 70);
+  assert.ok(!all.some((item) => item.name === '一括C'), '無いアクションのものは作らない');
+});
+
+await test('同じ名前を貼り直すと上書きされる', async () => {
+  const done = await press('m:admin:achbulksave', {
+    admin: true, type: 5, fields: { text: '一括A | 🔥 | activity_count | 999 | 日記を書く | 1' },
+  });
+  assert.match(screenText(done), /上書き \*\*1\*\* 件/);
+  const all = await achLib.listAchievements(db, GUILD);
+  assert.equal(all.filter((item) => item.name === '一括A').length, 1, '増えない');
+  assert.equal(all.find((item) => item.name === '一括A').threshold, 999);
+});
+
+await test('書き出すと貼り付け形式とアクション名が出る', async () => {
+  const out = await press('m:admin:achout', { admin: true });
+  const text = screenText(out);
+  assert.match(text, /一括A \| 🔥 \| activity_count \| 999 \| 日記を書く \| 1/);
+  assert.match(text, /`日記を書く`/, '使えるアクション名を添える');
+  assert.match(text, /`activity_count`/, '条件の名前も添える');
+});
+
+await test('称号が30件あっても画面が壊れない', async () => {
+  // Discord のリストは25個まで。embed の説明は4096文字まで
+  const many = [...Array(30)].map((_, index) => `量${index} | 🏅 | balance | ${index + 1} | |`).join('\n');
+  await press('m:admin:achbulksave', { admin: true, type: 5, fields: { text: many } });
+  assert.ok((await achLib.listAchievements(db, GUILD)).length >= 30);
+
+  const screen = await press('m:admin:ach', { admin: true });
+  const select = screen.data.components.find((line) => line.components[0].type === 3);
+  assert.ok(select.components[0].options.length <= 25, 'リストは25個までに収める');
+  assert.ok(firstEmbed(screen).description.length <= 4096, '説明が長すぎない');
+});
+
+await test('管理者でなければ一括登録できない', async () => {
+  const before = (await achLib.listAchievements(db, GUILD)).length;
+  await press('m:admin:achbulksave', {
+    admin: false, type: 5, fields: { text: 'こっそり | | balance | 1 | |' },
+  });
+  assert.equal((await achLib.listAchievements(db, GUILD)).length, before);
+});
+
+section('[宝くじのまとめ買いとプール金]');
+
+await test('番号をまとめて指定して買える', async () => {
+  await eco.setBalance(db, GUILD, 'u-lot', 1000, 'test');
+  const payload = await press('m:lot:save', {
+    userId: 'u-lot', type: 5, fields: { numbers: '211 212 213' },
+  });
+  assert.match(screenText(payload), /`211` `212` `213` を買いました/);
+  assert.equal(await eco.getBalance(db, GUILD, 'u-lot'), 700, '3枚ぶん引かれる');
+});
+
+await test('買えない番号が混ざっても、買える分だけ買う', async () => {
+  await eco.setBalance(db, GUILD, 'u-lot2', 1000, 'test');
+  const payload = await press('m:lot:save', {
+    userId: 'u-lot2', type: 5, fields: { numbers: '211 311 abc' },
+  });
+  assert.match(screenText(payload), /`311` を買いました/);
+  assert.match(screenText(payload), /`211` はもう誰かが買っています/);
+  assert.match(screenText(payload), /abc.{0,20}000〜999/, '読めなかったものも知らせる');
+  assert.equal(await eco.getBalance(db, GUILD, 'u-lot2'), 900, '買えた1枚だけ引かれる');
+});
+
+await test('残高が尽きたらそこで打ち切る', async () => {
+  await eco.setBalance(db, GUILD, 'u-lot3', 250, 'test');
+  const payload = await press('m:lot:save', {
+    userId: 'u-lot3', type: 5, fields: { numbers: '401 402 403 404' },
+  });
+  assert.match(screenText(payload), /打ち切りました/);
+  assert.equal(await eco.getBalance(db, GUILD, 'u-lot3'), 50, '買えた2枚ぶんだけ');
+  const drawKey = lotteryLib.drawKeyFor(ctx.calendar);
+  assert.equal((await lotteryLib.myTickets(db, GUILD, drawKey, 'u-lot3')).length, 2);
+});
+
+await test('おまかせは枚数を指定して買える', async () => {
+  await eco.setBalance(db, GUILD, 'u-lot4', 1000, 'test');
+  const drawKey = lotteryLib.drawKeyFor(ctx.calendar);
+  await press('m:lot:lucky:5', { userId: 'u-lot4' });
+  assert.equal((await lotteryLib.myTickets(db, GUILD, drawKey, 'u-lot4')).length, 5);
+  assert.equal(await eco.getBalance(db, GUILD, 'u-lot4'), 500);
+});
+
+await test('おまかせのボタンは買える枚数しか出ない', async () => {
+  await eco.setBalance(db, GUILD, 'u-lot5', 250, 'test');
+  const ids = customIds(await press('m:lot:open', { userId: 'u-lot5' }));
+  assert.ok(ids.includes('m:lot:lucky:1'));
+  assert.ok(ids.includes('m:lot:lucky:2'), '250コインなら2枚まで');
+  assert.ok(!ids.includes('m:lot:lucky:5'), '買えない枚数は出さない');
+});
+
+await test('プール金と元プール金を管理画面から変えられる', async () => {
+  const screen = await press('m:admin:lot', { admin: true });
+  assert.ok(customIds(screen).includes('m:admin:lotpool'));
+
+  const form = await press('m:admin:lotpool', { admin: true });
+  assert.equal(form.type, 9, 'フォームが開く');
+
+  const done = await press('m:admin:lotpoolsave', {
+    admin: true, type: 5, fields: { carryover: '50000', seed: '3000' },
+  });
+  assert.match(screenText(done), /50,000/);
+  const lottery = await lotteryLib.getLottery(db, GUILD);
+  assert.equal(lottery.carryover, 50000);
+  assert.equal(lotteryLib.seedPoolOf(lottery), 3000);
+});
+
+await test('当たりが出たら元プール金から積み直す', async () => {
+  await lotteryLib.setPool(db, GUILD, { carryover: 9999, seedPool: 3000 });
+  const lottery = await lotteryLib.getLottery(db, GUILD);
+  const drawKey = 'キリのいい回';
+  await eco.setBalance(db, GUILD, 'u-win', 1000, 'test');
+  await lotteryLib.buyTicket(db, GUILD, drawKey, 'u-win', 555);
+
+  const result = await lotteryLib.drawLottery(db, lottery, drawKey, 555);
+  assert.equal(result.winnerId, 'u-win');
+  assert.equal(result.prize, 9999 + 100, '持ち越し＋売上を総取り');
+  assert.equal((await lotteryLib.getLottery(db, GUILD)).carryover, 3000, '元プール金から積み直す');
+});
+
+await test('管理者でなければプール金を変えられない', async () => {
+  const before = (await lotteryLib.getLottery(db, GUILD)).carryover;
+  await press('m:admin:lotpoolsave', { admin: false, type: 5, fields: { carryover: '1', seed: '1' } });
+  assert.equal((await lotteryLib.getLottery(db, GUILD)).carryover, before);
+});
+
+section('[もう一度遊ぶ]');
+
+await test('じゃんけんの結果に再戦ボタンが付き、押すと新しい挑戦状が飛ぶ', async () => {
+  await eco.setBalance(db, GUILD, ME, 1000, 'test');
+  await eco.setBalance(db, GUILD, OTHER, 1000, 'test');
+  const settings = await ctx.settings(GUILD);
+  await rpsChallenge.startChallenge(ctx, {
+    guildId: GUILD, channelId: 'c1', challengerId: ME, opponentId: OTHER, bet: 100, settings,
+  });
+  const match = await db.get("SELECT * FROM rps_matches WHERE status = 'pending' ORDER BY created_at DESC, rowid DESC");
+  await pressRps(`rps:accept:${match.id}`, { userId: OTHER });
+  await pressRps(`rps:hand:${match.id}:rock`, { userId: ME });
+  const done = await pressRps(`rps:hand:${match.id}:scissors`, { userId: OTHER });
+
+  assert.ok(customIds(done).includes(`rps:again:${match.id}`), '結果に再戦ボタンがある');
+
+  // 負けた側（後手）が押すと、その人が新しい挑戦者になる
+  const sentBefore = ctx.sent.length;
+  const again = await pressRps(`rps:again:${match.id}`, { userId: OTHER });
+  assert.equal(ctx.sent.length, sentBefore + 1, '新しい挑戦状が投稿される');
+  const fresh = await db.get("SELECT * FROM rps_matches WHERE status = 'pending' ORDER BY created_at DESC, rowid DESC");
+  assert.equal(fresh.challenger_id, OTHER, '押した人が挑戦者');
+  assert.equal(fresh.opponent_id, ME);
+  assert.equal(fresh.bet, 100, '賭け金は同じ');
+  assert.deepEqual(again.data.components, [], '元のメッセージからはボタンを外す');
+});
+
+await test('関係ない人は再戦を押せない', async () => {
+  const match = await db.get("SELECT * FROM rps_matches WHERE status = 'done' ORDER BY created_at DESC, rowid DESC");
+  const sentBefore = ctx.sent.length;
+  const denied = await pressRps(`rps:again:${match.id}`, { userId: 'u-nobody' });
+  assert.match(screenText(denied), /参加者ではありません/);
+  assert.equal(ctx.sent.length, sentBefore, '挑戦状は飛ばない');
+});
+
+await test('お金が足りなければ再戦できない', async () => {
+  const match = await db.get("SELECT * FROM rps_matches WHERE status = 'done' ORDER BY created_at DESC, rowid DESC");
+  const before = await eco.getBalance(db, GUILD, match.challenger_id);
+  await eco.setBalance(db, GUILD, match.challenger_id, 0, 'test');
+  const sentBefore = ctx.sent.length;
+  await pressRps(`rps:again:${match.id}`, { userId: match.challenger_id });
+  assert.equal(ctx.sent.length, sentBefore, '挑戦状は飛ばない');
+  await eco.setBalance(db, GUILD, match.challenger_id, before, 'test');
+});
+
+await test('ロシアンルーレットも決着後に再戦できる', async () => {
+  const duel = await startDuelBetween('rr', 100);
+  ctx.animated.length = 0;
+  // 当たるまで引く
+  for (let i = 0; i < 8; i++) {
+    const current = await db.get('SELECT * FROM duels WHERE id = ?1', duel.id);
+    if (current.status !== 'playing') break;
+    const turn = duelLib.userIdOf(current, current.turn);
+    await pressDuel(`d:pull:${duel.id}`, { userId: turn });
+  }
+  // 決着の絵は演出（animate）の最後のコマに出る
+  assert.ok(
+    customIds({ data: ctx.animated.at(-1) }).includes(`d:again:${duel.id}`),
+    '結果に再戦ボタンがある',
+  );
+
+  const sentBefore = ctx.sent.length;
+  await pressDuel(`d:again:${duel.id}`, { userId: OTHER });
+  assert.equal(ctx.sent.length, sentBefore + 1, '新しい挑戦状が投稿される');
+  const fresh = await db.get('SELECT * FROM duels ORDER BY created_at DESC, rowid DESC');
+  assert.equal(fresh.game, 'rr', '同じゲーム');
+  assert.equal(fresh.bet, 100, '同じ賭け金');
+  assert.equal(fresh.challenger_id, OTHER);
+});
+
+await test('ブラックジャックは決着後に同じ参加費で卓を立て直せる', async () => {
+  await eco.setBalance(db, GUILD, ME, 1000, 'test');
+  const opened = await bjBoard.openTable(ctx, {
+    guildId: GUILD, channelId: 'c1', hostId: ME, bet: 100,
+    settings: await ctx.settings(GUILD), solo: true,
+  });
+  assert.equal(opened.ok, true);
+  const table = await db.get('SELECT * FROM blackjack_tables ORDER BY created_at DESC, rowid DESC');
+
+  // 決着まで進める（スタンドし続ける）
+  for (let i = 0; i < 6; i++) {
+    const current = await db.get('SELECT * FROM blackjack_tables WHERE id = ?1', table.id);
+    if (current.status !== 'playing') break;
+    await pressBj(`bj:stand:${table.id}`, { userId: ME });
+  }
+  await ctx.settle();
+
+  const sentBefore = ctx.sent.length;
+  const again = await pressBj(`bj:again:${table.id}`, { userId: ME });
+  assert.equal(ctx.sent.length, sentBefore + 1, '新しい卓が投稿される');
+  const fresh = await db.get('SELECT * FROM blackjack_tables ORDER BY created_at DESC, rowid DESC');
+  assert.notEqual(fresh.id, table.id);
+  assert.equal(fresh.bet, 100, '同じ参加費');
+  assert.equal(fresh.status, 'playing', '1人だったので待たずに配る');
+  assert.deepEqual(again.data.components, []);
+});
+
+await test('座っていなかった人は卓を立て直せない', async () => {
+  const table = await db.get("SELECT * FROM blackjack_tables WHERE status = 'done' ORDER BY created_at DESC, rowid DESC");
+  const sentBefore = ctx.sent.length;
+  const denied = await pressBj(`bj:again:${table.id}`, { userId: 'u-nobody' });
+  assert.match(screenText(denied), /座っていた人だけ/);
+  assert.equal(ctx.sent.length, sentBefore);
+});
+
+await test('予想大会の結果からは次のお題を立てられる', async () => {
+  const poll = await db.get("SELECT * FROM polls WHERE status = 'settled' ORDER BY id DESC");
+  const again = await pressPoll(`pl:again:${poll.id}`, { userId: ME });
+  // 結果のメッセージを書き換えず、本人にだけ入口を出す
+  assert.equal(again.type, 4, '新しいメッセージで返す');
+  assert.ok((again.data.flags & 64) === 64, '本人にだけ見える');
+  assert.ok(customIds(again).includes('m:poll:new'), 'お題を立てる入口がある');
 });
 
 section('[ゲームのオンオフ]');

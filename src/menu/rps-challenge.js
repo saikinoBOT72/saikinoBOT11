@@ -17,6 +17,7 @@ import { coins } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
+import { handleRematch, rematchButton } from './rematch.js';
 
 /** 公開メッセージのボタンは `rps:` 始まり（メニューの `m:` とは別系統）。 */
 export const namespace = 'rps';
@@ -62,6 +63,17 @@ export async function startChallenge(ctx, { guildId, channelId, challengerId, op
 export async function handleComponent(ix, ctx) {
   const [, action, id, hand] = ix.customId.split(':');
   const match = await getMatch(ctx.db, id);
+
+  // 再戦は終わった勝負のメッセージから押されるので、終了チェックより先に見る
+  if (action === 'again') {
+    if (!match) return reply({ content: 'この勝負の記録が見つかりませんでした。' });
+    return handleRematch(ix, ctx, {
+      challengerId: match.challenger_id,
+      opponentId: match.opponent_id,
+      bet: match.bet,
+      start: (args) => startChallenge(ctx, { guildId: match.guild_id, channelId: match.channel_id, ...args }),
+    });
+  }
 
   if (!match || match.status === 'done' || match.status === 'cancelled') {
     return reply({ content: 'この勝負はすでに終了しています。' });
@@ -163,7 +175,7 @@ export async function resolveMatch(ctx, match) {
             description: `${handsLine}\n\nあいこが ${MAX_DRAWS} 回続いたので引き分け。賭け金は返しました。`,
           }),
         ],
-        components: [],
+        components: [row(rematchButton(namespace, match.id, match.bet))],
       });
     }
     const next = await nextRound(ctx.db, match.id, match.round);
@@ -202,7 +214,7 @@ export async function resolveMatch(ctx, match) {
             : undefined,
       }),
     ],
-    components: [],
+    components: [row(rematchButton(namespace, match.id, match.bet))],
   });
 }
 

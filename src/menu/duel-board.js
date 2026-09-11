@@ -23,6 +23,7 @@ import { coins } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
+import { handleRematch } from './rematch.js';
 import * as roulette from './duel-roulette.js';
 import * as charge from './duel-charge.js';
 import * as mines from './duel-mines.js';
@@ -102,6 +103,18 @@ export async function startChallenge(ctx, { game, guildId, channelId, challenger
 export async function handleComponent(ix, ctx) {
   const [, action, id, ...args] = ix.customId.split(':');
   const duel = await getDuel(ctx.db, id);
+
+  // 再戦は終わった勝負のメッセージから押されるので、終了チェックより先に見る
+  if (action === 'again') {
+    if (!duel) return reply({ content: 'この勝負の記録が見つかりませんでした。' });
+    return handleRematch(ix, ctx, {
+      challengerId: duel.challenger_id,
+      opponentId: duel.opponent_id,
+      bet: duel.bet,
+      start: (next) =>
+        startChallenge(ctx, { game: duel.game, guildId: duel.guild_id, channelId: duel.channel_id, ...next }),
+    });
+  }
 
   if (!duel || duel.status === 'done' || duel.status === 'cancelled') {
     return reply({ content: 'この勝負はすでに終了しています。' });

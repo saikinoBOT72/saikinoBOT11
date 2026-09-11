@@ -19,6 +19,7 @@ import { coins } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
+import { rematchButton } from './rematch.js';
 import { EMOJI as em } from '../lib/emoji.js';
 
 export const key = 'mine';
@@ -297,7 +298,7 @@ function resultPayload(duel, state, settings, winner, pot, headline) {
         ],
       }),
     ],
-    components: [],
+    components: [row(rematchButton('d', duel.id, duel.bet))],
     allowed_mentions: { users: [winnerId] },
   };
 }

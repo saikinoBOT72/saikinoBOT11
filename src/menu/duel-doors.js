@@ -23,6 +23,7 @@ import { coins } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
+import { rematchButton } from './rematch.js';
 import { EMOJI as em } from '../lib/emoji.js';
 
 export const key = 'doors';
@@ -292,7 +293,7 @@ function lostPayload(duel, state, settings) {
           `**${state.steps}枚**まで進みましたが、${coins(duel.escrow * 2, settings)} は消えました。`,
       }),
     ],
-    components: [],
+    components: [row(rematchButton('d', duel.id, duel.bet))],
   };
 }
 
@@ -330,6 +331,6 @@ function resultPayload(duel, state, share, prize, settings) {
         ],
       }),
     ],
-    components: [],
+    components: [row(rematchButton('d', duel.id, duel.bet))],
   };
 }

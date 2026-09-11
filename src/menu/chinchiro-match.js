@@ -16,6 +16,7 @@ import { coins } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
+import { handleRematch, rematchButton } from './rematch.js';
 import { diceFaces } from '../lib/emoji.js';
 
 /** 公開メッセージのボタンは `cc:` 始まり。 */
@@ -74,6 +75,17 @@ const PAYOUT_TABLE = [
 export async function handleComponent(ix, ctx) {
   const [, action, id] = ix.customId.split(':');
   const match = await getMatch(ctx.db, id);
+
+  // 再戦は終わった勝負のメッセージから押されるので、終了チェックより先に見る
+  if (action === 'again') {
+    if (!match) return reply({ content: 'この勝負の記録が見つかりませんでした。' });
+    return handleRematch(ix, ctx, {
+      challengerId: match.challenger_id,
+      opponentId: match.opponent_id,
+      bet: match.bet,
+      start: (args) => startChallenge(ctx, { guildId: match.guild_id, channelId: match.channel_id, ...args }),
+    });
+  }
 
   if (!match || match.status === 'done' || match.status === 'cancelled') {
     return reply({ content: 'この勝負はすでに終了しています。' });
@@ -233,7 +245,7 @@ export async function resolveMatch(ctx, match, settings, faces = null) {
         ],
       }),
     ],
-    components: [],
+    components: [row(rematchButton(namespace, match.id, match.bet))],
   };
 }
 

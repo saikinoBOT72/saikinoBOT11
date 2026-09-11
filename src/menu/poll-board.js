@@ -142,7 +142,31 @@ export async function handleComponent(ix, ctx) {
   if (action === 'cancelok') return handleCancelOk(ix, ctx, poll);
   if (action === 'answer') return handleAnswer(ix, ctx, poll);
   if (action === 'settle') return handleSettle(ix, ctx, poll);
+  if (action === 'again') return handleAgain(ix);
   return reply({ content: '不明な操作です。' });
+}
+
+/**
+ * 「もう1問出す」。
+ *
+ * 予想大会はお題と選択肢を毎回書くものなので、同じ勝負をやり直すことはできない。
+ * 代わりに、新しいお題を立てる入口を本人にだけ出す。
+ *
+ * ここで直にフォームを開かない理由：フォームの送信はメニューの流れに入るため、
+ * 押された結果発表のメッセージが「お題を立てました」に書き換わってしまう。
+ * いったん本人だけに見えるメッセージをはさめば、書き換わるのはそちらになる。
+ */
+function handleAgain(ix) {
+  return reply({
+    embeds: [
+      embed({
+        color: 0x9b59b6,
+        title: '🗳️ もう1問出す',
+        description: `<@${ix.userId}> さん、下のボタンから新しいお題を立てられます。`,
+      }),
+    ],
+    components: [row(button('m:poll:new', 'お題を立てる', { emoji: '🆕', style: ButtonStyle.SUCCESS }))],
+  });
 }
 
 async function handleBet(ix, ctx, poll, optionIdx) {
@@ -391,6 +415,8 @@ export function resultPayload(poll, options, answerIdx, result, settings) {
         footer: { text: '予想大会' },
       }),
     ],
-    components: [],
+    components: [
+      row(button(`pl:again:${poll.id}`, 'もう1問出す', { emoji: '🔁', style: ButtonStyle.SUCCESS })),
+    ],
   };
 }

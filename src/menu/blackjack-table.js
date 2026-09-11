@@ -32,6 +32,7 @@ import { coins } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
+import { rematchButton } from './rematch.js';
 
 /** 公開メッセージのボタンは `bj:` 始まり。 */
 export const namespace = 'bj';
@@ -109,6 +110,13 @@ async function dealSolo(ctx, id, settings, em) {
 export async function handleComponent(ix, ctx) {
   const [, action, id] = ix.customId.split(':');
   const table = await getTable(ctx.db, id);
+
+  // もう一度は終わった卓のメッセージから押されるので、終了チェックより先に見る
+  if (action === 'again') {
+    if (!table) return reply({ content: 'この卓の記録が見つかりませんでした。' });
+    return handleAgain(ix, ctx, table);
+  }
+
   if (!table || table.status === 'done' || table.status === 'cancelled') {
     return reply({ content: 'この卓はもう終わっています。' });
   }
@@ -122,6 +130,38 @@ export async function handleComponent(ix, ctx) {
     return handleMove(ix, ctx, table, action, settings, em);
   }
   return reply({ content: '不明な操作です。' });
+}
+
+/**
+ * 決着した卓から、同じ参加費で新しい卓を立てる。
+ * 押した人が新しい親になる。1人でやっていた卓なら、また1人で始める。
+ */
+async function handleAgain(ix, ctx, table) {
+  const state = stateOf(table);
+  const seated = state?.players ?? [];
+  if (!seated.some((player) => player.userId === ix.userId)) {
+    return reply({ content: 'この卓に座っていた人だけが押せます。' });
+  }
+
+  const settings = await getSettings(ctx.db, table.guild_id);
+  const opened = await openTable(ctx, {
+    guildId: table.guild_id,
+    channelId: table.channel_id,
+    hostId: ix.userId,
+    bet: table.bet,
+    settings,
+    solo: seated.length === 1,
+  });
+  if (!opened.ok) {
+    const messages = {
+      insufficient: `参加費 ${coins(table.bet, settings)} が払えません。`,
+      post: 'このチャンネルに新しい卓を立てられませんでした。',
+    };
+    return reply({ content: messages[opened.reason] ?? '新しい卓を立てられませんでした。' });
+  }
+
+  // 前の結果はそのまま残し、ボタンだけ外す（卓が何個もできないように）
+  return update({ components: [] });
 }
 
 /* ------------------------------------------------------------------ 席につく・始める */
@@ -432,7 +472,7 @@ function resultPayload(table, state, results, settings, em, headline = null) {
         footer: { text: `参加費 ${table.bet}` },
       }),
     ],
-    components: [],
+    components: [row(rematchButton(namespace, table.id, table.bet))],
     allowed_mentions: { users: state.players.map((player) => player.userId) },
   };
 }
