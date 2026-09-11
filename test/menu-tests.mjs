@@ -22,6 +22,7 @@ const streakLib = await import(src('lib/streak.js'));
 const achLib = await import(src('lib/achievements.js'));
 const annLib = await import(src('lib/announcements.js'));
 const act = await import(src('lib/activities.js'));
+const reportLib = await import(src('lib/reporting.js'));
 const shop = await import(src('lib/shop.js'));
 const emojiLib = await import(src('lib/emoji.js'));
 
@@ -2565,6 +2566,97 @@ await test('管理画面でオフにすると引けない', async () => {
   assert.match(screenText(await press('m:omi:draw')), /遊べません/, '引く操作も止まる');
   await press('m:admin:gmtoggle:omi', { admin: true });
   assert.ok(customIds(await press('m:games:open')).includes('m:omi:open'));
+});
+
+section('[報告の転送]');
+
+await test('報告パネルの設定から転送先の画面へ行ける', async () => {
+  assert.ok(customIds(await press('m:admin:panel', { admin: true })).includes('m:admin:route'));
+  const screen = await press('m:admin:route', { admin: true });
+  assert.match(screenText(screen), /報告の転送先/);
+  assert.match(screenText(screen), /いまは転送していません/);
+  assert.ok(customIds(screen).includes('m:admin:routefrom'), '転送元を選ぶリストがある');
+});
+
+await test('転送元→転送先の順に選んで登録できる', async () => {
+  const step2 = await press('m:admin:routefrom', { admin: true, values: ['ch-from'] });
+  assert.match(screenText(step2), /ch-from/, '選んだ転送元を覚えている');
+  assert.ok(customIds(step2).includes('m:admin:routeto:ch-from'), '転送先を選ぶリストに引き継ぐ');
+
+  const sentBefore = ctx.sent.length;
+  const done = await press('m:admin:routeto:ch-from', { admin: true, values: ['ch-to'] });
+  assert.match(screenText(done), /出すようにしました/);
+  // 登録した時点で転送先に一度投稿して、書き込めることを確かめている
+  assert.equal(ctx.sent.length, sentBefore + 1);
+  assert.equal(ctx.sent.at(-1).channelId, 'ch-to');
+
+  const routes = await reportLib.listRoutes(db, GUILD);
+  assert.equal(routes.length, 1);
+  assert.equal(routes[0].from_channel_id, 'ch-from');
+  assert.equal(routes[0].to_channel_id, 'ch-to');
+});
+
+await test('転送元でした報告は転送先だけに出る', async () => {
+  const activities = await act.listActivities(db, GUILD);
+  const target = activities[0];
+
+  const sentBefore = ctx.sent.length;
+  await pressPanel(`rp:do:${target.name}`, { userId: 'u-route', channelId: 'ch-from' });
+
+  assert.equal(ctx.sent.length, sentBefore + 1, '流すのは1件だけ');
+  const posted = ctx.sent.at(-1);
+  assert.equal(posted.channelId, 'ch-to', '転送先に出る');
+  assert.notEqual(posted.channelId, 'ch-from', '元のチャンネルには出ない');
+});
+
+await test('メニューからの報告も転送される', async () => {
+  const activities = await act.listActivities(db, GUILD);
+  const target = activities.find((a) => a.cooldown_sec === 0 && a.daily_limit === 0) ?? activities[0];
+
+  const sentBefore = ctx.sent.length;
+  await press('m:report:pick', { userId: 'u-route2', channelId: 'ch-from', values: [target.name] });
+  assert.ok(ctx.sent.length > sentBefore, '報告が流れる');
+  assert.equal(ctx.sent.at(-1).channelId, 'ch-to');
+});
+
+await test('関係ないチャンネルの報告はその場に出る', async () => {
+  const activities = await act.listActivities(db, GUILD);
+  const target = activities[0];
+
+  const sentBefore = ctx.sent.length;
+  await pressPanel(`rp:do:${target.name}`, { userId: 'u-route3', channelId: 'ch-zatsu' });
+  assert.equal(ctx.sent.length, sentBefore + 1);
+  assert.equal(ctx.sent.at(-1).channelId, 'ch-zatsu', '転送元でなければそのまま');
+});
+
+await test('同じチャンネルへは転送できない', async () => {
+  const denied = await press('m:admin:routeto:ch-from', { admin: true, values: ['ch-from'] });
+  assert.match(screenText(denied), /同じチャンネル/);
+  const routes = await reportLib.listRoutes(db, GUILD);
+  assert.equal(routes.length, 1, '増えていない');
+});
+
+await test('転送をやめられる', async () => {
+  const listed = await press('m:admin:route', { admin: true });
+  assert.match(screenText(listed), /ch-from/);
+  assert.ok(customIds(listed).includes('m:admin:routedel'));
+
+  const done = await press('m:admin:routedel', { admin: true, values: ['ch-from'] });
+  assert.match(screenText(done), /転送をやめました/);
+  assert.equal((await reportLib.listRoutes(db, GUILD)).length, 0);
+
+  // やめたあとは元のチャンネルに戻る
+  const activities = await act.listActivities(db, GUILD);
+  const sentBefore = ctx.sent.length;
+  await pressPanel(`rp:do:${activities[0].name}`, { userId: 'u-route4', channelId: 'ch-from' });
+  assert.equal(ctx.sent.at(-1).channelId, 'ch-from');
+  assert.equal(ctx.sent.length, sentBefore + 1);
+});
+
+await test('管理者でなければ転送を設定できない', async () => {
+  await press('m:admin:routeto:ch-from', { admin: false, values: ['ch-to'] });
+  assert.equal((await reportLib.listRoutes(db, GUILD)).length, 0);
+  assert.doesNotMatch(screenText(await press('m:admin:route', { admin: false })), /報告の転送先/);
 });
 
 section('[管理者の全ゲーム画面]');

@@ -5,6 +5,57 @@ import { equippedTitle, evaluate, titleTag } from './achievements.js';
 import { coins, duration, relative, truncate } from './format.js';
 import { embed } from '../discord/builders.js';
 
+/* ------------------------------------------------------ 報告メッセージの転送 */
+
+/**
+ * 「このチャンネルでした報告は、あっちに出す」という対応。
+ *
+ * 報告パネルを置いたチャンネルに「○○が報告しました」が流れ続けると、
+ * パネルが上へ押し上げられて押しにくくなる。転送先を決めておけば、
+ * パネルのチャンネルは静かなまま、みんな向けの報告は別の場所に集まる。
+ */
+export async function listRoutes(db, guildId) {
+  return db.all(
+    'SELECT * FROM report_routes WHERE guild_id = ?1 ORDER BY created_at ASC',
+    guildId,
+  );
+}
+
+export async function setRoute(db, guildId, fromChannelId, toChannelId) {
+  await db.run(
+    `INSERT INTO report_routes (guild_id, from_channel_id, to_channel_id, created_at)
+     VALUES (?1, ?2, ?3, ?4)
+     ON CONFLICT(guild_id, from_channel_id) DO UPDATE SET to_channel_id = ?3`,
+    guildId,
+    fromChannelId,
+    toChannelId,
+    Date.now(),
+  );
+}
+
+export async function removeRoute(db, guildId, fromChannelId) {
+  const result = await db.run(
+    'DELETE FROM report_routes WHERE guild_id = ?1 AND from_channel_id = ?2',
+    guildId,
+    fromChannelId,
+  );
+  return result.changes > 0;
+}
+
+/**
+ * 報告メッセージを実際に出す先。
+ * 転送先が決まっていなければ、報告したチャンネルをそのまま返す。
+ */
+export async function announceChannelFor(db, guildId, channelId) {
+  if (!channelId) return channelId;
+  const route = await db.get(
+    'SELECT to_channel_id FROM report_routes WHERE guild_id = ?1 AND from_channel_id = ?2',
+    guildId,
+    channelId,
+  );
+  return route?.to_channel_id ?? channelId;
+}
+
 /** 報告できない理由を日本語にする。 */
 export function gateMessage(gate, activity) {
   if (gate.reason === 'cooldown') {

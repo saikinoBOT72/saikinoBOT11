@@ -21,6 +21,7 @@ import { adjust, getBalance, ledgerFor, setBalance, updateSettings } from '../li
 import { coins, duration, truncate } from '../lib/format.js';
 import { channelSelect, modal, stringSelect, textInput, userSelect } from '../discord/builders.js';
 import { panelPayload } from './report-panel.js';
+import { listRoutes, removeRoute, setRoute } from '../lib/reporting.js';
 import { disabledSet, disabledText, GAME_BY_KEY, GAMES } from '../lib/game-catalog.js';
 import {
   WEEKDAYS,
@@ -1069,8 +1070,122 @@ export async function panel(ix, _args, ctx) {
           'アクションを増やしたら貼り直したほうが分かりやすくなります。',
       }),
     ],
-    components: [channelSelect(id('admin', 'panelch'), 'パネルを置くチャンネルを選ぶ'), row(backButton('admin', 'やめる'))],
+    components: [
+      channelSelect(id('admin', 'panelch'), 'パネルを置くチャンネルを選ぶ'),
+      row(
+        button(id('admin', 'route'), '報告の転送先', { emoji: '🔀', style: ButtonStyle.PRIMARY }),
+        backButton('admin', 'やめる'),
+      ),
+    ],
   });
+}
+
+/* ------------------------------------------------ 報告メッセージの転送 */
+
+/**
+ * 「このチャンネルでした報告は、あっちに出す」という設定。
+ *
+ * 報告パネルのチャンネルに「○○が報告しました」が流れ続けると、パネルが
+ * 上へ押し上げられて押しにくくなる。転送先を決めておけば、パネルのある場所は
+ * 静かなまま、みんな向けの報告だけ別のチャンネルに集まる。
+ *
+ * 出す場所を移すだけで、増やすわけではない（元のチャンネルには出なくなる）。
+ */
+export async function route(ix, _args, ctx, notice = null) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const routes = await listRoutes(ctx.db, ix.guildId);
+
+  // リストの選択肢では <#id> が名前に変わらないので、本文に振った番号で指す
+  const components = [channelSelect(id('admin', 'routefrom'), '転送したい報告のチャンネルを選ぶ')];
+  if (routes.length > 0) {
+    components.push(
+      stringSelect(
+        id('admin', 'routedel'),
+        '転送をやめるものを選ぶ',
+        routes.slice(0, 25).map((item, index) => ({
+          label: `${index + 1} つめの転送をやめる`,
+          value: item.from_channel_id,
+        })),
+      ),
+    );
+  }
+  components.push(row(backButton('admin', '管理メニュー'), button(id('admin', 'panel'), '報告パネル', { emoji: '📌' })));
+
+  return show(ix, {
+    embeds: [
+      withNotice(
+        embed({
+          color: 0x3498db,
+          title: '🔀 報告の転送先',
+          description:
+            '選んだチャンネルでの報告は、**そのチャンネルには出さず**、決めた別の場所に出します。\n' +
+            '報告パネルを置いた場所を静かに保ちたいときに使ってください。\n\n' +
+            (routes.length === 0
+              ? 'いまは転送していません（報告はその場のチャンネルに出ます）。'
+              : routes
+                  .map((item, index) => `**${index + 1}.** <#${item.from_channel_id}> ➜ <#${item.to_channel_id}>`)
+                  .join('\n')),
+          footer: { text: '本人にだけ見える結果表示は、いまの場所のまま変わりません' },
+        }),
+        notice,
+      ),
+    ],
+    components,
+  });
+}
+
+/** 転送元を選んだところ。続けて転送先を選ばせる。 */
+export async function routefrom(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const fromChannelId = ix.values[0];
+
+  return show(ix, {
+    embeds: [
+      embed({
+        color: 0x3498db,
+        title: '🔀 報告の転送先（2/2）',
+        description: `<#${fromChannelId}> でした報告を、**どこに出しますか**。`,
+      }),
+    ],
+    components: [
+      channelSelect(id('admin', 'routeto', fromChannelId), '報告を出すチャンネルを選ぶ'),
+      row(button(id('admin', 'route'), 'やめる', { emoji: '◀️' })),
+    ],
+  });
+}
+
+export async function routeto(ix, [fromChannelId], ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const toChannelId = ix.values[0];
+  if (toChannelId === fromChannelId) {
+    return route(ix, [], ctx, '同じチャンネルへは転送できません。別の場所を選んでください。');
+  }
+
+  // 書き込めるかをここで確かめる。出せない場所を登録しても、報告が消えるだけなので
+  try {
+    await ctx.rest.createMessage(toChannelId, {
+      embeds: [
+        embed({
+          color: 0x3498db,
+          title: '🔀 報告の転送先になりました',
+          description: `これから <#${fromChannelId}> でした報告は、ここに出ます。`,
+        }),
+      ],
+    });
+  } catch (error) {
+    console.error('転送先に投稿できませんでした:', error);
+    return route(ix, [], ctx, `<#${toChannelId}> に投稿できませんでした。Bot が書き込めるか確認してください。`);
+  }
+
+  await setRoute(ctx.db, ix.guildId, fromChannelId, toChannelId);
+  return route(ix, [], ctx, `<#${fromChannelId}> の報告を <#${toChannelId}> に出すようにしました`);
+}
+
+export async function routedel(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const fromChannelId = ix.values[0];
+  await removeRoute(ctx.db, ix.guildId, fromChannelId);
+  return route(ix, [], ctx, `<#${fromChannelId}> の転送をやめました（報告はその場に出ます）`);
 }
 
 export async function panelch(ix, _args, ctx) {
@@ -1498,6 +1613,10 @@ export const actions = {
   annch,
   panel,
   panelch,
+  route,
+  routefrom,
+  routeto,
+  routedel,
   annmetric,
   annwhen,
   annsave,

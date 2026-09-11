@@ -12,7 +12,7 @@
  * パネルには一切触らず、押した本人にだけ結果を返す。
  */
 import { listActivities, getActivity } from '../lib/activities.js';
-import { attemptReport, reportEmbed } from '../lib/reporting.js';
+import { announceChannelFor, attemptReport, reportEmbed } from '../lib/reporting.js';
 import { coins, truncate } from '../lib/format.js';
 import { describeDayStart } from '../lib/calendar.js';
 import { ButtonStyle } from '../discord/constants.js';
@@ -94,8 +94,8 @@ export async function handleComponent(ix, ctx) {
   });
   if (!result.ok) return reply({ content: result.message });
 
-  // みんなに見えるほうはチャンネルへ
-  ctx.announce(ix.channelId, {
+  // みんなに見えるほうはチャンネルへ。転送先が決まっていればそちらに出す
+  ctx.announce(await announceChannelFor(ctx.db, ix.guildId, ix.channelId), {
     embeds: [
       reportEmbed({
         user: ix.user,

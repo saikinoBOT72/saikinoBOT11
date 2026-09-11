@@ -1,5 +1,5 @@
 import { canReport, getActivity, listActivities, reportStats } from '../lib/activities.js';
-import { attemptReport, gateMessage, reportEmbed } from '../lib/reporting.js';
+import { announceChannelFor, attemptReport, gateMessage, reportEmbed } from '../lib/reporting.js';
 import { coins, duration, truncate } from '../lib/format.js';
 import { describeDayStart } from '../lib/calendar.js';
 import { ButtonStyle } from '../discord/constants.js';
@@ -87,7 +87,8 @@ export async function pick(ix, _args, ctx) {
   });
   if (!result.ok) return open(ix, [], ctx, result.message);
 
-  ctx.announce(ix.channelId, {
+  // 転送先が決まっていれば、そちらに出す（決まっていなければこのチャンネル）
+  ctx.announce(await announceChannelFor(ctx.db, ix.guildId, ix.channelId), {
     embeds: [
       reportEmbed({
         user: ix.user,
