@@ -1,0 +1,47 @@
+# Cloudflare の無料枠を今日どれだけ使ったかを見る。
+#
+# 【使い方】PCは不要です。
+#   GitHub のこのリポジトリ → 上の「Actions」タブ → 左の「無料枠の残りを見る」
+#   → 右の「Run workflow」ボタン → 緑の「Run workflow」
+#   1分ほどで終わるので、出てきた行をクリックすると結果が出ます。
+#
+# 必要なシークレットはデプロイと同じものを使い回します（追加設定は不要）。
+# ただし CLOUDFLARE_API_TOKEN に「Account Analytics: Read」の権限が
+# 付いていないと Cloudflare がエラーを返します。その場合は
+# dash.cloudflare.com → API トークン から権限を足してください。
+name: 無料枠の残りを見る
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 何日ぶんさかのぼるか
+        required: false
+        default: '3'
+
+jobs:
+  usage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 使用量を調べる
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -o pipefail
+          # 結果は実行ページの上にも出す（ログを開かなくても読めるように）
+          {
+            echo '## Cloudflare 無料枠の使用量'
+            echo ''
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          node scripts/usage.mjs "${{ inputs.days }}" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          STATUS=$?
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          exit $STATUS
