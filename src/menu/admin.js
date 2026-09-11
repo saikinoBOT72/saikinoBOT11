@@ -107,6 +107,7 @@ export async function open(ix, _args, ctx, notice = null) {
         button(id('admin', 'lot'), '宝くじ', { emoji: '🎫' }),
         button(id('admin', 'emoji'), '絵文字を確認', { emoji: '😀' }),
         button(id('admin', 'gm'), 'ゲームのオンオフ', { emoji: '🎮' }),
+        button(id('admin', 'allgames'), '全ゲーム', { emoji: '🕹️' }),
       ),
       row(
         button(id('admin', 'panel'), '報告パネルを置く', { emoji: '📌', style: ButtonStyle.PRIMARY }),
@@ -977,6 +978,62 @@ export async function gm(ix, _args, ctx, notice = null) {
   });
 }
 
+/**
+ * 全ゲームの入口を並べた管理者用の画面。
+ *
+ * 「🎮 あそぶ」はオフにしたゲームを隠すが、こちらはオンオフに関係なく全部出す。
+ * オフのゲームを試したいのは管理者なので、ここからはそのまま開ける
+ * （games.js の gate が管理者を素通しする）。
+ */
+export async function allgames(ix, _args, ctx, notice = null) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const settings = await ctx.settings(ix.guildId);
+  const off = disabledSet(settings);
+
+  // ボタンは1行5個まで
+  const rows = [];
+  for (let index = 0; index < GAMES.length; index += 5) {
+    rows.push(
+      row(
+        ...GAMES.slice(index, index + 5).map((game) =>
+          button(id(game.key, 'open'), truncate(game.name, 20), {
+            emoji: game.emoji,
+            style: off.has(game.key) ? ButtonStyle.SECONDARY : ButtonStyle.PRIMARY,
+          }),
+        ),
+      ),
+    );
+  }
+
+  const hidden = GAMES.filter((game) => off.has(game.key));
+
+  return show(ix, {
+    embeds: [
+      withNotice(
+        embed({
+          color: 0x9b59b6,
+          title: '🕹️ 全ゲーム',
+          description:
+            'オンオフに関係なく、すべてのゲームをここから開けます。\n' +
+            '**灰色のボタンはメンバーには見えていないもの**です（管理者だけが開けます）。',
+          fields: [
+            {
+              name: 'いまオフにしているもの',
+              value:
+                hidden.length > 0
+                  ? hidden.map((game) => `${game.emoji} ${game.name}`).join(' / ')
+                  : 'なし（全部オンです）',
+            },
+          ],
+          footer: { text: 'オンオフの切り替えは 🎮 ゲームのオンオフ から' },
+        }),
+        notice,
+      ),
+    ],
+    components: [...rows, row(backButton('admin'), homeButton())],
+  });
+}
+
 export async function gmtoggle(ix, [key], ctx) {
   if (!ix.isAdmin) return denied(ix, ctx);
   const game = GAME_BY_KEY.get(key);
@@ -1430,6 +1487,7 @@ export const actions = {
   emoji,
   gm,
   gmtoggle,
+  allgames,
   lot,
   lotch,
   lotpool,

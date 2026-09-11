@@ -44,9 +44,6 @@ export const RANKS = [
 
 export const RANK_BY_NAME = new Map(RANKS.map((rank) => [rank.name, rank]));
 
-/** 段階の見せ方。項目ごとの吉凶をひと文字で添える。 */
-export const TIER_MARKS = { low: '凶', mid: '並', high: '吉' };
-
 /** 重み付きの抽選。重みは合計が何であってもよい。 */
 function weighted(entries, weightOf, rng) {
   const total = entries.reduce((sum, entry) => sum + weightOf(entry), 0);

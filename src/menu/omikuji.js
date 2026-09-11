@@ -8,15 +8,7 @@
  * 1文が30〜40字あるため、embed の3列（inline）に入れると折り返しだらけになる。
  * おみくじの紙らしく縦一列に並べ、短いラッキー3種だけ3列にしている。
  */
-import {
-  OMIKUJI_ITEMS,
-  RANK_BY_NAME,
-  TIER_MARKS,
-  drawToday,
-  rankHistory,
-  readOmikuji,
-  todaysDraw,
-} from '../lib/omikuji.js';
+import { OMIKUJI_ITEMS, RANK_BY_NAME, drawToday, rankHistory, readOmikuji, todaysDraw } from '../lib/omikuji.js';
 import { describeDayStart } from '../lib/calendar.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { backButton, button, embed, homeButton, id, row, show, withNotice } from './common.js';
@@ -72,9 +64,8 @@ async function resultScreen(ix, ctx, draw, notice) {
   const paper = readOmikuji(draw);
   const history = await rankHistory(ctx.db, ix.guildId, ix.userId);
 
-  const lines = paper.lines.map(
-    (line) => `\`${TIER_MARKS[line.tier]}\` **${line.item}**　${line.text}`,
-  );
+  // 吉凶の印は出さない。文そのものを読ませたいので、項目名と本文だけにする
+  const lines = paper.lines.map((line) => `**${line.item}**　${line.text}`);
 
   return show(ix, {
     embeds: [

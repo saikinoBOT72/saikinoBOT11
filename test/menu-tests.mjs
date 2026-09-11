@@ -2487,6 +2487,13 @@ await test('引くと結果が出て、コインは動かない', async () => {
   assert.match(text, /ラッキーアイテム/);
   assert.match(text, /ラッキーカラー/);
   assert.ok(!customIds(drawn).includes('m:omi:draw'), '引いたあとは引くボタンを出さない');
+
+  // 左端に 凶/並/吉 の印は出さない（文だけを読ませる）
+  const body = firstEmbed(drawn).description;
+  assert.doesNotMatch(body, /`[凶並吉]`/, '吉凶の印を出さない');
+  for (const item of omiData.OMIKUJI_ITEMS) {
+    assert.match(body, new RegExp(`\\*\\*${item}\\*\\*　`), `${item} は項目名と本文だけ`);
+  }
 });
 
 await test('ラッキーアイテムと色が毎回ちゃんと変わる', async () => {
@@ -2558,6 +2565,58 @@ await test('管理画面でオフにすると引けない', async () => {
   assert.match(screenText(await press('m:omi:draw')), /遊べません/, '引く操作も止まる');
   await press('m:admin:gmtoggle:omi', { admin: true });
   assert.ok(customIds(await press('m:games:open')).includes('m:omi:open'));
+});
+
+section('[管理者の全ゲーム画面]');
+
+await test('管理メニューから全ゲームを開ける', async () => {
+  assert.ok(customIds(await press('m:admin:open', { admin: true })).includes('m:admin:allgames'));
+  const screen = await press('m:admin:allgames', { admin: true });
+  const ids = customIds(screen);
+  for (const game of catalog.GAMES) {
+    assert.ok(ids.includes(`m:${game.key}:open`), `${game.name} のボタンがある`);
+  }
+});
+
+await test('オフにしたゲームもここには出て、管理者は開ける', async () => {
+  await press('m:admin:gmtoggle:rr', { admin: true });
+
+  // あそぶ画面からは消える
+  assert.ok(!customIds(await press('m:games:open')).includes('m:rr:open'));
+  // 全ゲーム画面には残る
+  const screen = await press('m:admin:allgames', { admin: true });
+  assert.ok(customIds(screen).includes('m:rr:open'), 'オフでもボタンは出す');
+  assert.match(screenText(screen), /ロシアンルーレット/, 'オフのものを一覧に出す');
+
+  // 灰色（SECONDARY = 2）で見分けがつく
+  const target = screen.data.components
+    .flatMap((line) => line.components)
+    .find((c) => c.custom_id === 'm:rr:open');
+  assert.equal(target.style, 2, 'オフのものは灰色');
+
+  // 管理者はオフのゲームに入れる
+  const opened = await press('m:rr:open', { admin: true });
+  assert.doesNotMatch(screenText(opened), /遊べません/, '管理者は素通しできる');
+  // メンバーは入れないまま
+  assert.match(screenText(await press('m:rr:open', { admin: false })), /遊べません/);
+
+  await press('m:admin:gmtoggle:rr', { admin: true });
+});
+
+await test('管理者でなければ全ゲーム画面は開けない', async () => {
+  const denied = await press('m:admin:allgames', { admin: false });
+  assert.doesNotMatch(screenText(denied), /全ゲーム/);
+});
+
+await test('全部オフでも全ゲーム画面は壊れない', async () => {
+  for (const game of catalog.GAMES) await press(`m:admin:gmtoggle:${game.key}`, { admin: true });
+  const screen = await press('m:admin:allgames', { admin: true });
+  assert.equal(
+    customIds(screen).filter((customId) => customId.endsWith(':open') && !customId.startsWith('m:admin')).length,
+    catalog.GAMES.length + 1,
+    '全ゲーム＋戻る先',
+  );
+  for (const game of catalog.GAMES) await press(`m:admin:gmtoggle:${game.key}`, { admin: true });
 });
 
 section('[称号の一括設定]');

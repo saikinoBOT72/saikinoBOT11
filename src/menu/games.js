@@ -91,9 +91,13 @@ export async function open(ix, _args, ctx, notice = null) {
 /**
  * オフにされたゲームには入れない。
  * ボタンを消しても、前に貼られたメッセージのボタンは残るので入口でも見る。
+ *
+ * ただし管理者は素通しする。オフにしたゲームを試したいのは管理者なので、
+ * 管理メニューの「🕹️ 全ゲーム」からはオフのものも開ける。
  */
 export function gate(key, handler) {
   return async (ix, args, ctx) => {
+    if (ix.isAdmin) return handler(ix, args, ctx);
     const settings = await ctx.settings(ix.guildId);
     if (!isGameEnabled(settings, key)) {
       const game = GAME_BY_KEY.get(key);

@@ -233,12 +233,14 @@ await test('管理者でなくても開ける', async () => {
   assert.match(screenText(payload), /🎣 釣り/);
 });
 
-await test('管理メニューでオフにすると入れなくなる', async () => {
+await test('管理メニューでオフにするとメンバーは入れなくなる', async () => {
   await press('m:admin:gmtoggle:fish', { admin: true });
-  assert.match(screenText(await press('m:fish:open')), /遊べません/);
-  assert.match(screenText(await press('m:fish:shop')), /遊べません/, '釣り具屋にも入れない');
+  assert.match(screenText(await press('m:fish:open', { admin: false })), /遊べません/);
+  assert.match(screenText(await press('m:fish:shop', { admin: false })), /遊べません/, '釣り具屋にも入れない');
+  // 管理者は試せるように素通しする（管理メニューの 🕹️ 全ゲーム から開く用）
+  assert.match(screenText(await press('m:fish:open', { admin: true })), /🎣 釣り/, '管理者は開ける');
   await press('m:admin:gmtoggle:fish', { admin: true });
-  assert.match(screenText(await press('m:fish:open')), /🎣 釣り/, 'オンに戻せる');
+  assert.match(screenText(await press('m:fish:open', { admin: false })), /🎣 釣り/, 'オンに戻せる');
 });
 
 await test('どの画面にも同じ custom_id のボタンが2つ無い', async () => {
