@@ -298,14 +298,20 @@ function lostPayload(duel, state, settings) {
 }
 
 function resultPayload(duel, state, share, prize, settings) {
+  // タイトルではメンションが名前にならない（生のIDが出る）ので、
+  // 誰が、はタイトルではなく本文に置く
   let verdict;
+  let lead;
   if (share.kind === 'split') {
-    verdict = `🤝 山分け成立！ ${coins(prize, settings)} を分け合った`;
+    verdict = '🤝 山分け成立！';
+    lead = `${coins(prize, settings)} を分け合った`;
   } else if (share.kind === 'both-steal') {
-    verdict = '😈 二人ともひとりじめ — 全額パー';
+    verdict = '😈 二人ともひとりじめ';
+    lead = '欲を出しすぎて**全額パー**';
   } else {
     const winnerId = share.kind === 'challenger-steal' ? duel.challenger_id : duel.opponent_id;
-    verdict = `😈 <@${winnerId}> がひとりじめ！`;
+    verdict = '😈 ひとりじめ成立';
+    lead = `**<@${winnerId}> が ${coins(prize, settings)} を全部持っていった**`;
   }
 
   return {
@@ -315,6 +321,7 @@ function resultPayload(duel, state, share, prize, settings) {
       embed({
         color: share.kind === 'split' ? 0x2ecc71 : 0xe74c3c,
         title: verdict,
+        description: lead,
         fields: [
           {
             name: '選んだもの',

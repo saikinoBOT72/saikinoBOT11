@@ -12,7 +12,7 @@ import {
 } from '../lib/polls.js';
 import { getSettings } from '../lib/economy.js';
 import { coins, truncate } from '../lib/format.js';
-import { button, embed, modal, row, stringSelect, textInput } from '../discord/builders.js';
+import { button, channelSelect, embed, linkButton, modal, row, stringSelect, textInput } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { modalResponse, reply, update } from '../discord/respond.js';
 
@@ -97,6 +97,7 @@ function openButtons(poll, options) {
     row(
       button(`pl:close:${poll.id}`, '締め切る（出題者）', { emoji: '🔒', style: ButtonStyle.SECONDARY }),
       button(`pl:boost:${poll.id}`, '賞金を上乗せ（出題者）', { emoji: '💰', style: ButtonStyle.SECONDARY }),
+      button(`pl:again:${poll.id}`, '再通知（出題者）', { emoji: '📢', style: ButtonStyle.SECONDARY }),
       button(`pl:cancel:${poll.id}`, '中止（出題者）', { emoji: '🚫', style: ButtonStyle.DANGER }),
     ),
   ];
@@ -142,8 +143,80 @@ export async function handleComponent(ix, ctx) {
   if (action === 'cancelok') return handleCancelOk(ix, ctx, poll);
   if (action === 'answer') return handleAnswer(ix, ctx, poll);
   if (action === 'settle') return handleSettle(ix, ctx, poll);
-  if (action === 'again') return handleAgain(ix);
+  if (action === 'again') return handleNotifyPick(ix, poll);
+  if (action === 'notify') return handleNotify(ix, ctx, poll, rawOption);
+  if (action === 'more') return handleAgain(ix);
   return reply({ content: '不明な操作です。' });
+}
+
+/* ------------------------------------------------------------ 再通知 */
+
+/**
+ * 開催中の予想大会を、出題者が選んだチャンネルに知らせ直す。
+ *
+ * 掲示板は流れて埋もれるので、気づいてほしいときに別の場所へ声をかけられるようにする。
+ * 掲示板そのものは動かさない（ボタンが2枚になると集計がちぐはぐに見えるため）。
+ * 知らせるほうには中身と、掲示板へ飛ぶボタンだけを置く。
+ */
+function handleNotifyPick(ix, poll) {
+  if (ix.userId !== poll.owner_id) return reply({ content: '再通知できるのは出題者だけです。' });
+  if (poll.status !== 'open') return reply({ content: 'この予想大会はもう締め切られています。' });
+
+  return reply({
+    embeds: [
+      embed({
+        color: 0x9b59b6,
+        title: '📢 再通知',
+        description: `**${truncate(poll.question, 80)}**\n\nどのチャンネルに知らせますか。`,
+      }),
+    ],
+    components: [channelSelect(`pl:notify:${poll.id}`, '知らせるチャンネルを選ぶ')],
+  });
+}
+
+async function handleNotify(ix, ctx, poll) {
+  if (ix.userId !== poll.owner_id) return reply({ content: '再通知できるのは出題者だけです。' });
+  if (poll.status !== 'open') return reply({ content: 'この予想大会はもう締め切られています。' });
+
+  const channelId = ix.values[0];
+  const settings = await getSettings(ctx.db, poll.guild_id);
+  const [options, counts] = await Promise.all([optionsOf(ctx.db, poll.id), tally(ctx.db, poll.id)]);
+
+  const fields = [
+    { name: '賞金プール', value: coins(counts.total + (poll.bonus ?? 0), settings), inline: true },
+    { name: '参加者', value: `${counts.players} 人`, inline: true },
+    {
+      name: '締切',
+      value: poll.open_ended ? '出題者が締め切るまで' : `<t:${Math.floor(poll.closes_at / 1000)}:R>`,
+      inline: true,
+    },
+  ];
+
+  // 掲示板へ飛ぶボタン。貼れていない場合（message_id が無い）は付けない
+  const jump =
+    poll.message_id && `https://discord.com/channels/${poll.guild_id}/${poll.channel_id}/${poll.message_id}`;
+
+  try {
+    await ctx.rest.createMessage(channelId, {
+      embeds: [
+        embed({
+          color: 0x9b59b6,
+          title: `🗳️ ${truncate(poll.question, 100)}`,
+          description:
+            `${options.map((option) => `${LETTERS[option.idx]} **${option.label}**`).join('\n')}\n\n` +
+            '参加はもとの掲示板から。下のボタンで飛べます。',
+          fields,
+          footer: { text: '予想大会の再通知' },
+        }),
+      ],
+      components: jump ? [row(linkButton(jump, '掲示板へ行く', { emoji: '🗳️' }))] : [],
+    });
+  } catch (error) {
+    console.error('予想大会の再通知に失敗:', error);
+    return reply({ content: `<#${channelId}> に投稿できませんでした。Bot が書き込めるか確認してください。` });
+  }
+
+  return reply({ content: `<#${channelId}> に知らせました。` });
 }
 
 /**
@@ -416,7 +489,7 @@ export function resultPayload(poll, options, answerIdx, result, settings) {
       }),
     ],
     components: [
-      row(button(`pl:again:${poll.id}`, 'もう1問出す', { emoji: '🔁', style: ButtonStyle.SUCCESS })),
+      row(button(`pl:more:${poll.id}`, 'もう1問出す', { emoji: '🔁', style: ButtonStyle.SUCCESS })),
     ],
   };
 }

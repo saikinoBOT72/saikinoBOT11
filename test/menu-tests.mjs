@@ -55,6 +55,24 @@ function assertBigArt(payload, where) {
 function assertVerdictFirst(payload, where) {
   const title = firstEmbed(payload).title ?? '';
   assert.notEqual(title.trim(), '', `${where}: 結果のひとことが title に無い`);
+  assertNoMentionInTitle(payload, where);
+}
+
+/**
+ * embed のタイトルはメンションを名前に変えてくれず、<@数字> がそのまま出る。
+ * 名前を見せたいものは本文か fields に置くこと。
+ */
+function assertNoMentionInTitle(payload, where) {
+  // テストのIDは u1 のような形なので、数字に限定せず拾う
+  const MENTION = /<@[!&]?[\w-]+>/;
+  for (const item of payload?.data?.embeds ?? []) {
+    const title = item.title ?? '';
+    assert.doesNotMatch(title, MENTION, `${where}: title のメンションは生のIDで出てしまう（${title}）`);
+    assert.doesNotMatch(item.author?.name ?? '', MENTION, `${where}: author 名のメンションも解決されない`);
+    for (const field of item.fields ?? []) {
+      assert.doesNotMatch(field.name ?? '', MENTION, `${where}: field 名のメンションも解決されない`);
+    }
+  }
 }
 
 async function press(customId, options = {}) {
@@ -804,6 +822,59 @@ async function startDuelBetween(screen, bet = 100) {
   await pressDuel(`d:accept:${duel.id}`, { userId: OTHER });
   return db.get('SELECT * FROM duels WHERE id = ?1', duel.id);
 }
+
+await test('1対1ゲームの決着で、勝者の名前がIDのまま出ない', async () => {
+  // embed の title はメンションを名前に変えてくれない。
+  // 決着の画面は演出（animate）の最後のコマに出るので、そこを見る
+  for (const screen of ['rr', 'cs', 'mine']) {
+    const duel = await startDuelBetween(screen, 100);
+    ctx.animated.length = 0;
+    let last = null;
+
+    // ゲームごとに進め方が違う
+    for (let step = 0; step < 60; step++) {
+      const current = await db.get('SELECT * FROM duels WHERE id = ?1', duel.id);
+      if (current.status !== 'playing') break;
+      const state = duelLib.stateOf(current);
+
+      if (screen === 'cs') {
+        // ためて撃つ。二人が同時に手を出す。溜まっていれば撃ち、足りなければためる
+        for (const [role, userId] of [['challenger', ME], ['opponent', OTHER]]) {
+          const move = (state.charge?.[role] ?? 0) > 0 ? 'shoot' : 'charge';
+          last = await pressDuel(`d:move:${duel.id}:${move}`, { userId });
+        }
+        continue;
+      }
+
+      if (screen === 'mine' && state.phase === 'place') {
+        // 先に地雷を2つずつ埋める段階がある
+        for (const [userId, cells] of [[ME, [0, 1]], [OTHER, [4, 5]]]) {
+          for (const cell of cells) last = await pressDuel(`d:cell:${duel.id}:${cell}`, { userId });
+        }
+        continue;
+      }
+
+      const turn = duelLib.userIdOf(current, current.turn);
+      const move =
+        screen === 'rr'
+          ? `d:pull:${duel.id}`
+          : `d:cell:${duel.id}:${state.board.findIndex((owner) => owner === null)}`;
+      last = await pressDuel(move, { userId: turn });
+    }
+
+    const finished = await db.get('SELECT * FROM duels WHERE id = ?1', duel.id);
+    assert.equal(finished.status, 'done', `${screen} が決着していない`);
+
+    // 決着の画面は、演出（animate）の最後のコマか、押した返事そのものに出る
+    const screens = [...ctx.animated.map((frame) => ({ data: frame })), last].filter(Boolean);
+    assert.ok(screens.length > 0, `${screen} の決着画面が取れていない`);
+    for (const shown of screens) assertNoMentionInTitle(shown, `${screen} の決着`);
+
+    // 相手の名前は本文か fields のどこかに出ている（相打ちの引き分けもある）
+    const ending = JSON.stringify(screens.at(-1));
+    assert.match(ending, /<@u\d+>|引き分け/, `${screen}: 誰が勝ったか分からない`);
+  }
+});
 
 await test('あそぶ画面から新しいゲームを開ける', async () => {
   const payload = await press('m:games:open');
@@ -3001,9 +3072,67 @@ await test('座っていなかった人は卓を立て直せない', async () =>
   assert.equal(ctx.sent.length, sentBefore);
 });
 
+await test('開催中の予想大会をチャンネルを選んで再通知できる', async () => {
+  // 再通知用のお題を1つ立てる
+  await press('m:poll:create', {
+    type: 5,
+    userId: ME,
+    fields: { question: '再通知のテスト', options: 'はい\nいいえ', minutes: '60', stake: '' },
+  });
+  const poll = await db.get("SELECT * FROM polls WHERE status = 'open' ORDER BY id DESC");
+  globalThis.__notifyPollId = poll.id;
+  assert.ok(poll.message_id, '掲示板が貼れている');
+
+  // 出題者が再通知を押すと、まずチャンネルを聞かれる
+  const pollId = globalThis.__notifyPollId;
+  const picker = await pressPoll(`pl:again:${pollId}`, { userId: ME });
+  assert.equal(picker.type, 4, '掲示板は書き換えず、本人にだけ返す');
+  assert.ok((picker.data.flags & 64) === 64);
+  assert.ok(customIds(picker).includes(`pl:notify:${pollId}`), 'チャンネルを選ぶリストが出る');
+
+  const sentBefore = ctx.sent.length;
+  const done = await pressPoll(`pl:notify:${pollId}`, { userId: ME, values: ['ch-oshirase'] });
+  assert.match(screenText(done), /知らせました/);
+  assert.equal(ctx.sent.length, sentBefore + 1, '選んだチャンネルに1件だけ出す');
+
+  const posted = ctx.sent.at(-1);
+  assert.equal(posted.channelId, 'ch-oshirase');
+  const body = JSON.stringify(posted.payload);
+  assert.match(body, /再通知/);
+  // 掲示板へ飛ぶボタンが付く（押しても Bot には届かないURLボタン）
+  const link = posted.payload.components?.[0]?.components?.[0];
+  assert.equal(link.style, 5, 'URLボタン');
+  assert.match(link.url, /^https:\/\/discord\.com\/channels\//);
+  assert.equal(link.custom_id, undefined, 'URLボタンは custom_id を持たない');
+});
+
+await test('再通知しても掲示板は増えも動きもしない', async () => {
+  const pollId = globalThis.__notifyPollId;
+  const before = await db.get('SELECT message_id, channel_id FROM polls WHERE id = ?1', pollId);
+  await pressPoll(`pl:notify:${pollId}`, { userId: ME, values: ['ch-oshirase2'] });
+  const after = await db.get('SELECT message_id, channel_id FROM polls WHERE id = ?1', pollId);
+  assert.deepEqual(after, before, '掲示板の場所は変わらない');
+});
+
+await test('出題者でなければ再通知できない', async () => {
+  const pollId = globalThis.__notifyPollId;
+  assert.match(screenText(await pressPoll(`pl:again:${pollId}`, { userId: OTHER })), /出題者だけ/);
+
+  const sentBefore = ctx.sent.length;
+  const denied = await pressPoll(`pl:notify:${pollId}`, { userId: OTHER, values: ['ch-oshirase'] });
+  assert.match(screenText(denied), /出題者だけ/);
+  assert.equal(ctx.sent.length, sentBefore, '投稿されない');
+});
+
+await test('締め切ったあとは再通知できない', async () => {
+  const pollId = globalThis.__notifyPollId;
+  await pressPoll(`pl:close:${pollId}`, { userId: ME });
+  assert.match(screenText(await pressPoll(`pl:again:${pollId}`, { userId: ME })), /締め切られ/);
+});
+
 await test('予想大会の結果からは次のお題を立てられる', async () => {
   const poll = await db.get("SELECT * FROM polls WHERE status = 'settled' ORDER BY id DESC");
-  const again = await pressPoll(`pl:again:${poll.id}`, { userId: ME });
+  const again = await pressPoll(`pl:more:${poll.id}`, { userId: ME });
   // 結果のメッセージを書き換えず、本人にだけ入口を出す
   assert.equal(again.type, 4, '新しいメッセージで返す');
   assert.ok((again.data.flags & 64) === 64, '本人にだけ見える');

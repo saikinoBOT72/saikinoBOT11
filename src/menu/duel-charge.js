@@ -219,8 +219,9 @@ function resultPayload(duel, entry, state, settings, winner, pot) {
     embeds: [
       embed({
         color: 0xf1c40f,
-        title: `🏆 <@${winnerId}> の勝ち！`,
-        description: `**${entry.reason}**\n${coins(pot, settings)} を総取りしました。`,
+        // タイトルではメンションが名前にならないので、勝者は本文の先頭に置く
+        title: '🏆 勝負あり',
+        description: `**<@${winnerId}> の勝ち！**\n${entry.reason}\n${coins(pot, settings)} を総取りしました。`,
         fields: [
           {
             name: '最後の手',

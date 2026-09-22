@@ -37,6 +37,20 @@ export function button(customId, label, { style = ButtonStyle.SECONDARY, emoji, 
   });
 }
 
+/**
+ * 押すとURLを開くボタン。custom_id を持たないので、押しても Bot には届かない。
+ * 「元のメッセージへ飛ぶ」のような案内に使う。
+ */
+export function linkButton(url, label, { emoji } = {}) {
+  return compact({
+    type: ComponentType.BUTTON,
+    style: ButtonStyle.LINK,
+    url,
+    label,
+    emoji: toEmoji(emoji),
+  });
+}
+
 export function row(...components) {
   return { type: ComponentType.ACTION_ROW, components: components.filter(Boolean) };
 }

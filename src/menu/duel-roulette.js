@@ -132,9 +132,12 @@ function resultPayload(duel, state, settings, winner, pot) {
     embeds: [
       embed({
         color: 0xf1c40f,
-        title: `🏆 <@${winnerId}> の勝ち！`,
+        // embed のタイトルはメンションを名前に変えてくれない（生のIDが出る）。
+        // 名前を出したいものは必ず本文か fields に置く
+        title: '🏆 勝負あり',
         description:
-          `**${state.pulled}発目で実弾**。<@${loserId}> に当たりました。\n` +
+          `**<@${winnerId}> の勝ち！**\n` +
+          `${state.pulled}発目で実弾。<@${loserId}> に当たりました。\n` +
           `${coins(pot, settings)} を総取りしました。`,
       }),
     ],
