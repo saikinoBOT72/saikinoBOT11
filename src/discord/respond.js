@@ -19,5 +19,14 @@ export const reply = (data, { ephemeral = true } = {}) =>
 /** 押されたメッセージを書き換える。 */
 export const update = (data) => json({ type: CallbackType.UPDATE_MESSAGE, data });
 
+/**
+ * 「受け取った」とだけ先に返す（見た目は変わらない）。
+ *
+ * Discord は3秒以内に何か返さないと「応答しませんでした」になる。
+ * 重い処理はこれを返したあとに回し、終わったら
+ * editOriginalResponse でメッセージを書き換える（15分の猶予がある）。
+ */
+export const deferUpdate = () => json({ type: CallbackType.DEFERRED_UPDATE_MESSAGE });
+
 /** 入力フォームを開く。 */
 export const modalResponse = (data) => json({ type: CallbackType.MODAL, data });

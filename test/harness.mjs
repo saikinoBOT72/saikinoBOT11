@@ -36,6 +36,11 @@ export function createTestContext() {
         edited.push({ channelId, messageId, payload });
         return {};
       },
+      /** 先に「受け取った」と返したあと、押されたメッセージを書き換えるときに使われる。 */
+      async editOriginalResponse(applicationId, token, payload) {
+        edited.push({ channelId: '@original', messageId: token, payload });
+        return {};
+      },
       /** テストからは applicationEmojis に入れたものを返す。 */
       async listApplicationEmojis() {
         if (applicationEmojis.error) throw new Error('取得できません');

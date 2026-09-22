@@ -1,0 +1,47 @@
+# 本番のBotが実際に何をしているかを、その場で覗く。
+#
+# 【使い方】PCは不要です。
+#   1. Actions タブ → 左の「本番のログを見る」→ Run workflow
+#   2. 「Run workflow」を押したら、すぐ Discord で調べたい操作をする
+#   3. 指定した秒数が経つと終わるので、実行ページの上に結果が出ます
+#
+# 何が分かるか:
+#   outcome が ok        … ちゃんと返せている
+#   outcome が exception … 例外で落ちた（中身も出ます）
+#   outcome が exceededCpu … 計算に時間をかけすぎて打ち切られた
+#   そもそも記録が出ない  … Discord からBotに届いていない
+name: 本番のログを見る
+
+on:
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: 何秒ぶん記録するか
+        required: false
+        default: '90'
+
+jobs:
+  tail:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 依存を入れる
+        run: npm ci
+
+      - name: ログを記録する
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          echo "▶ ここから ${{ inputs.seconds }} 秒間、Discord での操作を記録します"
+          echo "  いま Discord で調べたい操作をしてください"
+          # tail は繋ぎっぱなしになるので、時間で打ち切る（打ち切りは失敗ではない）
+          timeout "${{ inputs.seconds }}" npx wrangler tail saikinobot --format json > tail.jsonl || true
+          echo "▶ 記録おわり"
+          node scripts/read-tail.mjs tail.jsonl | tee -a "$GITHUB_STEP_SUMMARY"

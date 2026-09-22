@@ -32,6 +32,14 @@ async function pressPk(customId, options = {}) {
   return response.json();
 }
 
+/**
+ * 「始める」は先に受け取ったとだけ返して、掲示はあとから書き換える形にしてある。
+ * その書き換えの中身を取る。
+ */
+function lastBoard() {
+  return ctx.edited.at(-1)?.payload ?? {};
+}
+
 /** 札を手で組む。'sA' はスペードのA、'h10' はハートの10。 */
 function hand(...codes) {
   const suits = { s: 0, h: 1, d: 2, c: 3 };
@@ -163,6 +171,13 @@ await test('4人まで座れて、5人目は断られる', async () => {
   assert.equal(lib.stateOf(await db.get('SELECT * FROM poker_tables WHERE id = ?1', table.id)).players.length, 4);
 });
 
+await test('配った直後の掲示は、あとから書き換えて出す', async () => {
+  const table = await seatedTable();
+  assert.equal(table.status, 'playing', '配れている');
+  assert.match(JSON.stringify(lastBoard()), /札の交換/, '掲示が交換の場面になる');
+  assert.match(JSON.stringify(lastBoard()), /pk:hand/, '手札を見るボタンが出る');
+});
+
 await test('1人では始められない', async () => {
   await eco.setBalance(db, GUILD, 'u9', 1000, 'test');
   await press('m:pk:go:100', { userId: 'u9' });
@@ -181,9 +196,9 @@ await test('応答が届かず掲示が取り残されても、押し直せば�
   assert.equal(table.status, 'playing', '1回目で配れている');
 
   const again = await pressPk(`pk:start:${table.id}`, { userId: 'u1' });
-  assert.equal(again.type, 7, '掲示を描き直す');
-  assert.match(screenText(again), /札の交換/, 'いまの場面に追いつく');
-  assert.doesNotMatch(screenText(again), /始められませんでした/);
+  assert.equal(again.type, 6, '先に「受け取った」とだけ返す');
+  assert.match(JSON.stringify(lastBoard()), /札の交換/, 'いまの場面に追いつく');
+  assert.doesNotMatch(JSON.stringify(lastBoard()), /始められませんでした/);
 
   // 座り直そうとしても同じく追いつくだけで、席は増えない
   const late = await pressPk(`pk:join:${table.id}`, { userId: 'u7' });
@@ -194,8 +209,8 @@ await test('応答が届かず掲示が取り残されても、押し直せば�
 
 await test('勝負の場面で押し直しても、その場面に追いつく', async () => {
   const { table } = await toBetPhase(200);
-  const again = await pressPk(`pk:start:${table.id}`, { userId: 'u1' });
-  assert.match(screenText(again), /勝負か、降りるか/);
+  await pressPk(`pk:start:${table.id}`, { userId: 'u1' });
+  assert.match(JSON.stringify(lastBoard()), /勝負か、降りるか/);
 });
 
 await test('配ると全員に5枚ずつ配られる', async () => {

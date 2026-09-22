@@ -42,7 +42,7 @@ import { deposit, getSettings } from '../lib/economy.js';
 import { coins } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
-import { reply, update } from '../discord/respond.js';
+import { deferUpdate, reply, update } from '../discord/respond.js';
 
 /** 公開メッセージのボタンは `pk:` 始まり。 */
 export const namespace = 'pk';
@@ -142,9 +142,29 @@ async function handleJoin(ix, ctx, table, settings) {
   return update(lobbyPayload(await getTable(ctx.db, table.id), joined.state, settings));
 }
 
-async function handleStart(ix, ctx, table, settings, em) {
+/**
+ * 配る。
+ *
+ * 【先に「受け取った」と返す理由】
+ * Discord は3秒以内に何か返さないと「時間内に応答しませんでした」と出す。
+ * 配るのは重い処理ではないが、混み合ったときや久しぶりの起動で間に合わないことがある。
+ * 先に受け取ったとだけ返しておけば、そのあと15分かけて書き換えられるので、
+ * 「押したのに何も起きない」が起きなくなる。
+ */
+async function handleStart(ix, ctx, table, settings) {
   if (ix.userId !== table.host_id) return reply({ content: '始められるのは卓を立てた人だけです。' });
 
+  // 人数が足りないのは先に分かるので、ここだけは普通に返す
+  if (stateOf(table).players.length < MIN_PLAYERS) {
+    return reply({ content: `${MIN_PLAYERS}人集まらないと始められません。` });
+  }
+
+  ctx.waitUntil(dealAndShow(ix, ctx, table, settings));
+  return deferUpdate();
+}
+
+/** 配って、押されたメッセージを書き換える。 */
+async function dealAndShow(ix, ctx, table, settings) {
   const started = await mutate(
     ctx.db,
     table.id,
@@ -154,13 +174,15 @@ async function handleStart(ix, ctx, table, settings, em) {
     },
     { allow: ['joining'] },
   );
-  if (!started.ok) {
-    if (started.reason === 'few') return reply({ content: `${MIN_PLAYERS}人集まらないと始められません。` });
-    // すでに始まっている（1回目の応答が届かなかった）なら、掲示を追いつかせて復帰させる
-    if (started.reason === 'closed') return catchUp(ctx, table.id, settings);
-    return reply({ content: '始められませんでした。' });
-  }
-  return update(drawPayload(started.table, started.state, settings));
+
+  // 配れていれば新しい掲示。配れなくても（すでに始まっていた等）いまの状態を出す
+  const payload = started.ok
+    ? drawPayload(started.table, started.state, settings)
+    : boardPayloadFor(await getTable(ctx.db, table.id), stateOf(await getTable(ctx.db, table.id)), settings);
+
+  await ctx.rest
+    .editOriginalResponse(ix.raw.application_id, ix.raw.token, payload)
+    .catch((error) => console.error('ポーカーの配り直後の表示に失敗:', error));
 }
 
 /* ------------------------------------------------------------------ 手札（本人だけ） */
