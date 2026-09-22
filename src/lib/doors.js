@@ -51,7 +51,6 @@ export function isCapped(steps, multiplier) {
 
 /** 結果を大きく出すための見出し。 */
 export const HIT_HEADLINE = `# ${EMOJI.hit} あたり！`;
-export const MISS_HEADLINE = `# ${EMOJI.miss} はずれ`;
 
 /* ------------------------------------------------------------------ 山分けか、裏切りか */
 

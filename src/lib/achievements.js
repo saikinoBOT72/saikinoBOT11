@@ -149,9 +149,6 @@ export async function listAchievements(db, guildId) {
   return db.all('SELECT * FROM achievements WHERE guild_id = ?1 ORDER BY threshold ASC, id ASC', guildId);
 }
 
-export async function getAchievement(db, guildId, id) {
-  return db.get('SELECT * FROM achievements WHERE guild_id = ?1 AND id = ?2', guildId, id);
-}
 
 export async function createAchievement(db, guildId, achievement) {
   await db.run(

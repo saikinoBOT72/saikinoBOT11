@@ -7,7 +7,7 @@
  * 当たりが出なければ、その回の売上はまるごと次の回へ持ち越される。
  */
 import { deposit, withdraw } from './economy.js';
-import { dateKey, previousDay } from './calendar.js';
+import { dateKey } from './calendar.js';
 
 export const TICKET_PRICE = 100;
 
@@ -84,7 +84,7 @@ export function parseNumbers(input, limit = MAX_TICKETS_PER_USER) {
   return { numbers, errors };
 }
 
-export function drawNumber() {
+function drawNumber() {
   return Math.floor(Math.random() * (MAX_NUMBER + 1));
 }
 
@@ -332,9 +332,3 @@ export async function recentDraws(db, guildId, limit = 5) {
   );
 }
 
-/** 抽選が終わった回のキー（発表文で「今回」を指すため）。 */
-export function drawnKeyAt(calendar, now = new Date()) {
-  return dateKey(calendar, now);
-}
-
-export { previousDay };

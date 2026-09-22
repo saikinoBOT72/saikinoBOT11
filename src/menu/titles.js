@@ -2,8 +2,7 @@ import { describeCondition, earnedBy, equipTitle, equippedTitle, evaluate, listA
 import { allStreaks, listStreakRewards } from '../lib/streak.js';
 import { coins, truncate } from '../lib/format.js';
 import { stringSelect } from '../discord/builders.js';
-import { ButtonStyle } from '../discord/constants.js';
-import { backButton, button, embed, homeButton, id, row, show, withNotice } from './common.js';
+import { backButton, embed, homeButton, id, row, show, withNotice } from './common.js';
 
 export async function open(ix, _args, ctx, notice = null) {
   const settings = await ctx.settings(ix.guildId);

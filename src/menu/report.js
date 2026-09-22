@@ -1,5 +1,5 @@
 import { canReport, getActivity, listActivities, reportStats } from '../lib/activities.js';
-import { announceChannelFor, attemptReport, gateMessage, reportEmbed } from '../lib/reporting.js';
+import { announceChannelFor, attemptReport, reportEmbed } from '../lib/reporting.js';
 import { coins, duration, truncate } from '../lib/format.js';
 import { describeDayStart } from '../lib/calendar.js';
 import { ButtonStyle } from '../discord/constants.js';

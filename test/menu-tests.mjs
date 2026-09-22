@@ -3205,6 +3205,65 @@ await test('全部オフにしても画面は壊れない', async () => {
   assert.equal(customIds(await press('m:games:open')).length, catalog.GAMES.length + 1, '全部戻る（＋戻るボタン）');
 });
 
+section('[デトックス]');
+
+// 使われなくなったコードは、読む人の時間も Worker の大きさも無駄にする。
+// 消し忘れが積もらないよう、機械的に見張る。
+const sourceFiles = async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const here = path.dirname(new URL(import.meta.url).pathname);
+  const found = [];
+  const walk = (dir, keep) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full, keep);
+      else if (keep.test(entry.name)) found.push({ path: full, text: fs.readFileSync(full, 'utf8') });
+    }
+  };
+  walk(path.join(here, '..', 'src'), /\.js$/);
+  const outside = [];
+  for (const dir of ['test', 'scripts']) {
+    const before = found.length;
+    walk(path.join(here, '..', dir), /\.(js|mjs)$/);
+    outside.push(...found.splice(before));
+  }
+  return { src: found, outside: outside.map((file) => file.text).join('\n'), rel: (f) => f.path.split('/src/')[1] };
+};
+
+await test('読み込んだのに使っていない名前が無い', async () => {
+  const { src: files, rel } = await sourceFiles();
+  for (const file of files) {
+    for (const line of file.text.matchAll(/^import\s+\{([^}]+)\}\s+from/gm)) {
+      const body = file.text.replace(line[0], '');
+      for (const part of line[1].split(',')) {
+        const name = part.trim().split(/\s+as\s+/).pop().trim();
+        if (!name) continue;
+        assert.match(body, new RegExp(`\\b${name}\\b`), `src/${rel(file)} が ${name} を読み込んだまま使っていない`);
+      }
+    }
+  }
+});
+
+await test('どこからも呼ばれていない関数や定数が無い', async () => {
+  const { src: files, outside, rel } = await sourceFiles();
+  for (const file of files) {
+    const names = new Set();
+    for (const found of file.text.matchAll(/^export\s+(?:async\s+)?function\s+(\w+)/gm)) names.add(found[1]);
+    for (const found of file.text.matchAll(/^export\s+(?:const|let)\s+(\w+)/gm)) names.add(found[1]);
+    const others = files.filter((other) => other !== file).map((other) => other.text).join('\n');
+    for (const name of names) {
+      // 自分のファイルの中では、宣言そのもの（1回）より多く出てくれば使っている
+      const inSelf = (file.text.match(new RegExp(`\\b${name}\\b`, 'g')) ?? []).length > 1;
+      const used = (text) => new RegExp(`\\b${name}\\b`).test(text);
+      assert.ok(
+        inSelf || used(others) || used(outside),
+        `src/${rel(file)} の ${name} はどこからも使われていない`,
+      );
+    }
+  }
+});
+
 section('[ボタンの絵文字]');
 
 // Discord はボタンの emoji を本物の絵文字かどうかで検査する。

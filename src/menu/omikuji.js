@@ -8,7 +8,7 @@
  * 1文が30〜40字あるため、embed の3列（inline）に入れると折り返しだらけになる。
  * おみくじの紙らしく縦一列に並べ、短いラッキー3種だけ3列にしている。
  */
-import { OMIKUJI_ITEMS, RANK_BY_NAME, drawToday, rankHistory, readOmikuji, todaysDraw } from '../lib/omikuji.js';
+import { RANK_BY_NAME, drawToday, rankHistory, readOmikuji, todaysDraw } from '../lib/omikuji.js';
 import { describeDayStart } from '../lib/calendar.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { backButton, button, embed, homeButton, id, row, show, withNotice } from './common.js';

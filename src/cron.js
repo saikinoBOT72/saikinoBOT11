@@ -131,7 +131,7 @@ export async function sweepExpiredDuels(ctx) {
  * まだ配る前なら参加費を返し、途中なら残った人をスタンド扱いにして最後まで進める。
  * （返金目当てで放置されないよう、勝負が始まっていたら必ず決着させる）
  */
-/** 時間切れのポーカーの卓を片付ける。預かったぶんは全員に返す。 */
+/** 時間切れの簡ポーカーの卓を片付ける。預かったぶんは全員に返す。 */
 export async function sweepPoker(ctx) {
   const tables = await expiredPokerTables(ctx.db);
   for (const table of tables) {
@@ -140,12 +140,12 @@ export async function sweepPoker(ctx) {
       if (!handled || !table.message_id) continue;
       await ctx.rest
         .editMessage(table.channel_id, table.message_id, handled.payload)
-        .catch((error) => console.error('ポーカーの表示更新に失敗:', error));
+        .catch((error) => console.error('簡ポーカーの表示更新に失敗:', error));
     } catch (error) {
-      console.error(`ポーカーの片付けに失敗 (${table.id}):`, error);
+      console.error(`簡ポーカーの片付けに失敗 (${table.id}):`, error);
     }
   }
-  if (tables.length > 0) console.log(`時間切れのポーカーの卓を ${tables.length} 件片付けました`);
+  if (tables.length > 0) console.log(`時間切れの簡ポーカーの卓を ${tables.length} 件片付けました`);
 }
 
 export async function sweepBlackjack(ctx) {

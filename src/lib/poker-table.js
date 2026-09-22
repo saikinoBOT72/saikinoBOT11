@@ -1,9 +1,9 @@
 /**
- * 5枚ポーカーの卓。
+ * 簡ポーカー（5枚ドロー）の卓。
  *
  * 【流れ】
  *   joining … 卓を立てて、2〜4人が座るのを待つ
- *   draw   … 全員に5枚配る。いらない札を選んで引き直す（1回だけ、5枚まで）
+ *   draw   … 全員に5枚配る。いらない札を選んで引き直す（2回まで、毎回5枚まで）
  *   bet    … 交換が終わったら「勝負（参加費と同額を追加）」か「降りる」
  *   done   … 残った人で役比べ
  *
@@ -16,13 +16,15 @@
  * 降りた人の参加費は場に残り、勝った人が全部持っていく。
  */
 import { deposit, withdraw } from './economy.js';
-import { draw, newDeck } from './cards.js';
+import { draw, newDeck, sortHand } from './cards.js';
 import { bestOf, evaluate } from './poker.js';
 import { createTableStore } from './card-table.js';
 
 export const MIN_PLAYERS = 2;
 export const MAX_PLAYERS = 4;
 export const HAND_SIZE = 5;
+/** 引き直せる回数。途中でやめてもよい。 */
+export const MAX_DRAWS = 2;
 
 export const JOIN_TIMEOUT_MS = 120_000;
 export const PLAY_TIMEOUT_MS = 300_000;
@@ -69,6 +71,8 @@ export async function joinTable(db, table, userId) {
               cards: [],
               // 残す札。true が残す（最初は全部残す）
               keep: Array(HAND_SIZE).fill(true),
+              // 引き直した回数と、交換を終えたかどうか
+              draws: 0,
               exchanged: false,
               folded: false,
               called: false,
@@ -99,8 +103,9 @@ export function deal(state) {
   const deck = newDeck();
   const players = state.players.map((player) => ({
     ...player,
-    cards: Array.from({ length: HAND_SIZE }, () => draw(deck)),
+    cards: sortHand(Array.from({ length: HAND_SIZE }, () => draw(deck))),
     keep: Array(HAND_SIZE).fill(true),
+    draws: 0,
     exchanged: false,
     folded: false,
     called: false,
@@ -120,15 +125,29 @@ export function toggleKeep(state, userId, index) {
   };
 }
 
-/** 捨てると決めた札を引き直す。1人1回だけ。 */
+/**
+ * 捨てると決めた札を引き直す。1人 MAX_DRAWS 回まで。
+ * 引き直したら並べ直すので、残す／捨てるの指定はいったん全部「残す」に戻る。
+ */
 export function exchange(state, userId) {
   const deck = [...state.deck];
   const players = state.players.map((player) => {
     if (player.userId !== userId) return player;
-    const cards = player.cards.map((card, index) => (player.keep[index] ? card : draw(deck)));
-    return { ...player, cards, exchanged: true };
+    const cards = sortHand(player.cards.map((card, index) => (player.keep[index] ? card : draw(deck))));
+    const draws = (player.draws ?? 0) + 1;
+    return { ...player, cards, keep: Array(HAND_SIZE).fill(true), draws, exchanged: draws >= MAX_DRAWS };
   });
   return { ...state, deck, players };
+}
+
+/** 引き直さずに交換を終える（「これで勝負へ」）。 */
+export function standPat(state, userId) {
+  return {
+    ...state,
+    players: state.players.map((player) =>
+      player.userId === userId ? { ...player, exchanged: true } : player,
+    ),
+  };
 }
 
 /** 全員が交換を終えたか。 */

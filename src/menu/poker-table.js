@@ -1,5 +1,5 @@
 /**
- * 5枚ポーカーの、チャンネルに出る公開メッセージ。
+ * 簡ポーカーの、チャンネルに出る公開メッセージ。
  *
  * 【手札の隠し方】
  * 公開の卓には手札を一切出さない。「🃏 手札を見る」を押すと、
@@ -9,11 +9,12 @@
  *
  * 【進み方】
  *   joining → 2〜4人が座る
- *   draw    → 全員が1回ずつ交換
+ *   draw    → 各自2回まで交換（途中でやめてもよい）
  *   bet     → 勝負（参加費と同額を追加）か、降りる
  *   done    → 残った人で役比べ
  */
 import {
+  MAX_DRAWS,
   MAX_PLAYERS,
   MIN_PLAYERS,
   createTable,
@@ -31,8 +32,8 @@ import {
   setMessageId,
   setStatus,
   settleTable,
+  standPat,
   stateOf,
-  stayers,
   takeCall,
   toggleKeep,
 } from '../lib/poker-table.js';
@@ -69,7 +70,7 @@ export async function openTable(ctx, { guildId, channelId, hostId, bet, settings
     await setMessageId(ctx.db, id, message.id);
     return { ok: true, message };
   } catch (error) {
-    console.error('ポーカーの卓の投稿に失敗:', error);
+    console.error('簡ポーカーの卓の投稿に失敗:', error);
     await refundTable(ctx.db, await getTable(ctx.db, id), joined.state);
     await setStatus(ctx.db, id, 'cancelled');
     return { ok: false, reason: 'post' };
@@ -99,6 +100,7 @@ export async function handleComponent(ix, ctx) {
   if (action === 'hand') return handleHand(ix, ctx, table, settings, await ctx.emoji());
   if (action === 'keep') return handleKeep(ix, ctx, table, Number(arg), settings, await ctx.emoji());
   if (action === 'swap') return handleSwap(ix, ctx, table, settings, await ctx.emoji());
+  if (action === 'stand') return handleStand(ix, ctx, table, settings, await ctx.emoji());
   if (action === 'call' || action === 'fold') {
     return handleDecide(ix, ctx, table, action, settings, await ctx.emoji());
   }
@@ -182,7 +184,7 @@ async function dealAndShow(ix, ctx, table, settings) {
 
   await ctx.rest
     .editOriginalResponse(ix.raw.application_id, ix.raw.token, payload)
-    .catch((error) => console.error('ポーカーの配り直後の表示に失敗:', error));
+    .catch((error) => console.error('簡ポーカーの配り直後の表示に失敗:', error));
 }
 
 /* ------------------------------------------------------------------ 手札（本人だけ） */
@@ -208,6 +210,7 @@ function handPayload(table, state, userId, settings, em, notice = null) {
   // 交換の段階：札を押して「残す／捨てる」を切り替える
   if (state.phase === 'draw' && !player.exchanged) {
     const discards = player.keep.filter((keep) => !keep).length;
+    const left = MAX_DRAWS - (player.draws ?? 0);
     return {
       embeds: [
         withNoticeLine(
@@ -217,7 +220,8 @@ function handPayload(table, state, userId, settings, em, notice = null) {
             description:
               `${renderHand(em, player.cards)}\n\n` +
               '札を押すと「残す／捨てる」が切り替わります。\n' +
-              `いま **${discards}枚** 捨てる設定です（5枚まで替えられます）。`,
+              `いま **${discards}枚** 捨てる設定です。\n` +
+              `引き直しは **あと${left}回**（毎回5枚まで替えられます）。`,
           }),
           notice,
         ),
@@ -225,10 +229,12 @@ function handPayload(table, state, userId, settings, em, notice = null) {
       components: [
         row(...player.cards.map((card, index) => keepButton(table.id, em, card, player.keep[index], index))),
         row(
-          button(`pk:swap:${table.id}`, discards === 0 ? 'このまま勝負へ' : `${discards}枚を交換する`, {
+          button(`pk:swap:${table.id}`, `${discards}枚を交換する`, {
             emoji: '🔁',
             style: ButtonStyle.SUCCESS,
+            disabled: discards === 0,
           }),
+          button(`pk:stand:${table.id}`, 'これで勝負へ', { emoji: '✅', style: ButtonStyle.PRIMARY }),
         ),
       ],
     };
@@ -322,16 +328,45 @@ async function handleSwap(ix, ctx, table, settings, em) {
       const player = playerOf(state, ix.userId);
       if (!player) return { reject: 'seat' };
       if (state.phase !== 'draw' || player.exchanged) return { reject: 'late' };
+      if (player.keep.every((keep) => keep)) return { reject: 'none' };
       return { state: exchange(state, ix.userId) };
     },
     { allow: ['playing'] },
   );
-  if (!swapped.ok) return reply({ content: 'もう交換は終わっています。' });
+  if (!swapped.ok) {
+    return reply({
+      content: swapped.reason === 'none' ? '捨てる札を選んでください。' : 'もう交換は終わっています。',
+    });
+  }
 
+  const left = MAX_DRAWS - (playerOf(swapped.state, ix.userId).draws ?? 0);
+  const notice = left > 0 ? `🔁 引き直しました。あと${left}回替えられます。` : '🔁 引き直しました。';
+  return finishDrawStep(ix, ctx, table, settings, em, notice);
+}
+
+/** 引き直さずに交換を終える。 */
+async function handleStand(ix, ctx, table, settings, em) {
+  const stood = await mutate(
+    ctx.db,
+    table.id,
+    ({ state }) => {
+      const player = playerOf(state, ix.userId);
+      if (!player) return { reject: 'seat' };
+      if (state.phase !== 'draw' || player.exchanged) return { reject: 'late' };
+      return { state: standPat(state, ix.userId) };
+    },
+    { allow: ['playing'] },
+  );
+  if (!stood.ok) return reply({ content: 'もう交換は終わっています。' });
+  return finishDrawStep(ix, ctx, table, settings, em, '✅ この手で勝負します。');
+}
+
+/** 交換の1手が済んだあと。全員そろっていれば次へ進め、画面を描き直す。 */
+async function finishDrawStep(ix, ctx, table, settings, em, notice) {
   await advanceIfReady(ctx, table.id, settings, em);
   const fresh = await getTable(ctx.db, table.id);
   ctx.waitUntil(refreshBoard(ctx, fresh, settings, em));
-  return update(handPayload(fresh, stateOf(fresh), ix.userId, settings, em, '🔁 引き直しました。'));
+  return update(handPayload(fresh, stateOf(fresh), ix.userId, settings, em, notice));
 }
 
 /* ------------------------------------------------------------------ 勝負・降りる */
@@ -426,7 +461,7 @@ async function advanceIfReady(ctx, id, settings, em) {
       if (!table?.message_id) return;
       await ctx.rest
         .editMessage(table.channel_id, table.message_id, resultPayload(table, toDone.state, result, settings, em))
-        .catch((error) => console.error('ポーカーの結果表示に失敗:', error));
+        .catch((error) => console.error('簡ポーカーの結果表示に失敗:', error));
     })(),
   );
 }
@@ -439,7 +474,7 @@ async function refreshBoard(ctx, table, settings, em) {
   const payload = state.phase === 'bet' ? betPayload(table, state, settings) : drawPayload(table, state, settings);
   await ctx.rest
     .editMessage(table.channel_id, table.message_id, payload)
-    .catch((error) => console.error('ポーカーの卓の更新に失敗:', error));
+    .catch((error) => console.error('簡ポーカーの卓の更新に失敗:', error));
 }
 
 /* ------------------------------------------------------------------ 表示 */
@@ -451,10 +486,10 @@ function lobbyPayload(table, state, settings) {
     embeds: [
       embed({
         color: COLOR,
-        title: `♠️ ポーカー　参加費 ${table.bet}`,
+        title: `♠️ 簡ポーカー　参加費 ${table.bet}`,
         description:
           `<@${table.host_id}> が卓を立てました。**${MIN_PLAYERS}〜${MAX_PLAYERS}人**で遊べます。\n\n` +
-          '5枚配って、いらない札を1回だけ引き直し。そのあと勝負か降りるかを決めます。\n\n' +
+          `5枚配って、いらない札を**${MAX_DRAWS}回まで**引き直し。そのあと勝負か降りるかを決めます。\n\n` +
           `**席（${state.players.length}/${MAX_PLAYERS}）**\n${seats}`,
         footer: { text: '2分以内に始まらなければ流れます' },
       }),
@@ -473,20 +508,22 @@ function lobbyPayload(table, state, settings) {
 }
 
 function drawPayload(table, state, settings) {
-  const lines = state.players.map(
-    (player) => `　<@${player.userId}>　${player.exchanged ? '✅ 交換ずみ' : '⏳ 考え中…'}`,
-  );
+  const lines = state.players.map((player) => {
+    const draws = player.draws ?? 0;
+    const mark = player.exchanged ? '✅ 交換ずみ' : draws > 0 ? `🔁 ${draws}回替えた` : '⏳ 考え中…';
+    return `　<@${player.userId}>　${mark}`;
+  });
   return {
     content: '',
     embeds: [
       embed({
         color: COLOR,
-        title: '♠️ ポーカー　札の交換',
+        title: '♠️ 簡ポーカー　札の交換',
         description:
           '**手札は本人にだけ見えます。** 下のボタンから開いて、いらない札を引き直してください。\n\n' +
           lines.join('\n'),
         fields: [{ name: '場', value: coins(potOf(state), settings), inline: true }],
-        footer: { text: '5枚まで替えられます' },
+        footer: { text: `${MAX_DRAWS}回まで、毎回5枚まで替えられます` },
       }),
     ],
     components: [row(button(`pk:hand:${table.id}`, '手札を見る', { emoji: '🃏', style: ButtonStyle.PRIMARY }))],
@@ -503,7 +540,7 @@ function betPayload(table, state, settings) {
     embeds: [
       embed({
         color: COLOR,
-        title: '♠️ ポーカー　勝負か、降りるか',
+        title: '♠️ 簡ポーカー　勝負か、降りるか',
         description:
           `乗るなら追加で **${table.bet}**。降りれば参加費の **${table.bet}** だけの負けで済みます。\n\n` +
           lines.join('\n'),
@@ -632,7 +669,7 @@ export async function timeOut(ctx, table) {
       embeds: [
         embed({
           color: 0x95a5a6,
-          title: '⌛ ポーカーは流れました',
+          title: '⌛ 簡ポーカーは流れました',
           description: '時間切れです。預かっていた参加費は全員に返しました。',
         }),
       ],
@@ -641,4 +678,3 @@ export async function timeOut(ctx, table) {
   };
 }
 
-export { stayers };

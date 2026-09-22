@@ -221,6 +221,7 @@ await test('配ると全員に5枚ずつ配られる', async () => {
   for (const player of state.players) {
     assert.equal(player.cards.length, 5, '5枚配る');
     assert.deepEqual(player.keep, [true, true, true, true, true], '最初は全部残す');
+    assert.equal(player.draws, 0);
     assert.equal(player.exchanged, false);
   }
   // 配った札がだぶっていない
@@ -274,10 +275,32 @@ await test('残す／捨てるを切り替えて、選んだ札だけ入れ替�
     .stateOf(await db.get('SELECT * FROM poker_tables WHERE id = ?1', table.id))
     .players.find((player) => player.userId === 'u1');
 
-  assert.equal(after.exchanged, true);
-  assert.deepEqual(after.cards.slice(2), before.slice(2), '残した3枚はそのまま');
-  const same = (a, b) => a.rank === b.rank && a.suit === b.suit;
-  assert.ok(!after.cards.slice(0, 2).every((card, index) => same(card, before[index])), '捨てた2枚は引き直される');
+  assert.equal(after.draws, 1);
+  assert.equal(after.exchanged, false, 'まだ1回目なので続けられる');
+  // 引き直すと並べ直すので、位置ではなく「その札があるか」で見る
+  const key = (card) => `${card.suit}-${card.rank}`;
+  const kept = new Set(after.cards.map(key));
+  for (const card of before.slice(2)) assert.ok(kept.has(key(card)), '残した3枚はそのまま');
+  assert.ok(!before.slice(0, 2).every((card) => kept.has(key(card))), '捨てた2枚は引き直される');
+  assert.deepEqual(after.keep, [true, true, true, true, true], '次の交換に向けて選び直せる');
+});
+
+await test('手札は右へいくほど小さい順に並ぶ', async () => {
+  const table = await seatedTable();
+  const weight = (card) => (card.rank === 1 ? 14 : card.rank);
+  for (const player of lib.stateOf(table).players) {
+    const order = player.cards.map(weight);
+    assert.deepEqual(order, [...order].sort((a, b) => b - a), `並んでいない: ${order.join(',')}`);
+  }
+
+  // 引き直したあとも並べ直す
+  for (let index = 0; index < 5; index++) await pressPk(`pk:keep:${table.id}:${index}`, { userId: 'u1' });
+  await pressPk(`pk:swap:${table.id}`, { userId: 'u1' });
+  const after = lib
+    .stateOf(await db.get('SELECT * FROM poker_tables WHERE id = ?1', table.id))
+    .players.find((player) => player.userId === 'u1').cards;
+  const order = after.map(weight);
+  assert.deepEqual(order, [...order].sort((a, b) => b - a), '引き直したあとも並んでいる');
 });
 
 await test('5枚全部を替えられる', async () => {
@@ -293,23 +316,68 @@ await test('5枚全部を替えられる', async () => {
   assert.ok(!after.every((card, index) => same(card, before[index])), '5枚とも引き直される');
 });
 
-await test('交換は1人1回だけ', async () => {
+await test('交換は1人2回まで', async () => {
   const table = await seatedTable();
-  await pressPk(`pk:swap:${table.id}`, { userId: 'u1' });
-  const again = await pressPk(`pk:swap:${table.id}`, { userId: 'u1' });
-  assert.match(screenText(again), /もう交換は終わって/);
+  const swapOnce = async () => {
+    await pressPk(`pk:keep:${table.id}:0`, { userId: 'u1' });
+    await pressPk(`pk:swap:${table.id}`, { userId: 'u1' });
+  };
+  await swapOnce();
+  await swapOnce();
+
+  const after = lib
+    .stateOf(await db.get('SELECT * FROM poker_tables WHERE id = ?1', table.id))
+    .players.find((player) => player.userId === 'u1');
+  assert.equal(after.draws, 2);
+  assert.equal(after.exchanged, true, '2回替えたら終わり');
+
   const late = await pressPk(`pk:keep:${table.id}:0`, { userId: 'u1' });
   assert.match(screenText(late), /もう交換は終わって/);
+  const again = await pressPk(`pk:swap:${table.id}`, { userId: 'u1' });
+  assert.match(screenText(again), /もう交換は終わって/);
+});
+
+await test('捨てる札を選ばずに交換は押せない', async () => {
+  const table = await seatedTable();
+  const nothing = await pressPk(`pk:swap:${table.id}`, { userId: 'u1' });
+  assert.match(screenText(nothing), /捨てる札を選んで/);
+  const still = lib
+    .stateOf(await db.get('SELECT * FROM poker_tables WHERE id = ?1', table.id))
+    .players.find((player) => player.userId === 'u1');
+  assert.equal(still.draws, 0, '引き直していない');
+});
+
+await test('「これで勝負へ」で1回目の途中でも打ち切れる', async () => {
+  const table = await seatedTable();
+  const before = lib.stateOf(table).players.find((player) => player.userId === 'u1').cards;
+  await pressPk(`pk:stand:${table.id}`, { userId: 'u1' });
+
+  const after = lib
+    .stateOf(await db.get('SELECT * FROM poker_tables WHERE id = ?1', table.id))
+    .players.find((player) => player.userId === 'u1');
+  assert.equal(after.exchanged, true);
+  assert.equal(after.draws, 0, '引き直していない');
+  assert.deepEqual(after.cards, before, '手札はそのまま');
 });
 
 await test('全員が交換し終わると勝負の場面に進む', async () => {
   const table = await seatedTable();
   for (const userId of SEATS.slice(0, 3)) {
-    await pressPk(`pk:swap:${table.id}`, { userId });
+    await pressPk(`pk:stand:${table.id}`, { userId });
     const mid = lib.stateOf(await db.get('SELECT * FROM poker_tables WHERE id = ?1', table.id));
     assert.equal(mid.phase, 'draw', 'まだ全員終わっていない');
   }
-  await pressPk(`pk:swap:${table.id}`, { userId: 'u4' });
+  await pressPk(`pk:stand:${table.id}`, { userId: 'u4' });
+  const after = lib.stateOf(await db.get('SELECT * FROM poker_tables WHERE id = ?1', table.id));
+  assert.equal(after.phase, 'bet');
+});
+
+await test('1回だけ替えてやめた人がいても先へ進む', async () => {
+  const table = await seatedTable();
+  await pressPk(`pk:keep:${table.id}:0`, { userId: 'u1' });
+  await pressPk(`pk:swap:${table.id}`, { userId: 'u1' });
+  await pressPk(`pk:stand:${table.id}`, { userId: 'u1' });
+  for (const userId of SEATS.slice(1)) await pressPk(`pk:stand:${table.id}`, { userId });
   const after = lib.stateOf(await db.get('SELECT * FROM poker_tables WHERE id = ?1', table.id));
   assert.equal(after.phase, 'bet');
 });
@@ -328,7 +396,7 @@ async function toBetPhase(bet = 200) {
   const startTotal = await totalCoins();
 
   const table = await seatedTable(bet);
-  for (const userId of SEATS) await pressPk(`pk:swap:${table.id}`, { userId });
+  for (const userId of SEATS) await pressPk(`pk:stand:${table.id}`, { userId });
   return { table: await db.get('SELECT * FROM poker_tables WHERE id = ?1', table.id), startTotal };
 }
 

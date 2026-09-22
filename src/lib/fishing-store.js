@@ -97,15 +97,6 @@ export async function recordCatch(db, guildId, userId, fishId, sizeMul) {
   return { fish, price, sizeMul };
 }
 
-/** 在庫の一覧。種類ごとにまとめず、1匹ずつ大きさが見えるように返す。 */
-export async function listCatches(db, guildId, userId, limit = 50) {
-  return db.all(
-    `SELECT id, fish_id, size_mul, price FROM fishing_catches
-     WHERE guild_id = ?1 AND user_id = ?2
-     ORDER BY price DESC, id ASC LIMIT ?3`,
-    guildId, userId, limit,
-  );
-}
 
 /** 種類ごとにまとめた在庫（売却画面用）。 */
 export async function inventorySummary(db, guildId, userId) {

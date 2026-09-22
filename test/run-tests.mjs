@@ -1981,7 +1981,6 @@ await test('結果に出る絵文字はすべて emoji.js から来ている', a
   assert.equal(dice.evaluate([1, 1, 1]).emoji, em.hand_pinzoro);
   assert.equal(doorsLib.DOORS.red.emoji, em.door_red);
   assert.ok(doorsLib.HIT_HEADLINE.includes(em.hit));
-  assert.ok(doorsLib.MISS_HEADLINE.includes(em.miss));
   assert.equal(charge.MOVES.shoot.emoji, em.move_shoot);
   assert.equal(charge.hearts(1), `${em.hp_full}${em.hp_lost}`);
 });

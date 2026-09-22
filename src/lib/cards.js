@@ -35,6 +35,16 @@ export function render(emoji, card) {
   return cardFace(emoji, card.suit, card.rank, RANK_LABELS[card.rank]);
 }
 
+/**
+ * ポーカー用に手札を並べ替える。左がいちばん強く、右へいくほど小さい。
+ * A は 13 より上として扱う。同じ数字はスートの順（スペード→ハート→ダイヤ→クラブ）。
+ * 5枚を1回並べ替えるだけなので、重さは無いに等しい。
+ */
+export function sortHand(cards) {
+  const weight = (card) => (card.rank === 1 ? 14 : card.rank);
+  return [...cards].sort((a, b) => weight(b) - weight(a) || a.suit - b.suit);
+}
+
 /** 手札を並べる。伏せ札は裏で出す。 */
 export function renderHand(emoji, cards, { hideFrom = null } = {}) {
   return cards

@@ -1,4 +1,4 @@
-import { ensureAccount, getBalance } from './economy.js';
+import { ensureAccount } from './economy.js';
 
 /** アイテムの種類。 */
 export const ITEM_KINDS = {

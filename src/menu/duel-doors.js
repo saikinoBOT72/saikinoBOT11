@@ -9,7 +9,6 @@ import {
   DOORS,
   HIT_HEADLINE,
   MAX_STEPS,
-  MISS_HEADLINE,
   SHARE,
   STEP_MULTIPLIER,
   isCapped,
@@ -18,7 +17,7 @@ import {
   payout,
   splitOrSteal,
 } from '../lib/doors.js';
-import { finishDuel, mutate, payout as payDuel, userIdOf } from '../lib/duel.js';
+import { finishDuel, mutate, payout as payDuel } from '../lib/duel.js';
 import { coins } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';

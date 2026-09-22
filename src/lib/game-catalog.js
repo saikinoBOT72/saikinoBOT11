@@ -14,6 +14,7 @@
  */
 import { EMOJI as em } from './emoji.js';
 import { MAX_PLAYERS as BJ_MAX_PLAYERS } from './blackjack.js';
+import { MAX_DRAWS as PK_MAX_DRAWS } from './poker-table.js';
 
 /** style は数字ではなく名前で持ち、画面側で ButtonStyle に直す。 */
 export const GAMES = [
@@ -28,7 +29,13 @@ export const GAMES = [
     style: 'PRIMARY',
   },
   { key: 'lot', name: '宝くじ', emoji: em.lottery, hint: '毎週日曜に抽選。当たれば持ち越しごと総取り', style: 'PRIMARY' },
-  { key: 'pk', name: 'ポーカー', emoji: '♠️', hint: '2〜4人。5枚配って1回だけ引き直し、勝負か降りるか', style: 'PRIMARY' },
+  {
+    key: 'pk',
+    name: '簡ポーカー',
+    emoji: '♠️',
+    hint: `2〜4人。5枚配って${PK_MAX_DRAWS}回まで引き直し、勝負か降りるか`,
+    style: 'PRIMARY',
+  },
   { key: 'fish', name: '釣り', emoji: '🎣', hint: '島でのんびり。釣った魚は図鑑と売り物に', style: 'PRIMARY' },
   { key: 'omi', name: 'おみくじ', emoji: '🎋', hint: '1日1回。コインは動かない、読んで楽しむだけ', style: 'PRIMARY' },
   { key: 'poll', name: '予想大会', emoji: em.poll, hint: 'みんなで賭けて、正解者で山分け', style: 'SUCCESS' },
