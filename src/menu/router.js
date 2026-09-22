@@ -42,6 +42,7 @@ export const screens = {
   fish: gatedAll('fish', fishing.actions),
   omi: gatedAll('omi', omikuji.actions),
   bj: gated('bj', games.bj),
+  pk: gated('pk', games.pk),
   rr: gated('rr', games.rr),
   cs: gated('cs', games.cs),
   mine: gated('mine', games.mine),

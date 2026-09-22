@@ -28,6 +28,7 @@ export const GAMES = [
     style: 'PRIMARY',
   },
   { key: 'lot', name: '宝くじ', emoji: em.lottery, hint: '毎週日曜に抽選。当たれば持ち越しごと総取り', style: 'PRIMARY' },
+  { key: 'pk', name: 'ポーカー', emoji: '♠️', hint: '2〜4人。5枚配って1回だけ引き直し、勝負か降りるか', style: 'PRIMARY' },
   { key: 'fish', name: '釣り', emoji: '🎣', hint: '島でのんびり。釣った魚は図鑑と売り物に', style: 'PRIMARY' },
   { key: 'omi', name: 'おみくじ', emoji: '🎋', hint: '1日1回。コインは動かない、読んで楽しむだけ', style: 'PRIMARY' },
   { key: 'poll', name: '予想大会', emoji: em.poll, hint: 'みんなで賭けて、正解者で山分け', style: 'SUCCESS' },

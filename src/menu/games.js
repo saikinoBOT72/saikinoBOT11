@@ -5,6 +5,8 @@ import { payoutTable, spin } from '../lib/slot.js';
 import { startChallenge } from './rps-challenge.js';
 import { startChallenge as startDuel, findGame } from './duel-board.js';
 import { openTable as openBlackjack } from './blackjack-table.js';
+import { openTable as openPoker } from './poker-table.js';
+import { MAX_PLAYERS as PK_MAX_PLAYERS, MIN_PLAYERS as PK_MIN_PLAYERS } from '../lib/poker-table.js';
 import { MAX_PLAYERS as BJ_MAX_PLAYERS } from '../lib/blackjack.js';
 import { enabledGames, GAME_BY_KEY, isGameEnabled } from '../lib/game-catalog.js';
 import { startChallenge as startChinchiro } from './chinchiro-match.js';
@@ -124,6 +126,93 @@ export function gated(key, actions) {
 export function gatedAll(key, actions) {
   return Object.fromEntries(Object.entries(actions).map(([name, fn]) => [name, gate(key, fn)]));
 }
+
+/* ------------------------------------------------------------------ ポーカー */
+
+async function pkOpen(ix, _args, ctx, notice = null) {
+  const settings = await ctx.settings(ix.guildId);
+  const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
+
+  return show(ix, {
+    embeds: [
+      withNotice(
+        embed({
+          color: 0x2c3e50,
+          title: '♠️ ポーカー（5枚・引き直し1回）',
+          description:
+            `所持金 ${coins(balance, settings)}\n\n` +
+            `卓を立てるとチャンネルに投稿され、**${PK_MIN_PLAYERS}〜${PK_MAX_PLAYERS}人**で遊べます。\n\n` +
+            '**手札は本人にだけ見えます。** 5枚配られたら、いらない札を選んで1回だけ引き直し。\n' +
+            'そのあと「勝負」か「降りる」を決めて、残った人で役を比べます。\n\n' +
+            'まず参加費を選んでください。**勝負に乗るともう同額**かかります。',
+          fields: [
+            { name: '強い順', value: 'ストレートフラッシュ ＞ フォーカード ＞ フルハウス ＞ フラッシュ ＞ ストレート' },
+            { name: '　', value: '＞ スリーカード ＞ ツーペア ＞ ワンペア ＞ ハイカード' },
+            { name: '降りたら', value: '参加費ぶんだけの負け。場に残ります', inline: true },
+            { name: '全員降りたら', value: '不成立。参加費は返ります', inline: true },
+          ],
+        }),
+        notice,
+      ),
+    ],
+    components: amountRows(['pk', 'go'], balance, {
+      maxBet: settings.max_bet,
+      customId: id('pk', 'custom'),
+      extra: [backButton('games')],
+    }),
+  });
+}
+
+function pkCustom(ix) {
+  return openModal(amountModal(id('pk', 'amount'), 'ポーカーの参加費', '参加費'));
+}
+
+async function pkAmount(ix, _args, ctx) {
+  const amount = readInt(ix, 'amount', { min: 0 });
+  if (isError(amount)) return pkOpen(ix, [], ctx, amount.error);
+  return pkGo(ix, [String(amount)], ctx);
+}
+
+async function pkGo(ix, [rawBet], ctx) {
+  const bet = Number(rawBet);
+  const settings = await ctx.settings(ix.guildId);
+  const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
+
+  // 勝負に乗ると参加費と同額をもう一度払うので、そのぶんも見ておく
+  const check = checkBet(bet, balance, settings);
+  if (!check.ok) return pkOpen(ix, [], ctx, check.message);
+
+  const opened = await openPoker(ctx, {
+    guildId: ix.guildId,
+    channelId: ix.channelId,
+    hostId: ix.userId,
+    bet,
+    settings,
+  });
+
+  if (!opened.ok) {
+    const messages = {
+      insufficient: `参加費 ${coins(bet, settings)} が払えません。`,
+      post: 'このチャンネルに卓を投稿できませんでした。',
+    };
+    return pkOpen(ix, [], ctx, messages[opened.reason] ?? '卓を立てられませんでした。');
+  }
+
+  return show(ix, {
+    embeds: [
+      embed({
+        color: 0x2c3e50,
+        title: '♠️ 卓を立てました',
+        description:
+          `参加費 ${coins(bet, settings)} の卓をチャンネルに置きました。\n` +
+          `**${PK_MIN_PLAYERS}人**集まったら「▶️ 始める」で配れます。`,
+      }),
+    ],
+    components: [row(button(id('pk', 'open'), 'もう一度立てる', { emoji: '♠️' }), homeButton())],
+  });
+}
+
+export const pk = { open: pkOpen, custom: pkCustom, amount: pkAmount, go: pkGo };
 
 export const games = { open };
 

@@ -1,83 +1,25 @@
 /**
  * ブラックジャックの卓の出し入れ。
  *
- * duels と同じく、読んだときの version のままでなければ書けないようにして、
- * 同時押しでも手札や手番がすり替わらないようにする。
+ * 卓の作り方・読み方・同時押し対策は lib/card-table.js と共通（ポーカーと同じ土台）。
+ * ここにはブラックジャックならではの中身（配り方・ディーラーの動き・精算）だけを置く。
  */
 import { deposit, withdraw } from './economy.js';
 import { MAX_PLAYERS, dealerShouldHit, isBlackjack, outcome, payout } from './blackjack.js';
 import { draw, newDeck } from './cards.js';
+import { createTableStore } from './card-table.js';
 
 /** 参加を待つ時間と、席についてからの持ち時間。 */
 export const JOIN_TIMEOUT_MS = 120_000;
 export const PLAY_TIMEOUT_MS = 300_000;
 
-export async function createTable(db, { id, guildId, channelId, hostId, bet }) {
-  const now = Date.now();
-  await db.run(
-    `INSERT INTO blackjack_tables (id, guild_id, channel_id, host_id, bet, status, state, expires_at, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, 'joining', ?6, ?7, ?8)`,
-    id,
-    guildId,
-    channelId,
-    hostId,
-    bet,
-    JSON.stringify({ players: [], dealer: [], deck: [], turn: 0 }),
-    now + JOIN_TIMEOUT_MS,
-    now,
-  );
-  return getTable(db, id);
-}
+const store = createTableStore('blackjack_tables', {
+  emptyState: () => ({ players: [], dealer: [], deck: [], turn: 0 }),
+  joinTimeoutMs: JOIN_TIMEOUT_MS,
+  playTimeoutMs: PLAY_TIMEOUT_MS,
+});
 
-export async function getTable(db, id) {
-  return db.get('SELECT * FROM blackjack_tables WHERE id = ?1', id);
-}
-
-export function stateOf(table) {
-  try {
-    return JSON.parse(table.state);
-  } catch {
-    return { players: [], dealer: [], deck: [], turn: 0 };
-  }
-}
-
-export async function setMessageId(db, id, messageId) {
-  await db.run('UPDATE blackjack_tables SET message_id = ?2 WHERE id = ?1', id, messageId);
-}
-
-export async function setStatus(db, id, status) {
-  await db.run('UPDATE blackjack_tables SET status = ?2 WHERE id = ?1', id, status);
-}
-
-/**
- * 状態を安全に書き換える。
- * 書けなかったら読み直してやり直す（duel.mutate と同じ考え方）。
- * @returns {Promise<{ok: true, table: object, state: object, extra?: any} | {ok: false, reason: string}>}
- */
-export async function mutate(db, id, apply, { allow = ['joining', 'playing'], attempts = 6 } = {}) {
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    const table = await getTable(db, id);
-    if (!table) return { ok: false, reason: 'missing' };
-    if (!allow.includes(table.status)) return { ok: false, reason: 'closed' };
-
-    const result = apply({ table, state: stateOf(table) });
-    if (result?.reject) return { ok: false, reason: result.reject };
-
-    const written = await db.run(
-      `UPDATE blackjack_tables SET state = ?3, status = ?4, version = version + 1, expires_at = ?5
-        WHERE id = ?1 AND version = ?2`,
-      id,
-      table.version,
-      JSON.stringify(result.state),
-      result.status ?? table.status,
-      Date.now() + (result.status === 'playing' || table.status === 'playing' ? PLAY_TIMEOUT_MS : JOIN_TIMEOUT_MS),
-    );
-    if (written.changes === 1) {
-      return { ok: true, table: await getTable(db, id), state: result.state, extra: result.extra };
-    }
-  }
-  return { ok: false, reason: 'busy' };
-}
+export const { createTable, getTable, stateOf, setMessageId, setStatus, mutate, expiredTables } = store;
 
 /* ------------------------------------------------------------------ 席につく */
 
@@ -188,10 +130,3 @@ export async function refundTable(db, table, state) {
   }
 }
 
-/** 時間切れの卓（1分ごとの定期処理から拾う）。 */
-export async function expiredTables(db, now = Date.now()) {
-  return db.all(
-    "SELECT * FROM blackjack_tables WHERE status IN ('joining', 'playing') AND expires_at <= ?1 LIMIT 25",
-    now,
-  );
-}
