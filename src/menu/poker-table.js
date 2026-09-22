@@ -2,7 +2,7 @@
  * 5枚ポーカーの、チャンネルに出る公開メッセージ。
  *
  * 【手札の隠し方】
- * 公開の卓には手札を一切出さない。「🂠 手札を見る」を押すと、
+ * 公開の卓には手札を一切出さない。「🃏 手札を見る」を押すと、
  * 押した本人にだけ見えるメッセージで5枚を返す。札のボタンを押すと
  * 「残す／捨てる」が切り替わり、「交換する」で引き直す。
  * 本人だけのメッセージなので、何度押しても他人には見えない。
@@ -489,7 +489,7 @@ function drawPayload(table, state, settings) {
         footer: { text: '5枚まで替えられます' },
       }),
     ],
-    components: [row(button(`pk:hand:${table.id}`, '手札を見る', { emoji: '🂠', style: ButtonStyle.PRIMARY }))],
+    components: [row(button(`pk:hand:${table.id}`, '手札を見る', { emoji: '🃏', style: ButtonStyle.PRIMARY }))],
   };
 }
 
@@ -513,7 +513,7 @@ function betPayload(table, state, settings) {
     ],
     components: [
       row(
-        button(`pk:hand:${table.id}`, '手札を見る', { emoji: '🂠', style: ButtonStyle.PRIMARY }),
+        button(`pk:hand:${table.id}`, '手札を見る', { emoji: '🃏', style: ButtonStyle.PRIMARY }),
         button(`pk:call:${table.id}`, `勝負する（+${table.bet}）`, { emoji: '💪', style: ButtonStyle.SUCCESS }),
         button(`pk:fold:${table.id}`, '降りる', { emoji: '🏳️', style: ButtonStyle.SECONDARY }),
       ),

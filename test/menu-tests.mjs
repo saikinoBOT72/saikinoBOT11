@@ -3205,5 +3205,63 @@ await test('全部オフにしても画面は壊れない', async () => {
   assert.equal(customIds(await press('m:games:open')).length, catalog.GAMES.length + 1, '全部戻る（＋戻るボタン）');
 });
 
+section('[ボタンの絵文字]');
+
+// Discord はボタンの emoji を本物の絵文字かどうかで検査する。
+// 見た目が絵文字でも Unicode の絵文字ではない文字（🂠 トランプの裏、⚀ サイコロの目など）を
+// 入れると、メッセージごと 400 で弾かれ、押した人には「時間内に応答しませんでした」と出る。
+// 実際にポーカーの「手札を見る」で起きたので、機械的に見張る。
+const looksLikeEmoji = (value) => {
+  if (typeof value !== 'string' || value === '') return false;
+  if (/^<a?:\w+:\d+>$/.test(value)) return true; // サーバー独自の絵文字
+  const chars = [...value];
+  if (!/\p{Emoji}/u.test(chars[0])) return false;
+  return chars.every((char) => /[\p{Emoji}\p{Emoji_Modifier}\uFE0F\u200D\u20E3]/u.test(char));
+};
+
+// 文字として出すぶんには問題ないので、絵文字表から外して良いものだけをここに書く。
+const TEXT_ONLY_EMOJI = new Set(['card_back', 'dice_1', 'dice_2', 'dice_3', 'dice_4', 'dice_5', 'dice_6']);
+
+await test('絵文字表の中身はボタンに載せられる本物の絵文字', () => {
+  for (const [name, value] of Object.entries(emojiLib.EMOJI)) {
+    if (TEXT_ONLY_EMOJI.has(name)) {
+      assert.ok(!looksLikeEmoji(value), `${name} は本物の絵文字なので TEXT_ONLY_EMOJI から外す`);
+      continue;
+    }
+    assert.ok(looksLikeEmoji(value), `EMOJI.${name} (${value}) はボタンに載せられない`);
+  }
+});
+
+await test('文字として使う絵文字をボタンに載せていない', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const here = path.dirname(new URL(import.meta.url).pathname);
+  const root = path.join(here, '..', 'src');
+  const files = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith('.js')) files.push(full);
+    }
+  };
+  walk(root);
+
+  let checked = 0;
+  for (const file of files) {
+    const text = fs.readFileSync(file, 'utf8');
+    const where = path.relative(root, file);
+    for (const match of text.matchAll(/emoji:\s*'([^']*)'/g)) {
+      checked += 1;
+      assert.ok(looksLikeEmoji(match[1]), `src/${where} の emoji: '${match[1]}' は本物の絵文字ではない`);
+    }
+    for (const match of text.matchAll(/emoji:\s*(?:em|EMOJI|emoji)\.(\w+)/g)) {
+      checked += 1;
+      assert.ok(!TEXT_ONLY_EMOJI.has(match[1]), `src/${where} が文字用の ${match[1]} をボタンに載せている`);
+    }
+  }
+  assert.ok(checked > 100, `見張れた絵文字が少なすぎる: ${checked}`);
+});
+
 runner.done();
 db.close();
