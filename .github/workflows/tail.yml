@@ -54,9 +54,10 @@ jobs:
           echo "================================================"
           echo " 記録おわり"
           echo "================================================"
-          # つながらなかったときの理由も見えるようにしておく
-          if [ ! -s tail.jsonl ]; then
-            echo "（記録が空でした。wrangler の出力）"
-            tail -n 20 tail.err || true
-          fi
+          # wrangler が何を出したのかを必ず見せる。読めないときの手がかりになる
+          echo "--- wrangler の出力（先頭30行）---"
+          head -n 30 tail.jsonl || true
+          echo "--- wrangler のエラー出力（先頭30行）---"
+          head -n 30 tail.err || true
+          echo "--- 行数: $(wc -l < tail.jsonl) ---"
           node scripts/read-tail.mjs tail.jsonl | tee -a "$GITHUB_STEP_SUMMARY"
