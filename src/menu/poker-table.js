@@ -91,21 +91,43 @@ export async function handleComponent(ix, ctx) {
   }
 
   const settings = await getSettings(ctx.db, table.guild_id);
-  const em = await ctx.emoji();
 
+  // 札を出す操作のときだけ絵文字を読む。座る・始めるを軽くして、
+  // Discord の3秒の制限に余裕を持たせるため
   if (action === 'join') return handleJoin(ix, ctx, table, settings);
-  if (action === 'start') return handleStart(ix, ctx, table, settings, em);
-  if (action === 'hand') return handleHand(ix, ctx, table, settings, em);
-  if (action === 'keep') return handleKeep(ix, ctx, table, Number(arg), settings, em);
-  if (action === 'swap') return handleSwap(ix, ctx, table, settings, em);
-  if (action === 'call' || action === 'fold') return handleDecide(ix, ctx, table, action, settings, em);
+  if (action === 'start') return handleStart(ix, ctx, table, settings);
+  if (action === 'hand') return handleHand(ix, ctx, table, settings, await ctx.emoji());
+  if (action === 'keep') return handleKeep(ix, ctx, table, Number(arg), settings, await ctx.emoji());
+  if (action === 'swap') return handleSwap(ix, ctx, table, settings, await ctx.emoji());
+  if (action === 'call' || action === 'fold') {
+    return handleDecide(ix, ctx, table, action, settings, await ctx.emoji());
+  }
   return reply({ content: '不明な操作です。' });
 }
 
 /* ------------------------------------------------------------------ 座る・始める */
 
+/**
+ * いまの状態にあった掲示を作る。
+ * 応答が届かずに掲示が取り残されたとき、次に押された操作で追いつかせるのに使う。
+ */
+function boardPayloadFor(table, state, settings) {
+  if (state.phase === 'bet') return betPayload(table, state, settings);
+  if (state.phase === 'draw') return drawPayload(table, state, settings);
+  return lobbyPayload(table, state, settings);
+}
+
+/** 掲示が古いまま取り残されていたら、いまの状態に描き直して返す。 */
+async function catchUp(ctx, tableId, settings) {
+  const table = await getTable(ctx.db, tableId);
+  if (!table) return reply({ content: 'この卓は見つかりませんでした。' });
+  return update(boardPayloadFor(table, stateOf(table), settings));
+}
+
 async function handleJoin(ix, ctx, table, settings) {
-  if (table.status !== 'joining') return reply({ content: 'この卓はもう始まっています。' });
+  // もう始まっているのに募集中の掲示が出ているのは、前の応答が届かなかったとき。
+  // 掲示をいまの状態に追いつかせる
+  if (table.status !== 'joining') return catchUp(ctx, table.id, settings);
 
   const joined = await joinTable(ctx.db, table, ix.userId);
   if (!joined.ok) {
@@ -134,6 +156,8 @@ async function handleStart(ix, ctx, table, settings, em) {
   );
   if (!started.ok) {
     if (started.reason === 'few') return reply({ content: `${MIN_PLAYERS}人集まらないと始められません。` });
+    // すでに始まっている（1回目の応答が届かなかった）なら、掲示を追いつかせて復帰させる
+    if (started.reason === 'closed') return catchUp(ctx, table.id, settings);
     return reply({ content: '始められませんでした。' });
   }
   return update(drawPayload(started.table, started.state, settings));

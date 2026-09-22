@@ -1269,8 +1269,13 @@ await test('席は3人まで、同じ人は二度座れない', async () => {
   for (const player of state.players) assert.equal(player.cards.length, 2, '2枚ずつ配られる');
   assert.equal(state.dealer.length, 2);
 
+  // 始まったあとに座ろうとしても増えない。掲示はいまの状態に追いつく
   const late = await pressBj(`bj:join:${table.id}`, { userId: 'u8' });
-  assert.match(screenText(late), /もう始まって/);
+  assert.equal(late.type, 7, '掲示を描き直す');
+  assert.doesNotMatch(screenText(late), /座る/, '募集中の掲示には戻さない');
+  const unchanged = bjTableLib.stateOf(await db.get('SELECT * FROM blackjack_tables WHERE id = ?1', table.id));
+  assert.equal(unchanged.players.length, 3, '席は増えない');
+  assert.ok(!unchanged.players.some((player) => player.userId === 'u8'));
 });
 
 await test('始められるのは卓を立てた人だけ', async () => {

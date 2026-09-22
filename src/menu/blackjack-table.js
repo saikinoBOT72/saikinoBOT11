@@ -166,8 +166,21 @@ async function handleAgain(ix, ctx, table) {
 
 /* ------------------------------------------------------------------ 席につく・始める */
 
+/**
+ * 掲示が古いまま取り残されていたら、いまの状態に描き直す。
+ * 応答が Discord に届かなかったとき、次に押された操作で復帰できるようにするため。
+ */
+async function catchUp(ctx, tableId, settings, em) {
+  const table = await getTable(ctx.db, tableId);
+  if (!table) return reply({ content: 'この卓は見つかりませんでした。' });
+  const state = stateOf(table);
+  if (table.status === 'joining') return update(lobbyPayload(table, state, settings, em));
+  return update(tablePayload(table, state, settings, em));
+}
+
 async function handleJoin(ix, ctx, table, settings, em) {
-  if (table.status !== 'joining') return reply({ content: 'この卓はもう始まっています。' });
+  // もう始まっているのに募集中の掲示が出ているのは、前の応答が届かなかったとき
+  if (table.status !== 'joining') return catchUp(ctx, table.id, settings, em);
 
   const joined = await joinTable(ctx.db, table, ix.userId);
   if (!joined.ok) {
@@ -189,7 +202,7 @@ async function handleJoin(ix, ctx, table, settings, em) {
 }
 
 async function handleStart(ix, ctx, table, settings, em) {
-  if (table.status !== 'joining') return reply({ content: 'この卓はもう始まっています。' });
+  if (table.status !== 'joining') return catchUp(ctx, table.id, settings, em);
   if (ix.userId !== table.host_id) return reply({ content: '始められるのは卓を立てた人だけです。' });
   return startRound(ix, ctx, table, settings, em);
 }
@@ -204,7 +217,7 @@ async function startRound(ix, ctx, table, settings, em) {
     },
     { allow: ['joining'] },
   );
-  if (!dealt.ok) return reply({ content: 'もう始まっています。' });
+  if (!dealt.ok) return catchUp(ctx, table.id, settings, em);
 
   // 全員が最初の2枚で21なら、そのままディーラーの番
   if (dealt.state.turn < 0) return finish(ix, ctx, dealt.table, dealt.state, settings, em);

@@ -174,6 +174,30 @@ await test('1人では始められない', async () => {
   assert.match(screenText(other), /卓を立てた人だけ/);
 });
 
+await test('応答が届かず掲示が取り残されても、押し直せば追いつく', async () => {
+  // Discord に応答が届かないと、卓は進んでいるのに掲示が募集中のまま残る。
+  // そこで押し直したときに行き止まりにせず、いまの状態を描き直す
+  const table = await seatedTable();
+  assert.equal(table.status, 'playing', '1回目で配れている');
+
+  const again = await pressPk(`pk:start:${table.id}`, { userId: 'u1' });
+  assert.equal(again.type, 7, '掲示を描き直す');
+  assert.match(screenText(again), /札の交換/, 'いまの場面に追いつく');
+  assert.doesNotMatch(screenText(again), /始められませんでした/);
+
+  // 座り直そうとしても同じく追いつくだけで、席は増えない
+  const late = await pressPk(`pk:join:${table.id}`, { userId: 'u7' });
+  assert.equal(late.type, 7);
+  assert.match(screenText(late), /札の交換/);
+  assert.equal(lib.stateOf(await db.get('SELECT * FROM poker_tables WHERE id = ?1', table.id)).players.length, 4);
+});
+
+await test('勝負の場面で押し直しても、その場面に追いつく', async () => {
+  const { table } = await toBetPhase(200);
+  const again = await pressPk(`pk:start:${table.id}`, { userId: 'u1' });
+  assert.match(screenText(again), /勝負か、降りるか/);
+});
+
 await test('配ると全員に5枚ずつ配られる', async () => {
   const table = await seatedTable();
   const state = lib.stateOf(table);
