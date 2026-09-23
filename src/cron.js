@@ -126,11 +126,6 @@ export async function sweepExpiredDuels(ctx) {
   if (handled.length > 0) console.log(`時間切れの対戦を ${handled.length} 件片付けました`);
 }
 
-/**
- * 時間切れのブラックジャックの卓を片付ける。
- * まだ配る前なら参加費を返し、途中なら残った人をスタンド扱いにして最後まで進める。
- * （返金目当てで放置されないよう、勝負が始まっていたら必ず決着させる）
- */
 /** 時間切れの簡ポーカーの卓を片付ける。預かったぶんは全員に返す。 */
 export async function sweepPoker(ctx) {
   const tables = await expiredPokerTables(ctx.db);
@@ -148,6 +143,11 @@ export async function sweepPoker(ctx) {
   if (tables.length > 0) console.log(`時間切れの簡ポーカーの卓を ${tables.length} 件片付けました`);
 }
 
+/**
+ * 時間切れのブラックジャックの卓を片付ける。
+ * まだ配る前なら参加費を返し、途中なら残った人をスタンド扱いにして最後まで進める。
+ * （返金目当てで放置されないよう、勝負が始まっていたら必ず決着させる）
+ */
 export async function sweepBlackjack(ctx) {
   const tables = await expiredTables(ctx.db);
   for (const table of tables) {

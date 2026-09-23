@@ -481,6 +481,227 @@ await test('引き分けは山分けし、端数も消えない', async () => {
   assert.match(JSON.stringify(ctx.edited.at(-1).payload), /引き分け/);
 });
 
+/* ------------------------------------------------------------------ レイズ */
+
+section('レイズ');
+
+/** レイズのボタンを押す（半額 half / 同額 same）。 */
+const raise = (table, userId, kind = 'same') => pressPk(`pk:raise:${table.id}:${kind}`, { userId });
+
+const seatOf = async (tableId, userId) =>
+  lib
+    .stateOf(await db.get('SELECT * FROM poker_tables WHERE id = ?1', tableId))
+    .players.find((player) => player.userId === userId);
+
+await test('レイズすると、残り全員からもその場で預かる', async () => {
+  const { table } = await toBetPhase(200);
+  const before = {};
+  for (const userId of SEATS) before[userId] = await eco.getBalance(db, GUILD, userId);
+
+  await raise(table, 'u1', 'same');
+
+  // レイズした本人は参加費ぶん＋上乗せぶんを場に出す
+  const me = await seatOf(table.id, 'u1');
+  assert.equal(me.paid, 400, '200(コール)＋200(レイズ)');
+  assert.equal(me.escrow, 0);
+  assert.equal(me.called, true);
+  assert.equal(await eco.getBalance(db, GUILD, 'u1'), before.u1 - 400);
+
+  // ほかの人は「預かっただけ」。まだ場には出ていない
+  for (const userId of SEATS.slice(1)) {
+    const player = await seatOf(table.id, userId);
+    assert.equal(player.escrow, 400, `${userId} から預かっている`);
+    assert.equal(player.paid, 0, 'まだ場には出していない');
+    assert.equal(player.called, false, '決め直しになる');
+    assert.equal(await eco.getBalance(db, GUILD, userId), before[userId] - 400, '財布からは引かれている');
+  }
+});
+
+await test('レイズされたあと降りると、預かったぶんだけ返る', async () => {
+  const { table } = await toBetPhase(200);
+  await raise(table, 'u1', 'same');
+  const before = await eco.getBalance(db, GUILD, 'u2');
+
+  await pressPk(`pk:fold:${table.id}`, { userId: 'u2' });
+  assert.equal(await eco.getBalance(db, GUILD, 'u2'), before + 400, '預かった400が返る');
+
+  const folded = await seatOf(table.id, 'u2');
+  assert.equal(folded.folded, true);
+  assert.equal(folded.escrow, 0);
+  assert.equal(folded.staked, 200, '参加費は場に残る');
+});
+
+await test('一度コールしてからレイズされた人は、差額だけ預けられる', async () => {
+  const { table } = await toBetPhase(200);
+  await pressPk(`pk:call:${table.id}`, { userId: 'u2' });
+  const afterCall = await eco.getBalance(db, GUILD, 'u2');
+
+  await raise(table, 'u1', 'same');
+  const player = await seatOf(table.id, 'u2');
+  assert.equal(player.paid, 200, 'コールぶんは場に出たまま');
+  assert.equal(player.escrow, 200, '差額だけ預かる');
+  assert.equal(await eco.getBalance(db, GUILD, 'u2'), afterCall - 200);
+
+  // ここで降りると、返るのは差額だけ。コールぶんは戻らない
+  const beforeFold = await eco.getBalance(db, GUILD, 'u2');
+  await pressPk(`pk:fold:${table.id}`, { userId: 'u2' });
+  assert.equal(await eco.getBalance(db, GUILD, 'u2'), beforeFold + 200);
+  assert.equal((await seatOf(table.id, 'u2')).staked, 400, '参加費＋コールぶんは場に残る');
+});
+
+await test('ついていくと、預かったぶんが場に移る（二重取りしない）', async () => {
+  const { table } = await toBetPhase(200);
+  await raise(table, 'u1', 'same');
+  const before = await eco.getBalance(db, GUILD, 'u2');
+
+  await pressPk(`pk:call:${table.id}`, { userId: 'u2' });
+  assert.equal(await eco.getBalance(db, GUILD, 'u2'), before, '預かり済みなので追加では引かれない');
+
+  const player = await seatOf(table.id, 'u2');
+  assert.equal(player.escrow, 0);
+  assert.equal(player.paid, 400);
+  assert.equal(player.staked, 600, '参加費200＋400');
+  assert.equal(player.called, true);
+});
+
+await test('半額のレイズも選べる', async () => {
+  const { table } = await toBetPhase(200);
+  await raise(table, 'u1', 'half');
+  const me = await seatOf(table.id, 'u1');
+  assert.equal(me.paid, 300, '200(コール)＋100(半額)');
+  assert.equal((await seatOf(table.id, 'u2')).escrow, 300);
+});
+
+await test('好きな額をフォームから入れられる', async () => {
+  const { table } = await toBetPhase(200);
+  const form = await pressPk(`pk:raiseform:${table.id}`, { userId: 'u1' });
+  assert.equal(form.type, 9, '入力フォームが開く');
+  assert.equal(form.data.custom_id, `pk:raisedo:${table.id}`);
+
+  await pressPk(`pk:raisedo:${table.id}`, { userId: 'u1', type: 5, fields: { amount: '55' } });
+  assert.equal((await seatOf(table.id, 'u1')).paid, 255, '200＋55');
+  assert.equal((await seatOf(table.id, 'u2')).escrow, 255);
+});
+
+await test('数字でない額は弾く', async () => {
+  const { table } = await toBetPhase(200);
+  const bad = await pressPk(`pk:raisedo:${table.id}`, { userId: 'u1', type: 5, fields: { amount: 'たくさん' } });
+  assert.match(screenText(bad), /1以上の整数/);
+  assert.equal((await seatOf(table.id, 'u1')).paid, 0, '何も起きていない');
+});
+
+await test('再レイズはできない', async () => {
+  const { table } = await toBetPhase(200);
+  await raise(table, 'u1', 'same');
+  const again = await raise(table, 'u2', 'same');
+  assert.match(screenText(again), /再レイズはできません|もう誰かがレイズ/);
+  assert.equal((await seatOf(table.id, 'u2')).escrow, 400, '預かりは動かない');
+});
+
+await test('卓の誰かが払えない額までは上げられない', async () => {
+  const { table } = await toBetPhase(200);
+  // u3 の財布を薄くする。u3 が払える上限までしか上げられないはず
+  await eco.setBalance(db, GUILD, 'u3', 250, 'test');
+
+  await pressPk(`pk:raisedo:${table.id}`, { userId: 'u1', type: 5, fields: { amount: '9999' } });
+  const level = lib.stateOf(await db.get('SELECT * FROM poker_tables WHERE id = ?1', table.id)).level;
+  assert.equal(level, 250, 'u3 の全財産までに下がる');
+  assert.equal((await seatOf(table.id, 'u3')).escrow, 250);
+  assert.equal(await eco.getBalance(db, GUILD, 'u3'), 0, 'ちょうど払い切れる');
+});
+
+await test('全員が払えないなら上げられず、財布も動かない', async () => {
+  const { table } = await toBetPhase(200);
+  await eco.setBalance(db, GUILD, 'u3', 0, 'test');
+  const before = {};
+  for (const userId of SEATS) before[userId] = await eco.getBalance(db, GUILD, userId);
+
+  const denied = await raise(table, 'u1', 'same');
+  assert.match(screenText(denied), /上げられません/);
+  for (const userId of SEATS) {
+    assert.equal(await eco.getBalance(db, GUILD, userId), before[userId], `${userId} の財布は動かない`);
+  }
+  assert.equal(lib.stateOf(await db.get('SELECT * FROM poker_tables WHERE id = ?1', table.id)).level, 200);
+});
+
+await test('集めているあいだに誰かが降りたら、レイズを中止して全額返す', async () => {
+  const { table, startTotal } = await toBetPhase(200);
+  const before = {};
+  for (const userId of SEATS) before[userId] = await eco.getBalance(db, GUILD, userId);
+
+  // レイズは「先に全員から集めて、そのあと記録する」順番。
+  // その隙に u2 が降りた状況を、1人目の引き落としに割り込んで作る。
+  // 集めた額の行き先が無くなるので、レイズは中止されないといけない
+  const realRun = db.run.bind(db);
+  let injected = false;
+  db.run = async (sql, ...params) => {
+    const result = await realRun(sql, ...params);
+    if (!injected && /UPDATE balances/.test(sql)) {
+      injected = true;
+      const row = await db.get('SELECT * FROM poker_tables WHERE id = ?1', table.id);
+      await realRun(
+        'UPDATE poker_tables SET state = ?2, version = version + 1 WHERE id = ?1',
+        table.id,
+        JSON.stringify(lib.foldPlayer(JSON.parse(row.state), 'u2')),
+      );
+    }
+    return result;
+  };
+
+  let denied;
+  try {
+    denied = await raise(table, 'u1', 'same');
+  } finally {
+    db.run = realRun;
+  }
+
+  assert.ok(injected, '割り込みが実際に起きた');
+  // 中止されずに通ってしまうと、降りた u2 から集めた額が行き場を失って消える
+  assert.equal(await totalCoins(), startTotal - 800, 'レイズが中止されず、財布から集めたままになっている');
+  for (const userId of SEATS) {
+    assert.equal(await eco.getBalance(db, GUILD, userId), before[userId], `${userId} の財布が元に戻っていない`);
+  }
+  assert.equal(lib.stateOf(await db.get('SELECT * FROM poker_tables WHERE id = ?1', table.id)).level, 200, '上がっていない');
+  assert.match(screenText(denied), /先に動きました/);
+});
+
+await test('レイズを挟んでもコインの総量は変わらない', async () => {
+  const { table, startTotal } = await toBetPhase(200);
+  await raise(table, 'u1', 'same');
+  await pressPk(`pk:call:${table.id}`, { userId: 'u2' });
+  await pressPk(`pk:fold:${table.id}`, { userId: 'u3' });
+  await pressPk(`pk:call:${table.id}`, { userId: 'u4' });
+  await ctx.settle();
+
+  const finished = await db.get('SELECT * FROM poker_tables WHERE id = ?1', table.id);
+  assert.equal(finished.status, 'done', '全員決まったら決着する');
+  assert.equal(await totalCoins(), startTotal, 'コインが湧いたり消えたりしない');
+});
+
+await test('レイズの途中で時間切れになっても、預かったぶんまで返る', async () => {
+  const { table, startTotal } = await toBetPhase(200);
+  await raise(table, 'u1', 'same');
+
+  await db.run('UPDATE poker_tables SET expires_at = 1 WHERE id = ?1', table.id);
+  await board.timeOut(ctx, await db.get('SELECT * FROM poker_tables WHERE id = ?1', table.id));
+  assert.equal(await totalCoins(), startTotal, '場のぶんも預かりぶんも全部返る');
+});
+
+await test('レイズされたら掲示も手札も決め直しの形になる', async () => {
+  const { table } = await toBetPhase(200);
+  await raise(table, 'u1', 'same');
+
+  const board2 = JSON.stringify(ctx.edited.at(-1).payload);
+  assert.match(board2, /レイズされた/);
+
+  const mine = await pressPk(`pk:hand:${table.id}`, { userId: 'u2' });
+  assert.match(screenText(mine), /預かっています/);
+  const ids = customIds(mine);
+  assert.ok(ids.includes(`pk:call:${table.id}`), 'ついていくボタン');
+  assert.ok(ids.includes(`pk:fold:${table.id}`), '降りるボタン');
+  assert.ok(!ids.some((id) => id.startsWith(`pk:raise`)), '再レイズのボタンは出さない');
+});
+
 await test('座っていない人は勝負にも降りるにも入れない', async () => {
   const { table } = await toBetPhase(200);
   const denied = await pressPk(`pk:call:${table.id}`, { userId: 'u8' });

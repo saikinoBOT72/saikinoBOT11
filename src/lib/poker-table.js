@@ -4,7 +4,7 @@
  * 【流れ】
  *   joining … 卓を立てて、2〜4人が座るのを待つ
  *   draw   … 全員に5枚配る。いらない札を選んで引き直す（2回まで、毎回5枚まで）
- *   bet    … 交換が終わったら「勝負（参加費と同額を追加）」か「降りる」
+ *   bet    … 交換が終わったら「勝負」「レイズ」「降りる」
  *   done   … 残った人で役比べ
  *
  * 【手札の隠し方】
@@ -14,6 +14,12 @@
  * 【お金】
  * 座った時点で参加費を預かる。勝負に乗るともう同額を預かる。
  * 降りた人の参加費は場に残り、勝った人が全部持っていく。
+ *
+ * 【レイズ】
+ * 誰か1人がレイズすると、その場で残り全員からも上乗せぶんを預かる（escrow）。
+ * 遊んでいる最中に別のゲームでコインを使われて払えなくなるのを防ぐため。
+ * 預かっただけなので、そのあと降りた人には上乗せぶんを返す。
+ * 再レイズは無し。1回上がったら、あとは「ついていく」か「降りる」だけ。
  */
 import { deposit, withdraw } from './economy.js';
 import { draw, newDeck, sortHand } from './cards.js';
@@ -76,6 +82,9 @@ export async function joinTable(db, table, userId) {
               exchanged: false,
               folded: false,
               called: false,
+              // この勝負で場に足した額と、レイズのぶんを預かっているだけの額
+              paid: 0,
+              escrow: 0,
               staked: table.bet,
             },
           ],
@@ -109,6 +118,8 @@ export function deal(state) {
     exchanged: false,
     folded: false,
     called: false,
+    paid: 0,
+    escrow: 0,
   }));
   return { ...state, deck, players, phase: 'draw' };
 }
@@ -155,26 +166,107 @@ export function everyoneExchanged(state) {
   return state.players.every((player) => player.exchanged);
 }
 
-/** 全員が勝負か降りるかを決めたか。 */
-export function everyoneDecided(state) {
-  return state.players.every((player) => player.called || player.folded);
-}
+/* ------------------------------------------------------------------ 勝負の段階 */
 
 /**
- * 勝負する／降りる。
- * 勝負なら参加費と同額をもう一度預かるので、引き落としは呼び出し側で行う。
+ * 勝負の段階に入る。level は「この段階で1人が場に足す額」。
+ * 最初は参加費と同額で、レイズが入ると上がる。
  */
-export function decide(state, userId, { fold }) {
+export function toBetPhase(state, bet) {
+  return { ...state, phase: 'bet', level: bet };
+}
+
+/** この人があと払う額。レイズで預かってある額とちょうど同じになる。 */
+export function owedBy(state, player) {
+  return Math.max(0, (state.level ?? 0) - (player.paid ?? 0));
+}
+
+/** 全員が勝負か降りるかを決めたか。レイズが入ったら決め直しになる。 */
+export function everyoneDecided(state) {
+  return state.players.every((player) => player.folded || (player.called && owedBy(state, player) === 0));
+}
+
+
+/** 勝負に乗る。預かってある額をそのまま場に移す。引き落としは呼び出し側で済ませておく。 */
+export function commitCall(state, userId, amount) {
   return {
     ...state,
     players: state.players.map((player) =>
       player.userId === userId
-        ? fold
-          ? { ...player, folded: true }
-          : { ...player, called: true }
+        ? {
+            ...player,
+            called: true,
+            paid: (player.paid ?? 0) + amount,
+            staked: player.staked + amount,
+            escrow: 0,
+          }
         : player,
     ),
   };
+}
+
+/** 降りる。預かっているだけの額は呼び出し側で返す。 */
+export function foldPlayer(state, userId) {
+  return {
+    ...state,
+    players: state.players.map((player) =>
+      player.userId === userId ? { ...player, folded: true, called: false, escrow: 0 } : player,
+    ),
+  };
+}
+
+/**
+ * レイズを反映する。
+ * レイズした人はその場で場に足し、ほかの残っている人は「預かっただけ」にする。
+ * 引き落としは呼び出し側で全員ぶん済ませてから渡す（誰か払えなければレイズ自体を中止する）。
+ * @param escrows {Record<string, number>} 自分以外の残っている人ぜんぶ。userId → 預かった額
+ */
+export function applyRaise(state, userId, { raise, escrows }) {
+  const level = (state.level ?? 0) + raise;
+  return {
+    ...state,
+    level,
+    players: state.players.map((player) => {
+      if (player.folded) return player;
+      if (player.userId === userId) {
+        const owed = level - (player.paid ?? 0);
+        return { ...player, called: true, paid: level, staked: player.staked + owed, escrow: 0 };
+      }
+      return { ...player, called: false, escrow: escrows[player.userId] };
+    }),
+  };
+}
+
+/**
+ * 集めたあとで記録する前に、卓が動いていないかを確かめる。
+ *
+ * 【なぜ必要か】
+ * レイズは「先に全員から集めてから記録する」という順番でやっている。
+ * その隙に誰かが降りたりコールしたりすると、集めた額の行き先が無くなって
+ * コインが消えてしまう。動いていたらレイズを中止して、集めたぶんを返す。
+ * @param paidBefore {Record<string, number>} 集める前に見た「その人が場に出していた額」
+ */
+export function betStateUnchanged(state, level, paidBefore) {
+  if ((state.level ?? 0) !== level) return false;
+  const now = stayers(state);
+  if (now.length !== Object.keys(paidBefore).length) return false;
+  return now.every((player) => (player.paid ?? 0) === paidBefore[player.userId]);
+}
+
+/**
+ * レイズできる上限。
+ * 「卓に残っている全員が払える額」までに抑えるので、
+ * 払えなくて弾かれる人が出ず、場を分ける（サイドポット）必要もない。
+ * @param balances {Record<string, number>} userId → 所持金
+ */
+export function raiseCap(state, balances) {
+  const caps = stayers(state).map((player) => (balances[player.userId] ?? 0) - owedBy(state, player));
+  return Math.max(0, Math.min(...caps));
+}
+
+/** もうレイズできるか（再レイズは無し）。 */
+export function canRaise(state, bet) {
+  return (state.level ?? 0) <= bet;
 }
 
 /**
@@ -187,6 +279,12 @@ export function decide(state, userId, { fold }) {
  * @returns {Promise<{kind: 'showdown'|'walkover'|'nobody', pot: number, winners: object[], hands: object[]}>}
  */
 export async function settleTable(db, table, state) {
+  // 預かっただけで場に出ていないぶんは、まず持ち主に返す
+  for (const player of state.players) {
+    if ((player.escrow ?? 0) > 0) {
+      await deposit(db, table.guild_id, player.userId, player.escrow, 'poker:refund', table.id);
+    }
+  }
   const pot = state.players.reduce((sum, player) => sum + player.staked, 0);
   const remaining = stayers(state);
 
@@ -218,14 +316,21 @@ export async function settleTable(db, table, state) {
   return { kind: 'showdown', pot, winners, hands };
 }
 
-/** 時間切れで流すときの返金。 */
+/** 時間切れで流すときの返金。場に出したぶんも、預かっているだけのぶんも返す。 */
 export async function refundTable(db, table, state) {
   for (const player of state.players) {
-    if (player.staked > 0) await deposit(db, table.guild_id, player.userId, player.staked, 'poker:refund', table.id);
+    const amount = player.staked + (player.escrow ?? 0);
+    if (amount > 0) await deposit(db, table.guild_id, player.userId, amount, 'poker:refund', table.id);
   }
 }
 
-/** 勝負に乗るぶんを預かる。払えなければ降りた扱いにする。 */
-export async function takeCall(db, table, userId) {
-  return withdraw(db, table.guild_id, userId, table.bet, 'poker:call', table.id);
+/** 勝負に乗るぶんを預かる。払えなければ false。 */
+export async function takeCall(db, table, userId, amount) {
+  if (amount <= 0) return true;
+  return withdraw(db, table.guild_id, userId, amount, 'poker:call', table.id);
+}
+
+/** 預かっただけのぶんを返す（降りたとき、レイズが通らなかったとき）。 */
+export async function giveBack(db, table, userId, amount) {
+  if (amount > 0) await deposit(db, table.guild_id, userId, amount, 'poker:refund', table.id);
 }
