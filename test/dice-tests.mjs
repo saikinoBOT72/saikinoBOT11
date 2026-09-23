@@ -47,27 +47,41 @@ const totalCoins = async (players = SEATS) =>
 
 section('[ピッグ] ルール');
 
-await test('1が出たら貯金が消え、それ以外は足される', () => {
-  assert.deepEqual(pig.applyRoll(0, 10, 1), { die: 1, busted: true, turnTotal: 0, reached: false });
-  assert.deepEqual(pig.applyRoll(0, 10, 4), { die: 4, busted: false, turnTotal: 14, reached: false });
-});
-
-await test('持ち点と貯金の合計が目標に届いたら上がり', () => {
-  assert.equal(pig.applyRoll(pig.GOAL - 5, 0, 4).reached, false, 'あと1点足りない');
-  assert.equal(pig.applyRoll(pig.GOAL - 5, 0, 5).reached, true, 'ちょうど届く');
-  assert.equal(pig.applyRoll(pig.GOAL - 5, 0, 6).reached, true, '超えても上がり');
-});
-
-await test('進み具合のバーは目標で満タンになる', () => {
-  assert.equal(pig.bar(0), '▱▱▱▱▱▱▱▱▱▱');
-  assert.equal(pig.bar(pig.GOAL), '▰▰▰▰▰▰▰▰▰▰');
-  assert.equal(pig.bar(pig.GOAL * 2), '▰▰▰▰▰▰▰▰▰▰', '超えても溢れない');
+await test('1が出たらそのターンの貯金は0、それ以外は足される', () => {
+  assert.deepEqual(pig.applyRoll(10, 1), { die: 1, busted: true, turnTotal: 0 });
+  assert.deepEqual(pig.applyRoll(10, 4), { die: 4, busted: false, turnTotal: 14 });
 });
 
 await test('振って出る目は1〜6に収まる', () => {
   const seen = new Set();
   for (let i = 0; i < 600; i++) seen.add(pig.rollDie());
   assert.deepEqual([...seen].sort((a, b) => a - b), [1, 2, 3, 4, 5, 6]);
+});
+
+await test('席順の並べ替えは人を増やしも減らしもしない', () => {
+  const seats = [{ userId: 'a' }, { userId: 'b' }, { userId: 'c' }, { userId: 'd' }];
+  for (let i = 0; i < 50; i++) {
+    const shuffled = pig.shuffleSeats(seats);
+    assert.equal(shuffled.length, seats.length);
+    assert.deepEqual(
+      shuffled.map((player) => player.userId).sort(),
+      ['a', 'b', 'c', 'd'],
+      '同じ顔ぶれがそろっている',
+    );
+  }
+});
+
+await test('並べ替えは元の配列を壊さない', () => {
+  const seats = [{ userId: 'a' }, { userId: 'b' }, { userId: 'c' }];
+  pig.shuffleSeats(seats);
+  assert.deepEqual(seats.map((player) => player.userId), ['a', 'b', 'c']);
+});
+
+await test('十分な回数まわせば先頭が入れ替わる（順番は固定ではない）', () => {
+  const seats = [{ userId: 'a' }, { userId: 'b' }, { userId: 'c' }];
+  const firsts = new Set();
+  for (let i = 0; i < 300; i++) firsts.add(pig.shuffleSeats(seats)[0].userId);
+  assert.deepEqual([...firsts].sort(), ['a', 'b', 'c'], '誰でも先行になりうる');
 });
 
 section('[ピッグ] 卓の進行');
@@ -83,6 +97,7 @@ async function pigTable(bet = 100, players = SEATS) {
 }
 
 const pigState = async (id) => pigLib.stateOf(await db.get('SELECT * FROM pig_tables WHERE id = ?1', id));
+const pigNow = async (id) => pigLib.current(await pigState(id));
 
 /** 目を指定して振らせる。 */
 async function rollWith(table, userId, die) {
@@ -92,7 +107,8 @@ async function rollWith(table, userId, die) {
     ({ state }) => {
       if (!pigLib.isTurn(state, userId)) return { reject: 'turn' };
       const result = pigLib.roll(state, die);
-      return { state: result.state, status: result.won ? 'done' : 'playing', extra: result };
+      const over = pigLib.everyoneDone(result.state);
+      return { state: result.state, status: over ? 'done' : 'playing', extra: { ...result, over } };
     },
     { allow: ['playing'] },
   );
@@ -116,90 +132,193 @@ await test('2人集まらないと始められない', async () => {
   assert.match(screenText(denied), /2人集まらないと/);
 });
 
-await test('始めると最初の手番は卓を立てた人', async () => {
+await test('始めると全員0点・0ターンから', async () => {
   const table = await pigTable(100);
   const state = await pigState(table.id);
   assert.equal(state.players.length, 4);
-  assert.equal(pigLib.current(state).userId, 'u1');
   assert.equal(state.turnTotal, 0);
+  for (const player of state.players) {
+    assert.equal(player.score, 0);
+    assert.equal(player.turns, 0);
+  }
+});
+
+// 卓を立てた人がいつも先だと有利不利が固定されるので、始めるときに引き直す
+await test('先行・後攻は始めるときにランダムで決まる', async () => {
+  const firsts = new Set();
+  for (let i = 0; i < 25; i++) {
+    const table = await pigTable(100);
+    firsts.add((await pigNow(table.id)).userId);
+    await db.run("UPDATE pig_tables SET status = 'cancelled' WHERE id = ?1", table.id);
+    for (const userId of SEATS) await eco.setBalance(db, GUILD, userId, 2000, 'test');
+  }
+  assert.ok(firsts.size > 1, `いつも同じ人が先行になっている: ${[...firsts].join(',')}`);
+  assert.ok(!firsts.has('u8'), '座っていない人は入らない');
 });
 
 await test('手番じゃない人は押せない', async () => {
   const table = await pigTable(100);
-  const denied = await pressOn(pigBoard, `pg:roll:${table.id}`, { userId: 'u2' });
+  const turn = (await pigNow(table.id)).userId;
+  const other = SEATS.find((userId) => userId !== turn);
+  const denied = await pressOn(pigBoard, `pg:roll:${table.id}`, { userId: other });
   assert.match(screenText(denied), /の番です/);
   assert.equal((await pigState(table.id)).turnTotal, 0, '何も起きていない');
 });
 
-await test('振ると貯金が増え、1が出ると消えて次の人へ', async () => {
+await test('振ると貯金が増える', async () => {
   const table = await pigTable(100);
-  await rollWith(table, 'u1', 5);
-  await rollWith(table, 'u1', 3);
-  let state = await pigState(table.id);
+  const me = (await pigNow(table.id)).userId;
+  await rollWith(table, me, 5);
+  await rollWith(table, me, 3);
+  const state = await pigState(table.id);
   assert.equal(state.turnTotal, 8, '5＋3');
-  assert.equal(pigLib.current(state).userId, 'u1', 'まだ自分の番');
-
-  await rollWith(table, 'u1', 1);
-  state = await pigState(table.id);
-  assert.equal(state.turnTotal, 0, '貯金が消える');
-  assert.equal(state.busted, true);
-  assert.equal(state.players[0].score, 0, '持ち点も増えていない');
-  assert.equal(pigLib.current(state).userId, 'u2', '次の人の番');
+  assert.equal(pigLib.current(state).userId, me, 'まだ自分の番');
 });
 
-await test('やめると貯金が持ち点になって次の人へ', async () => {
+// ここがこのゲームの肝。そのターンの貯金だけでなく、確定済みの持ち点まで飛ぶ
+await test('1が出ると、確定していた持ち点までぜんぶ0になる', async () => {
   const table = await pigTable(100);
-  await rollWith(table, 'u1', 6);
-  await rollWith(table, 'u1', 4);
-  await pressOn(pigBoard, `pg:hold:${table.id}`, { userId: 'u1' });
+  const me = (await pigNow(table.id)).userId;
 
-  const state = await pigState(table.id);
-  assert.equal(state.players[0].score, 10, '確定した');
-  assert.equal(state.turnTotal, 0);
-  assert.equal(pigLib.current(state).userId, 'u2');
+  // まず1ターンぶん確定させる
+  await rollWith(table, me, 6);
+  await rollWith(table, me, 5);
+  await pressOn(pigBoard, `pg:hold:${table.id}`, { userId: me });
+  let state = await pigState(table.id);
+  assert.equal(state.players.find((p) => p.userId === me).score, 11, '11点を確定した');
+
+  // 自分の番が回ってくるまで、ほかの人はすぐやめる
+  while (pigLib.current(await pigState(table.id)).userId !== me) {
+    const other = (await pigNow(table.id)).userId;
+    await rollWith(table, other, 2);
+    await pressOn(pigBoard, `pg:hold:${table.id}`, { userId: other });
+  }
+
+  // 2ターン目に1を出す
+  await rollWith(table, me, 4);
+  await rollWith(table, me, 1);
+  state = await pigState(table.id);
+  assert.equal(state.players.find((p) => p.userId === me).score, 0, '確定していた11点も消える');
+  assert.equal(state.busted, true);
+  assert.notEqual(pigLib.current(state).userId, me, '手番が移る');
+
+  // ほかの人の点は巻き添えにならない
+  for (const player of state.players) {
+    if (player.userId !== me) assert.equal(player.score, 2, 'ほかの人は無事');
+  }
+});
+
+await test('やめると貯金が持ち点になってターンを1つ使う', async () => {
+  const table = await pigTable(100);
+  const me = (await pigNow(table.id)).userId;
+  await rollWith(table, me, 6);
+  await rollWith(table, me, 4);
+  await pressOn(pigBoard, `pg:hold:${table.id}`, { userId: me });
+
+  const player = (await pigState(table.id)).players.find((p) => p.userId === me);
+  assert.equal(player.score, 10, '確定した');
+  assert.equal(player.turns, 1, 'ターンを1つ使った');
+  assert.equal((await pigState(table.id)).turnTotal, 0);
+});
+
+await test('1が出てもターンは1つ使う', async () => {
+  const table = await pigTable(100);
+  const me = (await pigNow(table.id)).userId;
+  await rollWith(table, me, 1);
+  const player = (await pigState(table.id)).players.find((p) => p.userId === me);
+  assert.equal(player.turns, 1);
 });
 
 await test('何も貯まっていないのに「やめる」は押せない', async () => {
   const table = await pigTable(100);
-  const denied = await pressOn(pigBoard, `pg:hold:${table.id}`, { userId: 'u1' });
+  const me = (await pigNow(table.id)).userId;
+  const denied = await pressOn(pigBoard, `pg:hold:${table.id}`, { userId: me });
   assert.match(screenText(denied), /まだ何も貯まっていません/);
-  assert.equal(pigLib.current(await pigState(table.id)).userId, 'u1', '手番は動かない');
+  assert.equal((await pigNow(table.id)).userId, me, '手番は動かない');
 });
 
-await test('手番は4人を順にまわって戻ってくる', async () => {
+await test('手番は全員を順にまわって戻ってくる', async () => {
   const table = await pigTable(100);
   const order = [];
   for (let turn = 0; turn < 5; turn++) {
-    const state = await pigState(table.id);
-    order.push(pigLib.current(state).userId);
-    await rollWith(table, pigLib.current(state).userId, 1); // 1を出して手番を渡す
+    const now = (await pigNow(table.id)).userId;
+    order.push(now);
+    await rollWith(table, now, 1);
   }
-  assert.deepEqual(order, ['u1', 'u2', 'u3', 'u4', 'u1']);
+  const seats = (await pigState(table.id)).players.map((player) => player.userId);
+  assert.deepEqual(order.slice(0, 4), seats, '席順どおりにまわる');
+  assert.equal(order[4], seats[0], '一周して戻ってくる');
 });
 
-await test('目標に届いた人が場を総取りする', async () => {
-  // 場に預けたあとで測ると参加費を数え落とすので、卓を立てる前に測る
+await test('全員が3ターン終えたら決着して、一番高い人が総取りする', async () => {
   for (const userId of SEATS) await eco.setBalance(db, GUILD, userId, 2000, 'test');
   const startTotal = await totalCoins();
   const table = await pigTable(100);
 
-  // u1 の持ち点を上がり目前まで持っていく
-  await pigLib.mutate(
-    db,
-    table.id,
-    ({ state }) => ({
-      state: { ...state, players: state.players.map((p, i) => (i === 0 ? { ...p, score: pig.GOAL - 6 } : p)) },
-    }),
-    { allow: ['playing'] },
-  );
+  // 先行の人だけ毎ターン6を2回、ほかは2を1回でやめる
+  const first = (await pigNow(table.id)).userId;
+  for (let round = 0; round < pig.TURNS; round++) {
+    for (let seat = 0; seat < SEATS.length; seat++) {
+      const now = (await pigNow(table.id)).userId;
+      if (now === first) {
+        await rollWith(table, now, 6);
+        await rollWith(table, now, 6);
+      } else {
+        await rollWith(table, now, 2);
+      }
+      await pressOn(pigBoard, `pg:hold:${table.id}`, { userId: now });
+    }
+  }
+  await ctx.settle();
 
-  const before = await eco.getBalance(db, GUILD, 'u1');
-  const won = await rollWith(table, 'u1', 6);
-  assert.equal(won.extra.won, true);
-  await pigLib.payWinner(db, table, won.state, 'u1');
-
-  assert.equal(await eco.getBalance(db, GUILD, 'u1'), before + 400, '参加費100×4人を総取り');
+  const row = await db.get('SELECT * FROM pig_tables WHERE id = ?1', table.id);
+  assert.equal(row.status, 'done', '3ターンで終わる');
+  const state = pigLib.stateOf(row);
+  assert.equal(state.players.find((p) => p.userId === first).score, 36, '12点 × 3ターン');
+  assert.equal(await eco.getBalance(db, GUILD, first), 2000 - 100 + 400, '参加費100×4人を総取り');
   assert.equal(await totalCoins(), startTotal, 'コインは湧かない');
+});
+
+await test('同点なら山分けして、端数も消えない', async () => {
+  for (const userId of SEATS) await eco.setBalance(db, GUILD, userId, 2000, 'test');
+  const startTotal = await totalCoins();
+  const table = await pigTable(100);
+
+  // 全員が同じ出し方をするので、4人とも同点で終わる
+  let last = null;
+  for (let round = 0; round < pig.TURNS; round++) {
+    for (let seat = 0; seat < SEATS.length; seat++) {
+      const now = (await pigNow(table.id)).userId;
+      await rollWith(table, now, 3);
+      last = await pressOn(pigBoard, `pg:hold:${table.id}`, { userId: now });
+    }
+  }
+  await ctx.settle();
+
+  assert.equal((await db.get('SELECT * FROM pig_tables WHERE id = ?1', table.id)).status, 'done');
+  assert.match(JSON.stringify(last.data ?? last), /引き分け/, '最後の操作の応答が結果画面になる');
+  assert.equal(await totalCoins(), startTotal, '山分けでもコインは消えない');
+});
+
+await test('全員が1を出して0点どうしでも、場は必ず誰かに渡る', async () => {
+  for (const userId of SEATS) await eco.setBalance(db, GUILD, userId, 2000, 'test');
+  const table = await pigTable(100);
+  const afterAnte = await totalCoins();
+
+  // 全員が毎ターン1を出して、誰も1点も取れずに終わった状態にする
+  for (let round = 0; round < pig.TURNS; round++) {
+    for (let seat = 0; seat < SEATS.length; seat++) {
+      await rollWith(table, (await pigNow(table.id)).userId, 1);
+    }
+  }
+  const state = await pigState(table.id);
+  assert.ok(pigLib.everyoneDone(state), '3ターンずつ終わっている');
+  assert.ok(state.players.every((player) => player.score === 0), '全員0点');
+
+  const fresh = await db.get('SELECT * FROM pig_tables WHERE id = ?1', table.id);
+  const result = await pigLib.payWinners(db, fresh, state);
+  assert.equal(result.winners.length, SEATS.length, '0点どうしなので全員が勝者');
+  assert.equal(await totalCoins(), afterAnte + 400, '場の400が宙に浮かず配られる');
 });
 
 await test('決着した卓のボタンはもう効かない', async () => {
@@ -210,10 +329,8 @@ await test('決着した卓のボタンはもう効かない', async () => {
 });
 
 await test('時間切れは流れて、参加費が全員に返る', async () => {
-  const startTotal = await (async () => {
-    for (const userId of SEATS) await eco.setBalance(db, GUILD, userId, 2000, 'test');
-    return totalCoins();
-  })();
+  for (const userId of SEATS) await eco.setBalance(db, GUILD, userId, 2000, 'test');
+  const startTotal = await totalCoins();
   const table = await pigTable(100);
   assert.equal(await totalCoins(), startTotal - 400, 'いったん預かっている');
 
@@ -223,16 +340,31 @@ await test('時間切れは流れて、参加費が全員に返る', async () =>
   assert.equal((await db.get('SELECT * FROM pig_tables WHERE id = ?1', table.id)).status, 'cancelled');
 });
 
-await test('画面に全員の点と手番が出る', async () => {
+await test('掲示に出目が絵文字で出る', async () => {
   const table = await pigTable(100);
-  await rollWith(table, 'u1', 4);
-  const shown = JSON.stringify(
-    pigLib.stateOf(await db.get('SELECT * FROM pig_tables WHERE id = ?1', table.id)),
-  );
-  assert.ok(shown.includes('"turnTotal":4'));
+  const me = (await pigNow(table.id)).userId;
+  await rollWith(table, me, 5);
 
-  const board = await pressOn(pigBoard, `pg:roll:${table.id}`, { userId: 'u2' }); // 手番違いで弾かれるだけ
-  assert.match(screenText(board), /の番です/);
+  const shown = await pressOn(pigBoard, `pg:roll:${table.id}`, { userId: me });
+  const text = JSON.stringify(shown.data ?? shown);
+  assert.match(text, /[⚀⚁⚂⚃⚄⚅]/, 'サイコロの目を絵文字で出す');
+});
+
+await test('1が出たときは1の目の絵文字と一緒に知らせる', async () => {
+  const table = await pigTable(100);
+
+  // 1が出るまでは自分の番が続くので、押し続ければ必ずバストの画面に行き当たる
+  let busted = null;
+  for (let i = 0; i < 200 && !busted; i++) {
+    const now = (await pigNow(table.id)).userId;
+    const shown = await pressOn(pigBoard, `pg:roll:${table.id}`, { userId: now });
+    const text = JSON.stringify(shown.data ?? shown);
+    if (text.includes('持ち点もろとも0')) busted = text;
+    if (text.includes('もう終わって')) break;
+  }
+
+  assert.ok(busted, '1が出たときの知らせが出ない');
+  assert.match(busted, /⚀/, '1の目の絵文字が出る');
 });
 
 /* ================================================================== 丁半 */
@@ -377,6 +509,16 @@ await test('壺を開けると当たった側が外れた側の金を分ける',
   assert.equal(await totalCoins(), afterBets + 300, '場の300が配られた');
   assert.equal(await totalCoins(), startTotal, 'コインは湧かない');
   assert.equal((await db.get('SELECT * FROM chohan_tables WHERE id = ?1', table.id)).status, 'done');
+});
+
+await test('壺を開けると出目がサイコロの絵文字で出る', async () => {
+  const table = await chohanBoard(100);
+  await pressOn(chBoard, `ch:bet:${table.id}:cho`, { userId: 'u1' });
+  await pressOn(chBoard, `ch:bet:${table.id}:han`, { userId: 'u2' });
+
+  const shown = await pressOn(chBoard, `ch:open:${table.id}`, { userId: 'u1' });
+  const text = JSON.stringify(shown.data ?? shown);
+  assert.match(text, /[⚀⚁⚂⚃⚄⚅]/, 'サイコロの目を絵文字で出す');
 });
 
 await test('二重には開けられない', async () => {

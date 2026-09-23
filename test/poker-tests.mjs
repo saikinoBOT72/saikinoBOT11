@@ -337,6 +337,19 @@ await test('交換は1人2回まで', async () => {
   assert.match(screenText(again), /もう交換は終わって/);
 });
 
+await test('札のボタンは「残」「捨」の1文字でコンパクト', async () => {
+  const table = await seatedTable();
+  const mine = await pressPk(`pk:hand:${table.id}`, { userId: 'u1' });
+  const line = mine.data.components.find((r) => r.components[0].custom_id?.startsWith('pk:keep:'));
+
+  assert.equal(line.components.length, 5);
+  for (const item of line.components) {
+    // 絵文字が入っていれば1文字だけ、入っていなければ「札 残」の形
+    assert.match(item.label, /^[残捨]$|^.+ [残捨]$/, `長すぎる: ${item.label}`);
+    assert.doesNotMatch(item.label, /残す|捨てる/, '「残す」「捨てる」ではなく1文字にする');
+  }
+});
+
 await test('捨てる札を選ばずに交換は押せない', async () => {
   const table = await seatedTable();
   const nothing = await pressPk(`pk:swap:${table.id}`, { userId: 'u1' });

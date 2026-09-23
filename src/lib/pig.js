@@ -3,18 +3,21 @@
  *
  * 【ルール】
  * 手番の人はサイコロを振り続け、出た目をそのターンの「貯金」に足していく。
- * ただし **1が出たら貯金がぜんぶ消えて手番が移る**。
- * 「やめる」を選べば、貯金をそのまま持ち点にできる。
- * 先に GOAL 点へ届いた人が場を総取り。
+ * 「やめる」を選べば貯金を持ち点にできる。
+ * ただし **1が出たら、貯金どころかそれまでの持ち点までぜんぶ0になる**。
  *
- * ルールはこれだけなのに、「あと5点だから振るしかない」「もう十分だから降りる」
- * という判断が毎ターン出てくるのが面白いところ。
+ * 1人 TURNS ターンずつやって、最後に持ち点が一番高い人が場を総取り。
+ *
+ * 【なぜ「全部消える」にしているか】
+ * そのターンの貯金だけが消える形だと、点が貯まるほど降りる理由が薄くなり、
+ * 結局みんな限界まで回すだけになる。持ち点ごと飛ぶようにすると、
+ * 終盤ほど「もう振れない」という判断が重くなって、引き際の読み合いになる。
  */
 
-/** 先に届いたら勝ち。 */
-export const GOAL = 100;
+/** 1人が振れるターン数。 */
+export const TURNS = 3;
 
-/** これが出たら貯金が消える。 */
+/** これが出たら持ち点ごと0になる。 */
 export const BUST = 1;
 
 export function rollDie() {
@@ -23,24 +26,19 @@ export function rollDie() {
 
 /**
  * 1回振った結果を返す（状態は変えない）。
- * @returns {{die: number, busted: boolean, turnTotal: number, reached: boolean}}
+ * @returns {{die: number, busted: boolean, turnTotal: number}}
  */
-export function applyRoll(score, turnTotal, die) {
-  if (die === BUST) return { die, busted: true, turnTotal: 0, reached: false };
-  const next = turnTotal + die;
-  return { die, busted: false, turnTotal: next, reached: score + next >= GOAL };
+export function applyRoll(turnTotal, die) {
+  if (die === BUST) return { die, busted: true, turnTotal: 0 };
+  return { die, busted: false, turnTotal: turnTotal + die };
 }
 
-/** あと何点で上がれるか。 */
-export function remaining(score, turnTotal = 0) {
-  return Math.max(0, GOAL - score - turnTotal);
-}
-
-/**
- * 進み具合のバー。数字だけだと差が掴みにくいので目で見えるようにする。
- * GOAL を 10 マスに縮めて描く。
- */
-export function bar(score, width = 10) {
-  const filled = Math.min(width, Math.round((Math.min(score, GOAL) / GOAL) * width));
-  return '▰'.repeat(filled) + '▱'.repeat(width - filled);
+/** 席順をランダムに並べ替える（先行・後攻を運で決める）。 */
+export function shuffleSeats(players) {
+  const shuffled = [...players];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
 }

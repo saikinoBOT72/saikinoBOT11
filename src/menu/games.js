@@ -19,7 +19,7 @@ import {
   MAX_PLAYERS as PG_MAX_PLAYERS,
   MIN_PLAYERS as PG_MIN_PLAYERS,
 } from '../lib/pig-table.js';
-import { GOAL as PIG_GOAL } from '../lib/pig.js';
+import { TURNS as PIG_TURNS } from '../lib/pig.js';
 import {
   MAX_PLAYERS as YT_MAX_PLAYERS,
   MIN_PLAYERS as YT_MIN_PLAYERS,
@@ -250,18 +250,19 @@ async function pigOpen(ix, _args, ctx, notice = null) {
       withNotice(
         embed({
           color: 0xe67e22,
-          title: `🐷 ピッグ（${PIG_GOAL}点先取）`,
+          title: `🐷 ピッグ（1人${PIG_TURNS}ターン）`,
           description:
             `所持金 ${coins(balance, settings)}\n\n` +
             `卓を立てるとチャンネルに投稿され、**${PG_MIN_PLAYERS}〜${PG_MAX_PLAYERS}人**で遊べます。\n\n` +
             'サイコロ1個を **好きなだけ振り続けて**、出た目をそのターンの貯金に足していきます。\n' +
-            '**でも1が出たら、貯めた点はぜんぶ消えて次の人の番。**\n' +
-            `「やめる」を選べば、貯金をそのまま持ち点にできます。先に ${PIG_GOAL}点 へ届いた人が場を総取り。\n\n` +
+            '**でも1が出たら、貯金どころか持ち点までぜんぶ0。**\n' +
+            `「やめる」を選べば貯金を持ち点にできます。${PIG_TURNS}ターン終えて一番高い人が場を総取り。\n\n` +
             'まず参加費を選んでください。追加のお金はかかりません。',
           fields: [
-            { name: '振るほど', value: '点は伸びるが、1で全部パー', inline: true },
-            { name: 'やめれば', value: '確定。でも相手に抜かれるかも', inline: true },
-            { name: '場', value: '参加費 × 人数を、上がった人が総取り' },
+            { name: '振るほど', value: '点は伸びるが、1で持ち点ごと0', inline: true },
+            { name: 'やめれば', value: '確定。でも残りターンが減る', inline: true },
+            { name: '順番', value: '先行・後攻は始めるときにランダムで決まります' },
+            { name: '場', value: '参加費 × 人数を、一番高い人が総取り（同点なら山分け）' },
           ],
         }),
         notice,
@@ -315,7 +316,7 @@ async function pigGo(ix, [rawBet], ctx) {
         title: '🐷 卓を立てました',
         description:
           `参加費 ${coins(bet, settings)} の卓をチャンネルに置きました。\n` +
-          `**${PG_MIN_PLAYERS}人**集まったら「▶️ 始める」で開始できます。`,
+          `**${PG_MIN_PLAYERS}人**集まったら「▶️ 始める」で開始できます。順番はそのときランダムで決まります。`,
       }),
     ],
     components: [row(button(id('pig', 'open'), 'もう一度立てる', { emoji: '🐷' }), homeButton())],

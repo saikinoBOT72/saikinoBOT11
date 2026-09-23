@@ -7,21 +7,22 @@
  *
  * 【進み方】
  *   joining → 2〜4人が座る
- *   playing → 手番の人が「振る」か「やめる」。1が出たら貯金が消えて次の人
- *   done    → 先に100点へ届いた人が場を総取り
+ *   playing → 手番の人が「振る」か「やめる」。1が出たら持ち点ごと0になって次の人
+ *   done    → 全員が3ターン終えたら、持ち点が一番高い人が場を総取り
  */
 import {
-  GOAL,
   MAX_PLAYERS,
   MIN_PLAYERS,
+  TURNS,
   createTable,
   current,
+  everyoneDone,
   getTable,
   hold,
   isTurn,
   joinTable,
   mutate,
-  payWinner,
+  payWinners,
   potOf,
   refundTable,
   roll,
@@ -30,9 +31,10 @@ import {
   setStatus,
   start,
   stateOf,
+  turnsLeft,
 } from '../lib/pig-table.js';
-import { bar, remaining } from '../lib/pig.js';
 import { getSettings } from '../lib/economy.js';
+import { diceFaces } from '../lib/emoji.js';
 import { coins } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
@@ -86,16 +88,19 @@ export async function handleComponent(ix, ctx) {
 
   const settings = await getSettings(ctx.db, table.guild_id);
   if (action === 'join') return handleJoin(ix, ctx, table, settings);
-  if (action === 'start') return handleStart(ix, ctx, table, settings);
-  if (action === 'roll') return handleRoll(ix, ctx, table, settings);
-  if (action === 'hold') return handleHold(ix, ctx, table, settings);
+
+  // 出目を出す操作のときだけ絵文字を読む
+  const em = await ctx.emoji();
+  if (action === 'start') return handleStart(ix, ctx, table, settings, em);
+  if (action === 'roll') return handleRoll(ix, ctx, table, settings, em);
+  if (action === 'hold') return handleHold(ix, ctx, table, settings, em);
   return reply({ content: '不明な操作です。' });
 }
 
 /* ------------------------------------------------------------------ 座る・始める */
 
 async function handleJoin(ix, ctx, table, settings) {
-  if (table.status !== 'joining') return update(boardPayload(table, stateOf(table), settings));
+  if (table.status !== 'joining') return reply({ content: 'この卓はもう始まっています。' });
 
   const joined = await joinTable(ctx.db, table, ix.userId);
   if (!joined.ok) {
@@ -110,7 +115,7 @@ async function handleJoin(ix, ctx, table, settings) {
   return update(lobbyPayload(await getTable(ctx.db, table.id), joined.state, settings));
 }
 
-async function handleStart(ix, ctx, table, settings) {
+async function handleStart(ix, ctx, table, settings, em) {
   if (ix.userId !== table.host_id) return reply({ content: '始められるのは卓を立てた人だけです。' });
   if (stateOf(table).players.length < MIN_PLAYERS) {
     return reply({ content: `${MIN_PLAYERS}人集まらないと始められません。` });
@@ -125,13 +130,16 @@ async function handleStart(ix, ctx, table, settings) {
     },
     { allow: ['joining'] },
   );
-  if (!started.ok) return update(boardPayload(await getTable(ctx.db, table.id), stateOf(await getTable(ctx.db, table.id)), settings));
-  return update(boardPayload(started.table, started.state, settings));
+  if (!started.ok) {
+    const fresh = await getTable(ctx.db, table.id);
+    return update(boardPayload(fresh, stateOf(fresh), settings, em));
+  }
+  return update(boardPayload(started.table, started.state, settings, em));
 }
 
 /* ------------------------------------------------------------------ 振る・やめる */
 
-async function handleRoll(ix, ctx, table, settings) {
+async function handleRoll(ix, ctx, table, settings, em) {
   const state = stateOf(table);
   if (seatOf(state, ix.userId) < 0) return reply({ content: 'この卓に座っていません。' });
   if (!isTurn(state, ix.userId)) return reply({ content: `いまは <@${current(state)?.userId}> の番です。` });
@@ -142,17 +150,18 @@ async function handleRoll(ix, ctx, table, settings) {
     ({ state: now }) => {
       if (!isTurn(now, ix.userId)) return { reject: 'turn' };
       const result = roll(now);
-      return { state: result.state, status: result.won ? 'done' : 'playing', extra: result };
+      const over = everyoneDone(result.state);
+      return { state: result.state, status: over ? 'done' : 'playing', extra: { ...result, over } };
     },
     { allow: ['playing'] },
   );
   if (!rolled.ok) return reply({ content: 'ほかの人が先に動きました。' });
 
-  if (rolled.extra.won) return finish(ctx, rolled.table, rolled.state, settings);
-  return update(boardPayload(rolled.table, rolled.state, settings));
+  if (rolled.extra.over) return finish(ctx, rolled.table, rolled.state, settings, em);
+  return update(boardPayload(rolled.table, rolled.state, settings, em));
 }
 
-async function handleHold(ix, ctx, table, settings) {
+async function handleHold(ix, ctx, table, settings, em) {
   const state = stateOf(table);
   if (seatOf(state, ix.userId) < 0) return reply({ content: 'この卓に座っていません。' });
   if (!isTurn(state, ix.userId)) return reply({ content: `いまは <@${current(state)?.userId}> の番です。` });
@@ -164,18 +173,22 @@ async function handleHold(ix, ctx, table, settings) {
     ({ state: now }) => {
       if (!isTurn(now, ix.userId)) return { reject: 'turn' };
       if (now.turnTotal === 0) return { reject: 'empty' };
-      return { state: hold(now) };
+      const next = hold(now);
+      const over = everyoneDone(next);
+      return { state: next, status: over ? 'done' : 'playing', extra: { over } };
     },
     { allow: ['playing'] },
   );
   if (!held.ok) return reply({ content: 'ほかの人が先に動きました。' });
-  return update(boardPayload(held.table, held.state, settings));
+
+  if (held.extra.over) return finish(ctx, held.table, held.state, settings, em);
+  return update(boardPayload(held.table, held.state, settings, em));
 }
 
-/** 上がった。場を渡して結果を出す。 */
-async function finish(ctx, table, state, settings) {
-  const pot = await payWinner(ctx.db, table, state, state.winner);
-  return update(resultPayload(table, state, pot, settings));
+/** 全員が終わった。場を配って結果を出す。 */
+async function finish(ctx, table, state, settings, em) {
+  const result = await payWinners(ctx.db, table, state);
+  return update(resultPayload(table, state, result, settings, em));
 }
 
 /* ------------------------------------------------------------------ 表示 */
@@ -190,10 +203,12 @@ function lobbyPayload(table, state, settings) {
         title: `🐷 ピッグ　参加費 ${table.bet}`,
         description:
           `<@${table.host_id}> が卓を立てました。**${MIN_PLAYERS}〜${MAX_PLAYERS}人**で遊べます。\n\n` +
-          `参加費は ${coins(table.bet, settings)}。サイコロを振って点を足し、先に **${GOAL}点** で場を総取り。\n` +
-          '**ただし1が出たら、そのターンに貯めた点はぜんぶ消えます。**\n\n' +
+          `参加費は ${coins(table.bet, settings)}。**1人${TURNS}ターン**ずつサイコロを振って、` +
+          '出た目を貯めていきます。\n' +
+          '**ただし1が出たら、貯金どころか持ち点までぜんぶ0になります。**\n' +
+          `${TURNS}ターン終えて、持ち点が一番高い人が場を総取り。\n\n` +
           `**席（${state.players.length}/${MAX_PLAYERS}）**\n${seats}`,
-        footer: { text: '2分以内に始まらなければ流れます' },
+        footer: { text: '順番は始めるときにランダムで決まります' },
       }),
     ],
     components: [
@@ -209,23 +224,29 @@ function lobbyPayload(table, state, settings) {
   };
 }
 
+/** 1人ぶんの行。手番の人に👉、使い切ったターンぶんだけ●を付ける。 */
+function playerLine(state, player, index) {
+  const mark = index === state.turn ? '👉' : '　';
+  const used = player.turns ?? 0;
+  const turns = '●'.repeat(used) + '○'.repeat(Math.max(0, TURNS - used));
+  return `${mark}<@${player.userId}>　${turns}　**${player.score}点**`;
+}
+
 /** いまの状態にあった掲示。 */
-function boardPayload(table, state, settings) {
+function boardPayload(table, state, settings, em) {
   if (table.status === 'joining') return lobbyPayload(table, state, settings);
 
+  const faces = diceFaces(em);
   const turn = current(state);
-  const lines = state.players.map((player, index) => {
-    const mark = index === state.turn ? '👉' : '　';
-    return `${mark}<@${player.userId}>　${bar(player.score)}　**${player.score}**`;
-  });
+  const lines = state.players.map((player, index) => playerLine(state, player, index));
 
   // 直前に何が起きたかを1行で。振った人が結果を読めるように
   const flash = state.busted
-    ? `💥 **1が出た！** 貯めた点は消えました。`
+    ? `${faces[1]} **1が出た！** 持ち点もろとも0になりました。`
     : state.held != null
-      ? `✋ **${state.held}点**を確定しました。`
+      ? `✋ **${state.held}点** を確定しました。`
       : state.lastRoll
-        ? `🎲 **${state.lastRoll}** が出ました。`
+        ? `${faces[state.lastRoll]} **${state.lastRoll}**`
         : null;
 
   return {
@@ -233,14 +254,14 @@ function boardPayload(table, state, settings) {
     embeds: [
       embed({
         color: COLOR,
-        title: `🐷 ピッグ　${GOAL}点先取`,
+        title: `🐷 ピッグ　1人${TURNS}ターン`,
         description:
           (flash ? `${flash}\n\n` : '') +
           `${lines.join('\n')}\n\n` +
-          `**<@${turn.userId}> の番**\n` +
-          `このターンの貯金 **${state.turnTotal}**　　上がりまで あと **${remaining(turn.score, state.turnTotal)}**`,
+          `**<@${turn.userId}> の番**（残り${turnsLeft(turn)}ターン）\n` +
+          `このターンの貯金 **${state.turnTotal}**`,
         fields: [{ name: '場', value: coins(potOf(table, state), settings), inline: true }],
-        footer: { text: '1が出たら貯金は消える' },
+        footer: { text: '1が出たら持ち点ごと0' },
       }),
     ],
     components: [
@@ -256,20 +277,29 @@ function boardPayload(table, state, settings) {
   };
 }
 
-function resultPayload(table, state, pot, settings) {
-  const lines = state.players.map(
-    (player) => `　<@${player.userId}>　${bar(player.score)}　**${player.score}**`,
+function resultPayload(table, state, result, settings, em) {
+  const faces = diceFaces(em);
+  const winners = new Set(result.winners.map((winner) => winner.userId));
+  const ranked = [...state.players].sort((a, b) => b.score - a.score);
+  const lines = ranked.map(
+    (player) => `　<@${player.userId}>　**${player.score}点**${winners.has(player.userId) ? '　👑' : ''}`,
   );
+
+  const share = Math.floor(result.pot / result.winners.length);
+  const verdict =
+    result.winners.length === 1
+      ? `**<@${result.winners[0].userId}> の勝ち！** ${coins(result.pot, settings)} を総取り`
+      : `**引き分け**。${result.winners.map((winner) => `<@${winner.userId}>`).join(' と ')} で ${coins(share, settings)} ずつ山分け`;
+
   return {
     // 大きく出したいので content には絵文字だけを置く
-    content: '🐷🎲',
+    content: `🐷${faces[6]}`,
     embeds: [
       embed({
         color: 0xf1c40f,
-        title: '🏆 上がり！',
-        description:
-          `**<@${state.winner}> の勝ち！** ${coins(pot, settings)} を総取り\n\n${lines.join('\n')}`,
-        footer: { text: `参加費 ${table.bet}` },
+        title: '🏆 勝負あり',
+        description: `${verdict}\n\n${lines.join('\n')}`,
+        footer: { text: `参加費 ${table.bet}・1人${TURNS}ターン` },
       }),
     ],
     components: [

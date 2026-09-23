@@ -314,7 +314,7 @@ function withNoticeLine(embedObject, notice) {
 function keepButton(tableId, em, card, keep, index) {
   const face = render(em, card);
   const custom = /^<a?:\w+:\d+>$/.test(face);
-  return button(`pk:keep:${tableId}:${index}`, custom ? (keep ? '残す' : '捨てる') : `${face} ${keep ? '残' : '捨'}`, {
+  return button(`pk:keep:${tableId}:${index}`, custom ? (keep ? '残' : '捨') : `${face} ${keep ? '残' : '捨'}`, {
     emoji: custom ? face : undefined,
     style: keep ? ButtonStyle.SUCCESS : ButtonStyle.SECONDARY,
   });

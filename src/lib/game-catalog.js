@@ -16,7 +16,7 @@ import { EMOJI as em } from './emoji.js';
 import { MAX_PLAYERS as BJ_MAX_PLAYERS } from './blackjack.js';
 import { MAX_DRAWS as PK_MAX_DRAWS } from './poker-table.js';
 import { MAX_PLAYERS as PG_MAX_PLAYERS, MIN_PLAYERS as PG_MIN_PLAYERS } from './pig-table.js';
-import { GOAL as PIG_GOAL } from './pig.js';
+import { TURNS as PIG_TURNS } from './pig.js';
 import { MAX_PLAYERS as YT_MAX_PLAYERS, MIN_PLAYERS as YT_MIN_PLAYERS } from './yacht-table.js';
 
 /** style は数字ではなく名前で持ち、画面側で ButtonStyle に直す。 */
@@ -43,7 +43,7 @@ export const GAMES = [
     key: 'pig',
     name: 'ピッグ',
     emoji: '🐷',
-    hint: `${PG_MIN_PLAYERS}〜${PG_MAX_PLAYERS}人。振るほど伸びるが1で全部パー。${PIG_GOAL}点先取`,
+    hint: `${PG_MIN_PLAYERS}〜${PG_MAX_PLAYERS}人。1人${PIG_TURNS}ターン、1が出たら持ち点ごと0`,
     style: 'PRIMARY',
   },
   { key: 'ch', name: '丁半博打', emoji: '🏺', hint: '何人でも。丁（偶数）か半（奇数）に張る', style: 'PRIMARY' },
