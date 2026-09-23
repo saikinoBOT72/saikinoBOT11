@@ -431,7 +431,10 @@ async function ytOpen(ix, _args, ctx, notice = null) {
             { name: '上段（1の目〜6の目）', value: 'その目の合計。**63点以上でボーナス +35**' },
             { name: '下段', value: 'スリーカード／フォーカード／フルハウス25／小ストレート30／大ストレート40／**ヨット50**／チャンス' },
             { name: 'スコアボード', value: '全員ぶんが1つの表で見えます。相手が何を空けているかも分かります' },
-            { name: 'ひとりで練習', value: '賭けずに1枚書けます。自己ベストだけ記録されます' },
+            {
+              name: 'ひとりで練習',
+              value: '賭けずに1枚書けます。自己ベストだけ記録されます。チャンネルに掲示が出るので、手元の画面を消しても続きから開けます',
+            },
           ],
         }),
         notice,
@@ -503,6 +506,7 @@ async function ytSolo(ix, _args, ctx) {
     guildId: ix.guildId,
     channelId: ix.channelId,
     userId: ix.userId,
+    settings: await ctx.settings(ix.guildId),
   });
   if (!started.ok) return ytOpen(ix, [], ctx, '始められませんでした。');
   return show(ix, started.payload);

@@ -695,8 +695,8 @@ await test('残す／捨てるボタンにサイコロの目が出る', async ()
   assert.equal(line.components.length, 5);
   // 絵文字が入っていない環境ではラベルに ⚀〜⚅ を出す（数字ではない）
   for (const item of line.components) {
-    assert.doesNotMatch(item.label, /^(残す|捨てる) \d$/, '数字ではなく目を出す');
-    assert.match(item.label, /[⚀⚁⚂⚃⚄⚅].*[残捨]|^(残す|捨てる)$/);
+    assert.doesNotMatch(item.label, /\d/, '数字ではなく目を出す');
+    assert.match(item.label, /^[⚀⚁⚂⚃⚄⚅] [残捨]$|^[残捨]$/, `コンパクトでない: ${item.label}`);
   }
 });
 
@@ -818,14 +818,40 @@ await test('時間切れは流れて、参加費が全員に返る', async () =>
 
 section('[ヨット] ひとり練習');
 
-await test('賭けずに始められて、チャンネルには何も出ない', async () => {
+await test('賭けずに始められて、いきなり振れる', async () => {
   await eco.setBalance(db, GUILD, 'u1', 1000, 'test');
-  const before = ctx.sent.length;
   const screen = await press('m:yt:solo', { userId: 'u1' });
 
   assert.equal(await eco.getBalance(db, GUILD, 'u1'), 1000, 'お金は動かない');
-  assert.equal(ctx.sent.length, before, 'チャンネルには出さない');
   assert.ok(customIds(screen).some((id) => id.startsWith('yt:roll:')), 'いきなり振れる');
+});
+
+// 「あなただけに表示されています」は自分で消せてしまう。
+// 消しても続きが開けるように、チャンネルの掲示は必ず1枚置く。
+await test('ひとり練習でもチャンネルに掲示を置いて、そこから開き直せる', async () => {
+  await eco.setBalance(db, GUILD, 'u1', 1000, 'test');
+  const before = ctx.sent.length;
+  await press('m:yt:solo', { userId: 'u1' });
+
+  assert.equal(ctx.sent.length, before + 1, 'チャンネルに掲示が出る');
+  const posted = ctx.sent.at(-1).payload;
+  assert.match(JSON.stringify(posted), /ひとり練習/, '募集中ではなく記入中の形で出る');
+
+  const ids = posted.components.flatMap((line) => line.components.map((c) => c.custom_id));
+  assert.ok(ids.some((id) => id.startsWith('yt:card:')), 'カードを開くボタンがある');
+  assert.ok(!ids.some((id) => id.startsWith('yt:join:')), '座るボタンは出さない');
+
+  // 手元の画面を消したつもりでも、掲示のボタンから開き直せる
+  const table = await db.get('SELECT * FROM yacht_tables ORDER BY created_at DESC, rowid DESC');
+  const reopened = await pressOn(ytBoard, `yt:card:${table.id}`, { userId: 'u1' });
+  assert.ok(customIds(reopened).some((id) => id.startsWith('yt:roll:')), '続きから開ける');
+});
+
+await test('ひとり練習の掲示には「場」を出さない', async () => {
+  await eco.setBalance(db, GUILD, 'u1', 1000, 'test');
+  await press('m:yt:solo', { userId: 'u1' });
+  const posted = JSON.stringify(ctx.sent.at(-1).payload);
+  assert.doesNotMatch(posted, /"name":"場"/, '賭けていないので場は出さない');
 });
 
 await test('ひとりで13欄書き終えると結果が出て、自己ベストが伸びる', async () => {

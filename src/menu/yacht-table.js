@@ -55,9 +55,20 @@ const COLOR = 0x16a085;
 /* ------------------------------------------------------------------ 卓を立てる */
 
 /**
- * 卓を立てる。
- * bet が 0 ならひとり練習なので、チャンネルには何も出さない。
+ * 卓をチャンネルに出す。
+ *
+ * 【ひとり練習でも必ず出す理由】
+ * 「あなただけに表示されています」のメッセージは自分で消せてしまう。
+ * それだけで進めていると、うっかり消した時点で続きが開けなくなる。
+ * チャンネルに残る掲示を必ず1枚置いて、そこの「カードを開く」から
+ * いつでも戻れるようにしておく。
  */
+async function postBoard(ctx, id, payload) {
+  const message = await ctx.rest.createMessage((await getTable(ctx.db, id)).channel_id, payload);
+  await setMessageId(ctx.db, id, message.id);
+  return message;
+}
+
 export async function openTable(ctx, { guildId, channelId, hostId, bet, settings }) {
   const id = crypto.randomUUID();
   await createTable(ctx.db, { id, guildId, channelId, hostId, bet });
@@ -68,14 +79,8 @@ export async function openTable(ctx, { guildId, channelId, hostId, bet, settings
     return { ok: false, reason: joined.reason };
   }
 
-  if (bet === 0) return { ok: true, table: await getTable(ctx.db, id) };
-
   try {
-    const message = await ctx.rest.createMessage(
-      channelId,
-      lobbyPayload(await getTable(ctx.db, id), joined.state, settings),
-    );
-    await setMessageId(ctx.db, id, message.id);
+    const message = await postBoard(ctx, id, lobbyPayload(await getTable(ctx.db, id), joined.state, settings));
     return { ok: true, message, table: await getTable(ctx.db, id) };
   } catch (error) {
     console.error('ヨットの卓の投稿に失敗:', error);
@@ -85,19 +90,39 @@ export async function openTable(ctx, { guildId, channelId, hostId, bet, settings
   }
 }
 
-/** ひとり練習を始めて、いきなりカードを開いた状態にする。 */
-export async function startSolo(ctx, { guildId, channelId, userId }) {
-  const opened = await openTable(ctx, { guildId, channelId, hostId: userId, bet: 0 });
-  if (!opened.ok) return opened;
+/**
+ * ひとり練習を始める。
+ * 人を待つ必要がないので、掲示は最初から「記入中」の形で出す
+ * （募集中の画面が一瞬ちらつかないように、立てて・座って・始めてから出す）。
+ */
+export async function startSolo(ctx, { guildId, channelId, userId, settings }) {
+  const id = crypto.randomUUID();
+  await createTable(ctx.db, { id, guildId, channelId, hostId: userId, bet: 0 });
 
-  const started = await mutate(
-    ctx.db,
-    opened.table.id,
-    ({ state }) => ({ state, status: 'playing' }),
-    { allow: ['joining'] },
-  );
-  if (!started.ok) return { ok: false, reason: 'start' };
-  return { ok: true, payload: cardPayload(started.table, started.state, userId, await ctx.emoji()) };
+  const joined = await joinTable(ctx.db, await getTable(ctx.db, id), userId);
+  if (!joined.ok) {
+    await setStatus(ctx.db, id, 'cancelled');
+    return { ok: false, reason: joined.reason };
+  }
+
+  const started = await mutate(ctx.db, id, ({ state }) => ({ state, status: 'playing' }), {
+    allow: ['joining'],
+  });
+  if (!started.ok) {
+    await setStatus(ctx.db, id, 'cancelled');
+    return { ok: false, reason: 'start' };
+  }
+
+  try {
+    await postBoard(ctx, id, boardPayload(started.table, started.state, settings));
+  } catch (error) {
+    console.error('ヨットのひとり練習の投稿に失敗:', error);
+    await setStatus(ctx.db, id, 'cancelled');
+    return { ok: false, reason: 'post' };
+  }
+
+  const table = await getTable(ctx.db, id);
+  return { ok: true, payload: cardPayload(table, stateOf(table), userId, await ctx.emoji()) };
 }
 
 /* ------------------------------------------------------------------ 振り分け */
@@ -264,9 +289,9 @@ async function finish(ctx, table, state, settings) {
         .editMessage(table.channel_id, table.message_id, payload)
         .catch((error) => console.error('ヨットの結果表示に失敗:', error)),
     );
-    return update(finishedPayload(result));
   }
-  return update(payload);
+  // ひとり練習は自分しかいないので、結果をそのまま手元にも出す
+  return update(table.bet > 0 ? finishedPayload(result) : payload);
 }
 
 /** 公開の掲示を、いまの進み具合で描き直す。 */
@@ -357,7 +382,7 @@ function keepButton(tableId, faces, die, keep, index) {
   const custom = /^<a?:\w+:\d+>$/.test(face);
   return button(
     `yt:keep:${tableId}:${index}`,
-    custom ? (keep ? '残す' : '捨てる') : `${face} ${keep ? '残' : '捨'}`,
+    custom ? (keep ? '残' : '捨') : `${face} ${keep ? '残' : '捨'}`,
     {
       emoji: custom ? face : undefined,
       style: keep ? ButtonStyle.SUCCESS : ButtonStyle.SECONDARY,
@@ -499,12 +524,12 @@ function boardPayload(table, state, settings) {
     embeds: [
       embed({
         color: COLOR,
-        title: '🎲 ヨット　記入中',
+        title: table.bet > 0 ? '🎲 ヨット　記入中' : '🎲 ヨット　ひとり練習',
         description:
-          '**出目とカードの中身は本人にしか見えません。** 下のボタンから開いてください。\n' +
-          '全員が同時に進められます。順番待ちはありません。\n\n' +
+          '**いま振っている出目は本人にしか見えません。** 下のボタンから開いてください。\n' +
+          (table.bet > 0 ? '全員が同時に進められます。順番待ちはありません。\n\n' : '賭けなしの練習です。自己ベストだけ記録されます。\n\n') +
           lines.join('\n'),
-        fields: [{ name: '場', value: coins(potOf(table, state), settings), inline: true }],
+        fields: table.bet > 0 ? [{ name: '場', value: coins(potOf(table, state), settings), inline: true }] : [],
         footer: { text: `サイコロ5個・${MAX_ROLLS}回まで振り直し・13欄` },
       }),
     ],
