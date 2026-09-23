@@ -23,19 +23,19 @@ export const BONUS = 35;
  * upper が true のものがボーナスの対象。
  */
 export const CATEGORIES = [
-  { key: 'ones', name: '1の目', upper: true, hint: '1の数 × 1' },
-  { key: 'twos', name: '2の目', upper: true, hint: '2の数 × 2' },
-  { key: 'threes', name: '3の目', upper: true, hint: '3の数 × 3' },
-  { key: 'fours', name: '4の目', upper: true, hint: '4の数 × 4' },
-  { key: 'fives', name: '5の目', upper: true, hint: '5の数 × 5' },
-  { key: 'sixes', name: '6の目', upper: true, hint: '6の数 × 6' },
-  { key: 'three', name: 'スリーカード', upper: false, hint: '同じ目が3個以上あれば、5個の合計' },
-  { key: 'four', name: 'フォーカード', upper: false, hint: '同じ目が4個以上あれば、5個の合計' },
-  { key: 'full', name: 'フルハウス', upper: false, hint: '3個＋2個ちょうどで 25点' },
-  { key: 'small', name: '小ストレート', upper: false, hint: '4個つながれば 30点' },
-  { key: 'large', name: '大ストレート', upper: false, hint: '5個つながれば 40点' },
-  { key: 'yacht', name: 'ヨット', upper: false, hint: '5個そろえば 50点' },
-  { key: 'chance', name: 'チャンス', upper: false, hint: '5個の合計（何でもよい）' },
+  { key: 'ones', name: '1の目', short: '1の目', upper: true, hint: '1の数 × 1' },
+  { key: 'twos', name: '2の目', short: '2の目', upper: true, hint: '2の数 × 2' },
+  { key: 'threes', name: '3の目', short: '3の目', upper: true, hint: '3の数 × 3' },
+  { key: 'fours', name: '4の目', short: '4の目', upper: true, hint: '4の数 × 4' },
+  { key: 'fives', name: '5の目', short: '5の目', upper: true, hint: '5の数 × 5' },
+  { key: 'sixes', name: '6の目', short: '6の目', upper: true, hint: '6の数 × 6' },
+  { key: 'three', name: 'スリーカード', short: '3カード', upper: false, hint: '同じ目が3個以上あれば、5個の合計' },
+  { key: 'four', name: 'フォーカード', short: '4カード', upper: false, hint: '同じ目が4個以上あれば、5個の合計' },
+  { key: 'full', name: 'フルハウス', short: 'フルH', upper: false, hint: '3個＋2個ちょうどで 25点' },
+  { key: 'small', name: '小ストレート', short: '小スト', upper: false, hint: '4個つながれば 30点' },
+  { key: 'large', name: '大ストレート', short: '大スト', upper: false, hint: '5個つながれば 40点' },
+  { key: 'yacht', name: 'ヨット', short: 'ヨット', upper: false, hint: '5個そろえば 50点' },
+  { key: 'chance', name: 'チャンス', short: 'チャンス', upper: false, hint: '5個の合計（何でもよい）' },
 ];
 
 export const CATEGORY_BY_KEY = Object.fromEntries(CATEGORIES.map((category) => [category.key, category]));
@@ -53,6 +53,19 @@ export function rollDice(count = DICE_COUNT) {
 /** 残す札を指定して振り直す。keep[i] が true のサイコロはそのまま。 */
 export function reroll(dice, keep) {
   return dice.map((die, index) => (keep[index] ? die : 1 + Math.floor(Math.random() * 6)));
+}
+
+/**
+ * 左から小さい順に並べ替える。
+ *
+ * 【keep も一緒に動かす理由】
+ * 並べ替えるとサイコロの位置が変わる。「残す」の印は位置ではなく
+ * そのサイコロに付いているものなので、目と印をペアのまま並べ替える。
+ * こうしないと、振り直したとたんに別のサイコロが残る羽目になる。
+ */
+export function sortDice(dice, keep) {
+  const pairs = dice.map((die, index) => ({ die, keep: keep[index] })).sort((a, b) => a.die - b.die);
+  return { dice: pairs.map((pair) => pair.die), keep: pairs.map((pair) => pair.keep) };
 }
 
 /** 目ごとの個数。counts[3] は3の目が何個あるか。 */

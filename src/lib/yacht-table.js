@@ -22,6 +22,7 @@ import {
   reroll,
   rollDice,
   scoreFor,
+  sortDice,
   tally,
 } from './yacht.js';
 import { createTableStore } from './card-table.js';
@@ -97,11 +98,15 @@ function updatePlayer(state, userId, change) {
   };
 }
 
-/** 振る。1回目は5個全部、2回目からは残していないぶんだけ。 */
+/**
+ * 振る。1回目は5個全部、2回目からは残していないぶんだけ。
+ * 振ったあとは左から小さい順に並べ替える（「残す」の印もついていく）。
+ */
 export function rollFor(state, userId, forced = null) {
   const player = playerOf(state, userId);
-  const dice = forced ?? (player.rolls === 0 ? rollDice() : reroll(player.dice, player.keep));
-  return updatePlayer(state, userId, { dice, rolls: player.rolls + 1 });
+  const rolled = forced ?? (player.rolls === 0 ? rollDice() : reroll(player.dice, player.keep));
+  const sorted = sortDice(rolled, player.keep);
+  return updatePlayer(state, userId, { dice: sorted.dice, keep: sorted.keep, rolls: player.rolls + 1 });
 }
 
 /** 残す／捨てるを切り替える。 */

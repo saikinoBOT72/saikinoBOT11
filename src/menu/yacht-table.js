@@ -281,53 +281,115 @@ async function refreshBoard(ctx, table, settings) {
 
 /* ------------------------------------------------------------------ 表示 */
 
-/** スコアカードを2列で並べる。 */
-function cardLines(card) {
-  const cell = (category) => {
-    const value = card[category.key];
-    return `${category.name} ${value == null ? '—' : `**${value}**`}`;
-  };
-  const upper = CATEGORIES.filter((category) => category.upper);
-  const lower = CATEGORIES.filter((category) => !category.upper);
-  return {
-    upper: upper.map(cell).join('　/　'),
-    lower: lower.map(cell).join('\n'),
-  };
+/**
+ * 全員ぶんのスコアボードを1つの表にする。
+ *
+ * 【なぜコードブロックに入れるのか】
+ * 数字の桁をそろえないと表として読めない。Discord で桁をそろえられるのは
+ * コードブロック（等幅）の中だけ。ただしコードブロックの中では <@id> が
+ * 名前に変わらないので、**名前は表の外に並べて番号で対応させる**。
+ *
+ * 【全員に見せる理由】
+ * 本物のヨットもスコアシートは全員に見えている。相手が何を空けているかが
+ * 見えるからこそ「ここで大ストレートを捨てるか」という判断が生まれる。
+ * 隠すのは、いま振っている出目だけでよい。
+ */
+
+/** 見た目の幅（全角は2、半角は1）。 */
+function displayWidth(text) {
+  return [...text].reduce((total, char) => total + (/[\u0020-\u007e]/.test(char) ? 1 : 2), 0);
 }
 
-/** 本人にだけ見えるカード。 */
+const padRight = (text, target) => text + ' '.repeat(Math.max(0, target - displayWidth(text)));
+const padLeft = (text, target) => ' '.repeat(Math.max(0, target - displayWidth(text))) + text;
+
+const LABEL_WIDTH = 9;
+const COLUMN_WIDTH = 5;
+
+/**
+ * 書いていない欄は「-」、書いた欄は数字（0点でも 0 と出す）。
+ * 半角の「-」を使うのは、桁をそろえる計算が半角1文字ぶんで済むから
+ * （「−」などの記号は等幅フォントでも幅が読みきれず、表がずれる）。
+ */
+const cell = (value) => (value == null ? '-' : String(value));
+
+function scoreboard(state, meId) {
+  const players = state.players;
+  const columns = players.map((_, index) => String(index + 1));
+
+  const header = padRight('', LABEL_WIDTH) + columns.map((name) => padLeft(name, COLUMN_WIDTH)).join('');
+  const rowFor = (label, values) =>
+    padRight(label, LABEL_WIDTH) + values.map((value) => padLeft(value, COLUMN_WIDTH)).join('');
+
+  const lines = [header];
+  for (const category of CATEGORIES) {
+    if (category.key === 'three') {
+      // 上段と下段のあいだに小計とボーナスを挟む
+      lines.push(rowFor('小計', players.map((player) => String(tally(player.card).upper))));
+      lines.push(
+        rowFor('ボーナス', players.map((player) => {
+          const counted = tally(player.card);
+          return counted.bonus > 0 ? `+${counted.bonus}` : '-';
+        })),
+      );
+      lines.push('');
+    }
+    lines.push(rowFor(category.short, players.map((player) => cell(player.card[category.key]))));
+  }
+  lines.push('');
+  lines.push(rowFor('合計', players.map((player) => String(tally(player.card).total))));
+
+  const legend = players
+    .map((player, index) => `**${index + 1}** <@${player.userId}>${player.userId === meId ? '（あなた）' : ''}`)
+    .join('　／　');
+
+  return `${legend}\n\`\`\`\n${lines.join('\n')}\n\`\`\``;
+}
+
+/**
+ * サイコロ1個ぶんのボタン。
+ * サーバーにサイコロの絵文字が入っていればそれをボタンに載せ、
+ * 入っていなければ ⚀〜⚅ をラベルに出す（⚀〜⚅ は Unicode の絵文字ではないので
+ * ボタンの emoji には載せられない。載せると Discord がメッセージごと弾く）。
+ */
+function keepButton(tableId, faces, die, keep, index) {
+  const face = faces[die];
+  const custom = /^<a?:\w+:\d+>$/.test(face);
+  return button(
+    `yt:keep:${tableId}:${index}`,
+    custom ? (keep ? '残す' : '捨てる') : `${face} ${keep ? '残' : '捨'}`,
+    {
+      emoji: custom ? face : undefined,
+      style: keep ? ButtonStyle.SUCCESS : ButtonStyle.SECONDARY,
+    },
+  );
+}
+
+/** 本人にだけ見えるカード。出目は本人だけ、スコアボードは全員ぶん。 */
 function cardPayload(table, state, userId, em, notice = null) {
   const player = playerOf(state, userId);
   const faces = diceFaces(em);
   const counted = tally(player.card);
   const written = CATEGORIES.length - openCategories(player.card).length;
-  const lines = cardLines(player.card);
 
-  const head = player.rolls === 0
-    ? '**振ってください。**'
-    : `${player.dice.map((die, index) => (player.keep[index] ? `**[${faces[die]}]**` : faces[die])).join(' ')}　` +
-      `残り **${MAX_ROLLS - player.rolls}回**`;
+  const head =
+    player.rolls === 0
+      ? '**振ってください。**'
+      : `${player.dice.map((die, index) => (player.keep[index] ? `**[${faces[die]}]**` : faces[die])).join(' ')}　` +
+        `残り **${MAX_ROLLS - player.rolls}回**`;
 
   const body =
     `${head}\n\n` +
-    `**上段** ${lines.upper}\n` +
-    `小計 **${counted.upper}**` +
-    (counted.bonus > 0 ? `　→ ボーナス **+${counted.bonus}**` : `　（あと ${counted.toBonus} でボーナス +35）`) +
-    `\n\n**下段**\n${lines.lower}\n\n` +
-    `**合計 ${counted.total}**　（${written}/${CATEGORIES.length} 欄）`;
+    `${scoreboard(state, userId)}\n` +
+    (counted.bonus > 0
+      ? `ボーナス **+${counted.bonus}** 獲得`
+      : `あと **${counted.toBonus}点** で上段ボーナス **+35**`) +
+    `　／　${written}/${CATEGORIES.length} 欄`;
 
   const components = [];
   if (player.rolls > 0 && !player.done) {
     components.push(
-      row(
-        // サイコロの目（⚀〜⚅）は絵文字ではないのでボタンの emoji には載せられない。
-        // 数字をラベルに出して、押すと残す／捨てるが切り替わる
-        ...player.dice.map((die, index) =>
-          button(`yt:keep:${table.id}:${index}`, `${player.keep[index] ? '残す' : '捨てる'} ${die}`, {
-            style: player.keep[index] ? ButtonStyle.SUCCESS : ButtonStyle.SECONDARY,
-          }),
-        ),
-      ),
+      row(...player.dice.map((die, index) => keepButton(table.id, faces, die, player.keep[index], index))),
     );
   }
   if (!player.done) {
@@ -348,9 +410,9 @@ function cardPayload(table, state, userId, em, notice = null) {
       withNoticeLine(
         embed({
           color: COLOR,
-          title: `🎲 あなたのスコアカード`,
+          title: '🎲 スコアボード',
           description: body,
-          footer: { text: player.done ? 'ほかの人を待っています' : '残す札を選んでから振り直す' },
+          footer: { text: player.done ? 'ほかの人を待っています' : '残すサイコロを選んでから振り直す' },
         }),
         notice,
       ),

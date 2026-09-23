@@ -543,6 +543,28 @@ await test('13欄ぜんぶ埋まったら書き終わり', () => {
   assert.equal(yacht.isComplete(card), true);
 });
 
+await test('並べ替えると「残す」の印も同じサイコロに付いていく', () => {
+  // 元: 6=残す / 2=捨てる / 5=残す / 2=残す / 1=捨てる
+  const { dice, keep } = yacht.sortDice([6, 2, 5, 2, 1], [true, false, true, true, false]);
+  assert.deepEqual(dice, [1, 2, 2, 5, 6], '小さい順に並ぶ');
+  // 並べ替え後も「どの目を残すか」は変わらない。
+  // 2 は2個あって片方だけ残すので、印が位置ではなく目に付いていることがここで分かる
+  assert.deepEqual(keep, [false, false, true, true, true]);
+  assert.equal(
+    dice.filter((_, index) => keep[index]).join(','),
+    '2,5,6',
+    '残すと決めた 6・5・2 がそのまま残っている',
+  );
+});
+
+await test('残すサイコロが真ん中にあってもずれない', () => {
+  // 3 だけを残す。並べ替えでも 3 に印が付いたまま
+  const { dice, keep } = yacht.sortDice([5, 1, 3, 6, 2], [false, false, true, false, false]);
+  assert.deepEqual(dice, [1, 2, 3, 5, 6]);
+  assert.deepEqual(keep, [false, false, true, false, false]);
+  assert.equal(dice[keep.indexOf(true)], 3);
+});
+
 await test('残すと決めたサイコロは振り直しても変わらない', () => {
   const dice = [1, 2, 3, 4, 5];
   for (let i = 0; i < 50; i++) {
@@ -629,6 +651,85 @@ await test('残す／捨てるを切り替えられる', async () => {
 
   await pressOn(ytBoard, `yt:keep:${table.id}:0`, { userId: 'u1' });
   assert.deepEqual((await ytPlayer(table.id, 'u1')).keep, [false, false, false, true, false], '押すと戻る');
+});
+
+await test('サイコロは左から小さい順に並ぶ', async () => {
+  const table = await yachtTable(200);
+  for (let i = 0; i < 20; i++) {
+    await ytLib.mutate(db, table.id, ({ state }) => ({ state: ytLib.rollFor(state, 'u1') }), {
+      allow: ['playing'],
+    });
+    const dice = (await ytPlayer(table.id, 'u1')).dice;
+    assert.deepEqual(dice, [...dice].sort((a, b) => a - b), `並んでいない: ${dice.join(',')}`);
+  }
+});
+
+await test('並べ替えても「残す」の印は同じサイコロに付いたままになる', async () => {
+  const table = await yachtTable(200);
+  // 6 と 1 を残す状態を作る
+  await rollAs(table, 'u1', [6, 2, 5, 2, 1]);
+  let player = await ytPlayer(table.id, 'u1');
+  assert.deepEqual(player.dice, [1, 2, 2, 5, 6], '振った直後から並んでいる');
+
+  // 端の 1 と 6 を残す
+  await pressOn(ytBoard, `yt:keep:${table.id}:0`, { userId: 'u1' });
+  await pressOn(ytBoard, `yt:keep:${table.id}:4`, { userId: 'u1' });
+  player = await ytPlayer(table.id, 'u1');
+  assert.deepEqual(player.keep, [true, false, false, false, true]);
+
+  // 振り直すと並び替えが起きるが、残した 1 と 6 は残ったまま印も付いている
+  await pressOn(ytBoard, `yt:roll:${table.id}`, { userId: 'u1' });
+  player = await ytPlayer(table.id, 'u1');
+  assert.deepEqual(player.dice, [...player.dice].sort((a, b) => a - b), '並んでいる');
+
+  const kept = player.dice.filter((_, index) => player.keep[index]);
+  assert.deepEqual(kept.sort((a, b) => a - b), [1, 6], '残した目がそのまま残っている');
+});
+
+await test('残す／捨てるボタンにサイコロの目が出る', async () => {
+  const table = await yachtTable(200);
+  await rollAs(table, 'u1', [1, 2, 3, 4, 5]);
+  const card = await pressOn(ytBoard, `yt:card:${table.id}`, { userId: 'u1' });
+
+  const line = card.data.components.find((r) => r.components[0].custom_id?.startsWith(`yt:keep:`));
+  assert.equal(line.components.length, 5);
+  // 絵文字が入っていない環境ではラベルに ⚀〜⚅ を出す（数字ではない）
+  for (const item of line.components) {
+    assert.doesNotMatch(item.label, /^(残す|捨てる) \d$/, '数字ではなく目を出す');
+    assert.match(item.label, /[⚀⚁⚂⚃⚄⚅].*[残捨]|^(残す|捨てる)$/);
+  }
+});
+
+await test('スコアボードに全員ぶんが1つの表で出る', async () => {
+  const table = await yachtTable(200, ['u1', 'u2']);
+  await writeAs(table, 'u2', [3, 3, 3, 3, 3], 'yacht');
+  await rollAs(table, 'u1', [1, 2, 3, 4, 5]);
+
+  const card = await pressOn(ytBoard, `yt:card:${table.id}`, { userId: 'u1' });
+  const text = card.data.embeds[0].description;
+
+  assert.match(text, /```/, '等幅の表になっている');
+  assert.match(text, /<@u1>/, '名前は表の外に出す');
+  assert.match(text, /<@u2>/, '相手の名前も出す');
+  assert.match(text, /^ボーナス/m, '上段の小計とボーナスの行がある');
+  assert.match(text, /^合計/m);
+
+  // 相手が書いたヨット50も同じ表に出る
+  const totals = text.match(/^合計\s+(\d+)\s+(\d+)/m);
+  assert.ok(totals, '合計の行が2人ぶん並んでいる');
+  assert.equal(Number(totals[2]), 50, '相手の点も見える');
+});
+
+await test('表の桁がそろっている（すべて半角で数える）', async () => {
+  const table = await yachtTable(200, ['u1', 'u2']);
+  await rollAs(table, 'u1', [1, 2, 3, 4, 5]);
+  const card = await pressOn(ytBoard, `yt:card:${table.id}`, { userId: 'u1' });
+  const block = card.data.embeds[0].description.split('```')[1];
+
+  const width = (text) => [...text].reduce((total, char) => total + (/[\u0020-\u007e]/.test(char) ? 1 : 2), 0);
+  const rows = block.split('\n').filter((line) => line.trim() !== '');
+  const widths = new Set(rows.map(width));
+  assert.equal(widths.size, 1, `行の幅がそろっていない: ${[...widths].join(',')}`);
 });
 
 await test('書き込むと点が入り、次の欄へ進む', async () => {
