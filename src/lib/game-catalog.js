@@ -15,6 +15,8 @@
 import { EMOJI as em } from './emoji.js';
 import { MAX_PLAYERS as BJ_MAX_PLAYERS } from './blackjack.js';
 import { MAX_DRAWS as PK_MAX_DRAWS } from './poker-table.js';
+import { MAX_PLAYERS as PG_MAX_PLAYERS, MIN_PLAYERS as PG_MIN_PLAYERS } from './pig-table.js';
+import { GOAL as PIG_GOAL } from './pig.js';
 
 /** style は数字ではなく名前で持ち、画面側で ButtonStyle に直す。 */
 export const GAMES = [
@@ -36,6 +38,14 @@ export const GAMES = [
     hint: `2〜4人。5枚配って${PK_MAX_DRAWS}回まで引き直し、勝負か降りるか`,
     style: 'PRIMARY',
   },
+  {
+    key: 'pig',
+    name: 'ピッグ',
+    emoji: '🐷',
+    hint: `${PG_MIN_PLAYERS}〜${PG_MAX_PLAYERS}人。振るほど伸びるが1で全部パー。${PIG_GOAL}点先取`,
+    style: 'PRIMARY',
+  },
+  { key: 'ch', name: '丁半博打', emoji: '🏺', hint: '何人でも。丁（偶数）か半（奇数）に張る', style: 'PRIMARY' },
   { key: 'fish', name: '釣り', emoji: '🎣', hint: '島でのんびり。釣った魚は図鑑と売り物に', style: 'PRIMARY' },
   { key: 'omi', name: 'おみくじ', emoji: '🎋', hint: '1日1回。コインは動かない、読んで楽しむだけ', style: 'PRIMARY' },
   { key: 'poll', name: '予想大会', emoji: em.poll, hint: 'みんなで賭けて、正解者で山分け', style: 'SUCCESS' },

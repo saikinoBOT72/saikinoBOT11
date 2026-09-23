@@ -43,6 +43,8 @@ export const screens = {
   omi: gatedAll('omi', omikuji.actions),
   bj: gated('bj', games.bj),
   pk: gated('pk', games.pk),
+  pig: gated('pig', games.pig),
+  ch: gated('ch', games.ch),
   rr: gated('rr', games.rr),
   cs: gated('cs', games.cs),
   mine: gated('mine', games.mine),

@@ -13,6 +13,10 @@ import { timeOut as blackjackTimeOut } from './menu/blackjack-table.js';
 import { expiredTables } from './lib/blackjack-table.js';
 import { timeOut as pokerTimeOut } from './menu/poker-table.js';
 import { expiredTables as expiredPokerTables } from './lib/poker-table.js';
+import { timeOut as pigTimeOut } from './menu/pig-table.js';
+import { expiredTables as expiredPigTables } from './lib/pig-table.js';
+import { timeOut as chohanTimeOut } from './menu/chohan-table.js';
+import { expiredTables as expiredChohanTables } from './lib/chohan-table.js';
 import { boardPayload, cancelledPayload as pollCancelledPayload } from './menu/poll-board.js';
 import {
   abandonedPolls,
@@ -44,6 +48,8 @@ export const STEPS = [
   sweepExpiredDuels,
   sweepBlackjack,
   sweepPoker,
+  sweepPig,
+  sweepChohan,
   sweepPolls,
   postDueAnnouncements,
   drawLotteries,
@@ -128,19 +134,37 @@ export async function sweepExpiredDuels(ctx) {
 
 /** 時間切れの簡ポーカーの卓を片付ける。預かったぶんは全員に返す。 */
 export async function sweepPoker(ctx) {
-  const tables = await expiredPokerTables(ctx.db);
+  await sweepTables(ctx, expiredPokerTables, pokerTimeOut, '簡ポーカー');
+}
+
+/** 時間切れのピッグの卓を片付ける。預かったぶんは全員に返す。 */
+export async function sweepPig(ctx) {
+  await sweepTables(ctx, expiredPigTables, pigTimeOut, 'ピッグ');
+}
+
+/**
+ * 時間切れの丁半の盆を片付ける。
+ * コマがそろっていれば開けて配当まで済ませる（張った金を無駄にしない）。
+ */
+export async function sweepChohan(ctx) {
+  await sweepTables(ctx, expiredChohanTables, chohanTimeOut, '丁半');
+}
+
+/** 時間切れの卓を拾って片付け、掲示を書き換える共通処理。 */
+async function sweepTables(ctx, findExpired, handle, label) {
+  const tables = await findExpired(ctx.db);
   for (const table of tables) {
     try {
-      const handled = await pokerTimeOut(ctx, table);
+      const handled = await handle(ctx, table);
       if (!handled || !table.message_id) continue;
       await ctx.rest
         .editMessage(table.channel_id, table.message_id, handled.payload)
-        .catch((error) => console.error('簡ポーカーの表示更新に失敗:', error));
+        .catch((error) => console.error(`${label}の表示更新に失敗:`, error));
     } catch (error) {
-      console.error(`簡ポーカーの片付けに失敗 (${table.id}):`, error);
+      console.error(`${label}の片付けに失敗 (${table.id}):`, error);
     }
   }
-  if (tables.length > 0) console.log(`時間切れの簡ポーカーの卓を ${tables.length} 件片付けました`);
+  if (tables.length > 0) console.log(`時間切れの${label}を ${tables.length} 件片付けました`);
 }
 
 /**
@@ -149,19 +173,7 @@ export async function sweepPoker(ctx) {
  * （返金目当てで放置されないよう、勝負が始まっていたら必ず決着させる）
  */
 export async function sweepBlackjack(ctx) {
-  const tables = await expiredTables(ctx.db);
-  for (const table of tables) {
-    try {
-      const handled = await blackjackTimeOut(ctx, table);
-      if (!handled || !table.message_id) continue;
-      await ctx.rest
-        .editMessage(table.channel_id, table.message_id, handled.payload)
-        .catch((error) => console.error('ブラックジャックの表示更新に失敗:', error));
-    } catch (error) {
-      console.error(`ブラックジャックの片付けに失敗 (${table.id}):`, error);
-    }
-  }
-  if (tables.length > 0) console.log(`時間切れの卓を ${tables.length} 件片付けました`);
+  await sweepTables(ctx, expiredTables, blackjackTimeOut, 'ブラックジャック');
 }
 
 export async function sweepPolls(ctx) {

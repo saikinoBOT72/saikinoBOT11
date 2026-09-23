@@ -6,12 +6,19 @@ import { startChallenge } from './rps-challenge.js';
 import { startChallenge as startDuel, findGame } from './duel-board.js';
 import { openTable as openBlackjack } from './blackjack-table.js';
 import { openTable as openPoker } from './poker-table.js';
+import { openTable as openPig } from './pig-table.js';
+import { openBoard as openChohan } from './chohan-table.js';
 import {
   MAX_DRAWS as PK_MAX_DRAWS,
   MAX_PLAYERS as PK_MAX_PLAYERS,
   MIN_PLAYERS as PK_MIN_PLAYERS,
 } from '../lib/poker-table.js';
 import { MAX_PLAYERS as BJ_MAX_PLAYERS } from '../lib/blackjack.js';
+import {
+  MAX_PLAYERS as PG_MAX_PLAYERS,
+  MIN_PLAYERS as PG_MIN_PLAYERS,
+} from '../lib/pig-table.js';
+import { GOAL as PIG_GOAL } from '../lib/pig.js';
 import { enabledGames, GAME_BY_KEY, isGameEnabled } from '../lib/game-catalog.js';
 import { startChallenge as startChinchiro } from './chinchiro-match.js';
 import { escrowFor } from '../lib/chinchiro.js';
@@ -224,6 +231,173 @@ async function pkGo(ix, [rawBet], ctx) {
 }
 
 export const pk = { open: pkOpen, custom: pkCustom, amount: pkAmount, go: pkGo };
+
+/* ------------------------------------------------------------------ ピッグ */
+
+async function pigOpen(ix, _args, ctx, notice = null) {
+  const settings = await ctx.settings(ix.guildId);
+  const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
+
+  return show(ix, {
+    embeds: [
+      withNotice(
+        embed({
+          color: 0xe67e22,
+          title: `🐷 ピッグ（${PIG_GOAL}点先取）`,
+          description:
+            `所持金 ${coins(balance, settings)}\n\n` +
+            `卓を立てるとチャンネルに投稿され、**${PG_MIN_PLAYERS}〜${PG_MAX_PLAYERS}人**で遊べます。\n\n` +
+            'サイコロ1個を **好きなだけ振り続けて**、出た目をそのターンの貯金に足していきます。\n' +
+            '**でも1が出たら、貯めた点はぜんぶ消えて次の人の番。**\n' +
+            `「やめる」を選べば、貯金をそのまま持ち点にできます。先に ${PIG_GOAL}点 へ届いた人が場を総取り。\n\n` +
+            'まず参加費を選んでください。追加のお金はかかりません。',
+          fields: [
+            { name: '振るほど', value: '点は伸びるが、1で全部パー', inline: true },
+            { name: 'やめれば', value: '確定。でも相手に抜かれるかも', inline: true },
+            { name: '場', value: '参加費 × 人数を、上がった人が総取り' },
+          ],
+        }),
+        notice,
+      ),
+    ],
+    components: amountRows(['pig', 'go'], balance, {
+      maxBet: settings.max_bet,
+      customId: id('pig', 'custom'),
+      extra: [backButton('games')],
+    }),
+  });
+}
+
+function pigCustom(ix) {
+  return openModal(amountModal(id('pig', 'amount'), 'ピッグの参加費', '参加費'));
+}
+
+async function pigAmount(ix, _args, ctx) {
+  const amount = readInt(ix, 'amount', { min: 0 });
+  if (isError(amount)) return pigOpen(ix, [], ctx, amount.error);
+  return pigGo(ix, [String(amount)], ctx);
+}
+
+async function pigGo(ix, [rawBet], ctx) {
+  const bet = Number(rawBet);
+  const settings = await ctx.settings(ix.guildId);
+  const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
+
+  const check = checkBet(bet, balance, settings);
+  if (!check.ok) return pigOpen(ix, [], ctx, check.message);
+
+  const opened = await openPig(ctx, {
+    guildId: ix.guildId,
+    channelId: ix.channelId,
+    hostId: ix.userId,
+    bet,
+    settings,
+  });
+  if (!opened.ok) {
+    const messages = {
+      insufficient: `参加費 ${coins(bet, settings)} が払えません。`,
+      post: 'このチャンネルに卓を投稿できませんでした。',
+    };
+    return pigOpen(ix, [], ctx, messages[opened.reason] ?? '卓を立てられませんでした。');
+  }
+
+  return show(ix, {
+    embeds: [
+      embed({
+        color: 0xe67e22,
+        title: '🐷 卓を立てました',
+        description:
+          `参加費 ${coins(bet, settings)} の卓をチャンネルに置きました。\n` +
+          `**${PG_MIN_PLAYERS}人**集まったら「▶️ 始める」で開始できます。`,
+      }),
+    ],
+    components: [row(button(id('pig', 'open'), 'もう一度立てる', { emoji: '🐷' }), homeButton())],
+  });
+}
+
+export const pig = { open: pigOpen, custom: pigCustom, amount: pigAmount, go: pigGo };
+
+/* ------------------------------------------------------------------ 丁半博打 */
+
+async function chOpen(ix, _args, ctx, notice = null) {
+  const settings = await ctx.settings(ix.guildId);
+  const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
+
+  return show(ix, {
+    embeds: [
+      withNotice(
+        embed({
+          color: 0x8e44ad,
+          title: '🏺 丁半博打',
+          description:
+            `所持金 ${coins(balance, settings)}\n\n` +
+            '盆を開くとチャンネルに投稿され、**何人でも**張れます。\n\n' +
+            '壺の中のサイコロ2つの和が **丁（偶数）** か **半（奇数）** か。\n' +
+            '当たった側が、外れた側の金を **張った額の比** で分けます。\n\n' +
+            'まず一口の額を選んでください。参加者はボタン1回で一口ずつ張れます。',
+          fields: [
+            { name: '🔵 丁', value: '和が偶数', inline: true },
+            { name: '🔴 半', value: '和が奇数', inline: true },
+            {
+              name: 'コマがそろわないと開かない',
+              value: '片方に誰も張っていなければ不成立。張ったぶんは全額返ります（本物と同じ）',
+            },
+            { name: '壺を開ける', value: '盆を開いた人が開けます。3分たてば自動で開きます' },
+          ],
+        }),
+        notice,
+      ),
+    ],
+    components: amountRows(['ch', 'go'], balance, {
+      maxBet: settings.max_bet,
+      customId: id('ch', 'custom'),
+      extra: [backButton('games')],
+    }),
+  });
+}
+
+function chCustom(ix) {
+  return openModal(amountModal(id('ch', 'amount'), '丁半博打の一口', '一口の額'));
+}
+
+async function chAmount(ix, _args, ctx) {
+  const amount = readInt(ix, 'amount', { min: 0 });
+  if (isError(amount)) return chOpen(ix, [], ctx, amount.error);
+  return chGo(ix, [String(amount)], ctx);
+}
+
+async function chGo(ix, [rawBet], ctx) {
+  const bet = Number(rawBet);
+  const settings = await ctx.settings(ix.guildId);
+  const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
+
+  const check = checkBet(bet, balance, settings);
+  if (!check.ok) return chOpen(ix, [], ctx, check.message);
+
+  const opened = await openChohan(ctx, {
+    guildId: ix.guildId,
+    channelId: ix.channelId,
+    hostId: ix.userId,
+    bet,
+    settings,
+  });
+  if (!opened.ok) return chOpen(ix, [], ctx, 'このチャンネルに盆を開けませんでした。');
+
+  return show(ix, {
+    embeds: [
+      embed({
+        color: 0x8e44ad,
+        title: '🏺 盆を開きました',
+        description:
+          `一口 ${coins(bet, settings)} の盆をチャンネルに置きました。\n` +
+          '丁と半の両方にコマが入ったら「🏺 壺を開ける」を押してください。',
+      }),
+    ],
+    components: [row(button(id('ch', 'open'), 'もう一度開く', { emoji: '🏺' }), homeButton())],
+  });
+}
+
+export const ch = { open: chOpen, custom: chCustom, amount: chAmount, go: chGo };
 
 export const games = { open };
 
