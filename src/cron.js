@@ -17,6 +17,8 @@ import { timeOut as pigTimeOut } from './menu/pig-table.js';
 import { expiredTables as expiredPigTables } from './lib/pig-table.js';
 import { timeOut as chohanTimeOut } from './menu/chohan-table.js';
 import { expiredTables as expiredChohanTables } from './lib/chohan-table.js';
+import { timeOut as yachtTimeOut } from './menu/yacht-table.js';
+import { expiredTables as expiredYachtTables } from './lib/yacht-table.js';
 import { boardPayload, cancelledPayload as pollCancelledPayload } from './menu/poll-board.js';
 import {
   abandonedPolls,
@@ -50,6 +52,7 @@ export const STEPS = [
   sweepPoker,
   sweepPig,
   sweepChohan,
+  sweepYacht,
   sweepPolls,
   postDueAnnouncements,
   drawLotteries,
@@ -148,6 +151,11 @@ export async function sweepPig(ctx) {
  */
 export async function sweepChohan(ctx) {
   await sweepTables(ctx, expiredChohanTables, chohanTimeOut, '丁半');
+}
+
+/** 時間切れのヨットの卓を片付ける。預かったぶんは全員に返す。 */
+export async function sweepYacht(ctx) {
+  await sweepTables(ctx, expiredYachtTables, yachtTimeOut, 'ヨット');
 }
 
 /** 時間切れの卓を拾って片付け、掲示を書き換える共通処理。 */

@@ -45,6 +45,7 @@ export const screens = {
   pk: gated('pk', games.pk),
   pig: gated('pig', games.pig),
   ch: gated('ch', games.ch),
+  yt: gated('yt', games.yt),
   rr: gated('rr', games.rr),
   cs: gated('cs', games.cs),
   mine: gated('mine', games.mine),

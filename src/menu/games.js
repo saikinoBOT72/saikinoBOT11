@@ -8,6 +8,7 @@ import { openTable as openBlackjack } from './blackjack-table.js';
 import { openTable as openPoker } from './poker-table.js';
 import { openTable as openPig } from './pig-table.js';
 import { openBoard as openChohan } from './chohan-table.js';
+import { openTable as openYacht, startSolo as startYachtSolo } from './yacht-table.js';
 import {
   MAX_DRAWS as PK_MAX_DRAWS,
   MAX_PLAYERS as PK_MAX_PLAYERS,
@@ -19,6 +20,12 @@ import {
   MIN_PLAYERS as PG_MIN_PLAYERS,
 } from '../lib/pig-table.js';
 import { GOAL as PIG_GOAL } from '../lib/pig.js';
+import {
+  MAX_PLAYERS as YT_MAX_PLAYERS,
+  MIN_PLAYERS as YT_MIN_PLAYERS,
+  getRecord as getYachtRecord,
+} from '../lib/yacht-table.js';
+import { MAX_ROLLS as YT_ROLLS } from '../lib/yacht.js';
 import { enabledGames, GAME_BY_KEY, isGameEnabled } from '../lib/game-catalog.js';
 import { startChallenge as startChinchiro } from './chinchiro-match.js';
 import { escrowFor } from '../lib/chinchiro.js';
@@ -398,6 +405,109 @@ async function chGo(ix, [rawBet], ctx) {
 }
 
 export const ch = { open: chOpen, custom: chCustom, amount: chAmount, go: chGo };
+
+/* ------------------------------------------------------------------ ヨット */
+
+async function ytOpen(ix, _args, ctx, notice = null) {
+  const settings = await ctx.settings(ix.guildId);
+  const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
+  const record = await getYachtRecord(ctx.db, ix.guildId, ix.userId);
+
+  return show(ix, {
+    embeds: [
+      withNotice(
+        embed({
+          color: 0x16a085,
+          title: '🎲 ヨット',
+          description:
+            `所持金 ${coins(balance, settings)}` +
+            (record.plays > 0 ? `　／　自己ベスト **${record.best}点**（${record.plays}回）` : '') +
+            '\n\n' +
+            `サイコロ5個を **${YT_ROLLS}回まで** 振り直して役を作り、**13個の欄**を1つずつ埋めます。\n` +
+            '良い目が出なければ、どこかの欄を0点で捨てるしかありません。**その取捨選択が勝負。**\n\n' +
+            `卓は **${YT_MIN_PLAYERS}〜${YT_MAX_PLAYERS}人**。全員が同時に進めるので順番待ちはありません。\n` +
+            'まず参加費を選んでください。追加のお金はかかりません。',
+          fields: [
+            { name: '上段（1の目〜6の目）', value: 'その目の合計。**63点以上でボーナス +35**' },
+            { name: '下段', value: 'スリーカード／フォーカード／フルハウス25／小ストレート30／大ストレート40／**ヨット50**／チャンス' },
+            { name: 'ひとりで練習', value: '賭けずに1枚書けます。自己ベストだけ記録されます' },
+          ],
+        }),
+        notice,
+      ),
+    ],
+    components: [
+      ...amountRows(['yt', 'go'], balance, {
+        maxBet: settings.max_bet,
+        customId: id('yt', 'custom'),
+      }),
+      row(
+        button(id('yt', 'solo'), 'ひとりで練習（賭けなし）', { emoji: '🎲', style: ButtonStyle.SECONDARY }),
+        backButton('games'),
+      ),
+    ],
+  });
+}
+
+function ytCustom(ix) {
+  return openModal(amountModal(id('yt', 'amount'), 'ヨットの参加費', '参加費'));
+}
+
+async function ytAmount(ix, _args, ctx) {
+  const amount = readInt(ix, 'amount', { min: 0 });
+  if (isError(amount)) return ytOpen(ix, [], ctx, amount.error);
+  return ytGo(ix, [String(amount)], ctx);
+}
+
+async function ytGo(ix, [rawBet], ctx) {
+  const bet = Number(rawBet);
+  const settings = await ctx.settings(ix.guildId);
+  const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
+
+  const check = checkBet(bet, balance, settings);
+  if (!check.ok) return ytOpen(ix, [], ctx, check.message);
+
+  const opened = await openYacht(ctx, {
+    guildId: ix.guildId,
+    channelId: ix.channelId,
+    hostId: ix.userId,
+    bet,
+    settings,
+  });
+  if (!opened.ok) {
+    const messages = {
+      insufficient: `参加費 ${coins(bet, settings)} が払えません。`,
+      post: 'このチャンネルに卓を投稿できませんでした。',
+    };
+    return ytOpen(ix, [], ctx, messages[opened.reason] ?? '卓を立てられませんでした。');
+  }
+
+  return show(ix, {
+    embeds: [
+      embed({
+        color: 0x16a085,
+        title: '🎲 卓を立てました',
+        description:
+          `参加費 ${coins(bet, settings)} の卓をチャンネルに置きました。\n` +
+          `**${YT_MIN_PLAYERS}人**集まったら「▶️ 始める」で開始できます。`,
+      }),
+    ],
+    components: [row(button(id('yt', 'open'), 'もう一度立てる', { emoji: '🎲' }), homeButton())],
+  });
+}
+
+/** 賭けずに1枚書く。チャンネルには何も出さず、この画面だけで進む。 */
+async function ytSolo(ix, _args, ctx) {
+  const started = await startYachtSolo(ctx, {
+    guildId: ix.guildId,
+    channelId: ix.channelId,
+    userId: ix.userId,
+  });
+  if (!started.ok) return ytOpen(ix, [], ctx, '始められませんでした。');
+  return show(ix, started.payload);
+}
+
+export const yt = { open: ytOpen, custom: ytCustom, amount: ytAmount, go: ytGo, solo: ytSolo };
 
 export const games = { open };
 

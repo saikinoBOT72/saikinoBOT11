@@ -7,6 +7,9 @@ const pig = await import(src('lib/pig.js'));
 const pigLib = await import(src('lib/pig-table.js'));
 const pigBoard = await import(src('menu/pig-table.js'));
 const chohan = await import(src('lib/chohan.js'));
+const yacht = await import(src('lib/yacht.js'));
+const ytLib = await import(src('lib/yacht-table.js'));
+const ytBoard = await import(src('menu/yacht-table.js'));
 const chLib = await import(src('lib/chohan-table.js'));
 const chBoard = await import(src('menu/chohan-table.js'));
 const eco = await import(src('lib/economy.js'));
@@ -426,18 +429,332 @@ await test('時間切れでコマがそろっていなければ返金して流�
   assert.equal(await totalCoins(), startTotal, '張ったぶんが返る');
 });
 
+/* ================================================================== ヨット */
+
+section('[ヨット] 役の判定');
+
+/**
+ * サイコロ5個の全 7776 通りで、それぞれの役が「何通りで成立するか」を数える。
+ * 数え上げた値が手計算と合っていれば、判定はまず間違っていない。
+ *
+ * 例：ヨット（5個同じ）は 6通り、大ストレート（12345/23456）は 2×5! = 240通り、
+ *     フルハウス（3個＋2個ちょうど）は 6×5×C(5,3) = 300通り。
+ */
+const YACHT_EXACT_COUNTS = {
+  ones: 4651,
+  twos: 4651,
+  threes: 4651,
+  fours: 4651,
+  fives: 4651,
+  sixes: 4651,
+  three: 1656,
+  four: 156,
+  full: 300,
+  small: 1200,
+  large: 240,
+  yacht: 6,
+  chance: 7776,
+};
+
+function everyRoll(visit) {
+  const dice = [0, 0, 0, 0, 0];
+  const walk = (at) => {
+    if (at === 5) return visit(dice);
+    for (let face = 1; face <= 6; face++) {
+      dice[at] = face;
+      walk(at + 1);
+    }
+  };
+  walk(0);
+}
+
+await test('全7776通りで、役の成立数が手計算と一致する', () => {
+  const counts = Object.fromEntries(yacht.CATEGORIES.map((category) => [category.key, 0]));
+  let total = 0;
+  everyRoll((dice) => {
+    total += 1;
+    for (const category of yacht.CATEGORIES) {
+      if (yacht.scoreFor(category.key, dice) > 0) counts[category.key] += 1;
+    }
+  });
+  assert.equal(total, 6 ** 5);
+  assert.deepEqual(counts, YACHT_EXACT_COUNTS);
+});
+
+await test('大ストレートは必ず小ストレートでもある', () => {
+  everyRoll((dice) => {
+    if (yacht.scoreFor('large', dice) > 0) {
+      assert.ok(yacht.scoreFor('small', dice) > 0, `${dice.join('')} が小ストレートにならない`);
+    }
+  });
+});
+
+await test('ヨットはフォーカードでもスリーカードでもある', () => {
+  everyRoll((dice) => {
+    if (yacht.scoreFor('yacht', dice) > 0) {
+      assert.ok(yacht.scoreFor('four', dice) > 0);
+      assert.ok(yacht.scoreFor('three', dice) > 0);
+    }
+  });
+});
+
+await test('5個そろいはフルハウスにしない', () => {
+  assert.equal(yacht.scoreFor('full', [4, 4, 4, 4, 4]), 0, '3個＋2個ちょうどではない');
+  assert.equal(yacht.scoreFor('full', [4, 4, 4, 2, 2]), 25);
+  assert.equal(yacht.scoreFor('full', [4, 4, 4, 2, 3]), 0);
+});
+
+await test('チャンスと上段はいつでも出目どおりに数える', () => {
+  everyRoll((dice) => {
+    const sum = dice.reduce((total, die) => total + die, 0);
+    assert.equal(yacht.scoreFor('chance', dice), sum);
+    let upperSum = 0;
+    for (let face = 1; face <= 6; face++) {
+      upperSum += yacht.scoreFor(yacht.UPPER_KEYS[face - 1], dice);
+    }
+    assert.equal(upperSum, sum, '上段6つを足すと出目の合計になる');
+  });
+});
+
+await test('スリーカードとフォーカードは5個ぜんぶの合計', () => {
+  assert.equal(yacht.scoreFor('three', [5, 5, 5, 1, 2]), 18);
+  assert.equal(yacht.scoreFor('four', [5, 5, 5, 5, 2]), 22);
+  assert.equal(yacht.scoreFor('four', [5, 5, 5, 1, 2]), 0, '3個では足りない');
+});
+
+await test('上段が63点以上でボーナス35がつく', () => {
+  const card = yacht.emptyCard();
+  for (const key of yacht.UPPER_KEYS) card[key] = 10;
+  assert.equal(yacht.tally(card).upper, 60);
+  assert.equal(yacht.tally(card).bonus, 0, 'あと3点');
+  assert.equal(yacht.tally(card).toBonus, 3);
+
+  card.sixes = 13;
+  assert.equal(yacht.tally(card).upper, 63);
+  assert.equal(yacht.tally(card).bonus, 35);
+  assert.equal(yacht.tally(card).total, 98);
+});
+
+await test('13欄ぜんぶ埋まったら書き終わり', () => {
+  const card = yacht.emptyCard();
+  assert.equal(yacht.openCategories(card).length, 13);
+  assert.equal(yacht.isComplete(card), false);
+  for (const category of yacht.CATEGORIES) card[category.key] = 0;
+  assert.equal(yacht.isComplete(card), true);
+});
+
+await test('残すと決めたサイコロは振り直しても変わらない', () => {
+  const dice = [1, 2, 3, 4, 5];
+  for (let i = 0; i < 50; i++) {
+    const next = yacht.reroll(dice, [true, true, false, false, false]);
+    assert.deepEqual(next.slice(0, 2), [1, 2], '残した2個は動かない');
+    assert.equal(next.length, 5);
+  }
+});
+
+section('[ヨット] 卓の進行');
+
+async function yachtTable(bet = 200, players = ['u1', 'u2']) {
+  for (const userId of players) await eco.setBalance(db, GUILD, userId, 2000, 'test');
+  await press(`m:yt:go:${bet}`, { userId: players[0] });
+  const table = await db.get('SELECT * FROM yacht_tables ORDER BY created_at DESC, rowid DESC');
+  for (const userId of players.slice(1)) await pressOn(ytBoard, `yt:join:${table.id}`, { userId });
+  await pressOn(ytBoard, `yt:start:${table.id}`, { userId: players[0] });
+  return db.get('SELECT * FROM yacht_tables WHERE id = ?1', table.id);
+}
+
+const ytState = async (id) => ytLib.stateOf(await db.get('SELECT * FROM yacht_tables WHERE id = ?1', id));
+const ytPlayer = async (id, userId) => ytLib.playerOf(await ytState(id), userId);
+
+/** 出目を指定して振らせる。 */
+const rollAs = (table, userId, dice) =>
+  ytLib.mutate(db, table.id, ({ state }) => ({ state: ytLib.rollFor(state, userId, dice) }), {
+    allow: ['playing'],
+  });
+
+/** 1欄ぶん、指定の出目で書き込む。 */
+async function writeAs(table, userId, dice, key) {
+  await rollAs(table, userId, dice);
+  return pressOn(ytBoard, `yt:write:${table.id}`, { userId, values: [key] });
+}
+
+/** 13欄ぜんぶを埋める。どの欄も同じ出目で書くので点はそろう。 */
+async function fillCard(table, userId, dice = [1, 2, 3, 4, 5]) {
+  for (const category of yacht.CATEGORIES) await writeAs(table, userId, dice, category.key);
+}
+
+await test('卓を立てると参加費が引かれ、チャンネルに出る', async () => {
+  await eco.setBalance(db, GUILD, 'u1', 1000, 'test');
+  const before = ctx.sent.length;
+  await press('m:yt:go:200', { userId: 'u1' });
+  assert.equal(await eco.getBalance(db, GUILD, 'u1'), 800);
+  assert.equal(ctx.sent.length, before + 1);
+  assert.match(JSON.stringify(ctx.sent.at(-1).payload), /ヨット/);
+});
+
+await test('始めると全員が空のカードを持っている', async () => {
+  const table = await yachtTable(200);
+  const state = await ytState(table.id);
+  assert.equal(state.players.length, 2);
+  for (const player of state.players) {
+    assert.equal(yacht.openCategories(player.card).length, 13);
+    assert.equal(player.rolls, 0);
+    assert.deepEqual(player.dice, []);
+  }
+});
+
+await test('振る前には書けない', async () => {
+  const table = await yachtTable(200);
+  const denied = await pressOn(ytBoard, `yt:write:${table.id}`, { userId: 'u1', values: ['chance'] });
+  assert.match(screenText(denied), /まず振って/);
+  assert.equal((await ytPlayer(table.id, 'u1')).card.chance, null);
+});
+
+await test('振れるのは3回まで', async () => {
+  const table = await yachtTable(200);
+  for (let i = 0; i < yacht.MAX_ROLLS; i++) await pressOn(ytBoard, `yt:roll:${table.id}`, { userId: 'u1' });
+  assert.equal((await ytPlayer(table.id, 'u1')).rolls, yacht.MAX_ROLLS);
+
+  const denied = await pressOn(ytBoard, `yt:roll:${table.id}`, { userId: 'u1' });
+  assert.match(screenText(denied), /3回まで/);
+  assert.equal((await ytPlayer(table.id, 'u1')).rolls, yacht.MAX_ROLLS, '増えない');
+});
+
+await test('残す／捨てるを切り替えられる', async () => {
+  const table = await yachtTable(200);
+  await pressOn(ytBoard, `yt:roll:${table.id}`, { userId: 'u1' });
+  await pressOn(ytBoard, `yt:keep:${table.id}:0`, { userId: 'u1' });
+  await pressOn(ytBoard, `yt:keep:${table.id}:3`, { userId: 'u1' });
+  assert.deepEqual((await ytPlayer(table.id, 'u1')).keep, [true, false, false, true, false]);
+
+  await pressOn(ytBoard, `yt:keep:${table.id}:0`, { userId: 'u1' });
+  assert.deepEqual((await ytPlayer(table.id, 'u1')).keep, [false, false, false, true, false], '押すと戻る');
+});
+
+await test('書き込むと点が入り、次の欄へ進む', async () => {
+  const table = await yachtTable(200);
+  await writeAs(table, 'u1', [5, 5, 5, 2, 2], 'full');
+
+  const player = await ytPlayer(table.id, 'u1');
+  assert.equal(player.card.full, 25, 'フルハウス25点');
+  assert.equal(player.rolls, 0, '振り直しの回数が戻る');
+  assert.deepEqual(player.dice, [], '出目もリセット');
+  assert.equal(yacht.openCategories(player.card).length, 12);
+});
+
+await test('役ができていない欄に書くと0点で潰れる', async () => {
+  const table = await yachtTable(200);
+  await writeAs(table, 'u1', [1, 2, 3, 4, 6], 'yacht');
+  assert.equal((await ytPlayer(table.id, 'u1')).card.yacht, 0, '捨てた');
+});
+
+await test('同じ欄には二度書けない', async () => {
+  const table = await yachtTable(200);
+  await writeAs(table, 'u1', [6, 6, 6, 6, 6], 'yacht');
+  await rollAs(table, 'u1', [1, 1, 1, 1, 1]);
+  const denied = await pressOn(ytBoard, `yt:write:${table.id}`, { userId: 'u1', values: ['yacht'] });
+  assert.match(screenText(denied), /もう書いて/);
+  assert.equal((await ytPlayer(table.id, 'u1')).card.yacht, 50, '上書きされない');
+});
+
+await test('座っていない人は振れも書けもしない', async () => {
+  const table = await yachtTable(200);
+  const denied = await pressOn(ytBoard, `yt:roll:${table.id}`, { userId: 'u8' });
+  assert.match(screenText(denied), /振れませんでした/);
+  const denied2 = await pressOn(ytBoard, `yt:card:${table.id}`, { userId: 'u8' });
+  assert.match(screenText(denied2), /座っていません/);
+});
+
+await test('公開の掲示には出目もカードの中身も出さない', async () => {
+  ctx.sent.length = 0;
+  ctx.edited.length = 0;
+  const table = await yachtTable(200);
+  await writeAs(table, 'u1', [6, 6, 6, 6, 6], 'yacht');
+  await ctx.settle();
+
+  const posted = JSON.stringify(ctx.sent.map((e) => e.payload)) + JSON.stringify(ctx.edited.map((e) => e.payload));
+  assert.doesNotMatch(posted, /ヨット 50|フルハウス/, '欄ごとの中身は出さない');
+  assert.match(posted, /1\/13|0\/13/, '何欄書いたかは出す');
+});
+
+await test('二人とも書き終えると高いほうが総取りする', async () => {
+  for (const userId of ['u1', 'u2']) await eco.setBalance(db, GUILD, userId, 2000, 'test');
+  const startTotal = await totalCoins(['u1', 'u2']);
+  const table = await yachtTable(200, ['u1', 'u2']);
+
+  await fillCard(table, 'u1', [6, 6, 6, 6, 6]); // 強い出目
+  await fillCard(table, 'u2', [1, 1, 2, 3, 4]); // 弱い出目
+  await ctx.settle();
+
+  const row = await db.get('SELECT * FROM yacht_tables WHERE id = ?1', table.id);
+  assert.equal(row.status, 'done');
+  assert.equal(await totalCoins(['u1', 'u2']), startTotal, 'コインは湧かない');
+  assert.ok(await eco.getBalance(db, GUILD, 'u1') > 2000, '勝ったほうが増えている');
+});
+
+await test('自己ベストが記録される', async () => {
+  await eco.setBalance(db, GUILD, 'u3', 5000, 'test');
+  const before = await ytLib.getRecord(db, GUILD, 'u3');
+
+  const table = await yachtTable(200, ['u3', 'u4']);
+  await fillCard(table, 'u3', [5, 5, 5, 5, 5]);
+  const after = await ytLib.getRecord(db, GUILD, 'u3');
+
+  assert.equal(after.plays, before.plays + 1, '回数が増える');
+  assert.ok(after.best > 0, 'ベストが入る');
+});
+
+await test('時間切れは流れて、参加費が全員に返る', async () => {
+  for (const userId of ['u1', 'u2']) await eco.setBalance(db, GUILD, userId, 2000, 'test');
+  const startTotal = await totalCoins(['u1', 'u2']);
+  const table = await yachtTable(200, ['u1', 'u2']);
+  assert.equal(await totalCoins(['u1', 'u2']), startTotal - 400);
+
+  await db.run('UPDATE yacht_tables SET expires_at = 1 WHERE id = ?1', table.id);
+  await cron.sweepYacht(ctx);
+  assert.equal(await totalCoins(['u1', 'u2']), startTotal, '全員に返る');
+});
+
+section('[ヨット] ひとり練習');
+
+await test('賭けずに始められて、チャンネルには何も出ない', async () => {
+  await eco.setBalance(db, GUILD, 'u1', 1000, 'test');
+  const before = ctx.sent.length;
+  const screen = await press('m:yt:solo', { userId: 'u1' });
+
+  assert.equal(await eco.getBalance(db, GUILD, 'u1'), 1000, 'お金は動かない');
+  assert.equal(ctx.sent.length, before, 'チャンネルには出さない');
+  assert.ok(customIds(screen).some((id) => id.startsWith('yt:roll:')), 'いきなり振れる');
+});
+
+await test('ひとりで13欄書き終えると結果が出て、自己ベストが伸びる', async () => {
+  await eco.setBalance(db, GUILD, 'u5', 1000, 'test');
+  await press('m:yt:solo', { userId: 'u5' });
+  const table = await db.get('SELECT * FROM yacht_tables ORDER BY created_at DESC, rowid DESC');
+  assert.equal(table.bet, 0);
+
+  await fillCard(table, 'u5', [4, 4, 4, 4, 4]);
+  await ctx.settle();
+
+  assert.equal((await db.get('SELECT * FROM yacht_tables WHERE id = ?1', table.id)).status, 'done');
+  assert.equal(await eco.getBalance(db, GUILD, 'u5'), 1000, '賭けていないので増減なし');
+  const record = await ytLib.getRecord(db, GUILD, 'u5');
+  assert.ok(record.best > 0, '自己ベストが入る');
+});
+
 /* ================================================================== 入口 */
 
 section('[入口]');
 
-await test('あそぶメニューに2つとも出る', async () => {
+await test('あそぶメニューに3つとも出る', async () => {
   const ids = customIds(await press('m:games:open'));
   assert.ok(ids.includes('m:pig:open'), 'ピッグ');
   assert.ok(ids.includes('m:ch:open'), '丁半博打');
+  assert.ok(ids.includes('m:yt:open'), 'ヨット');
 });
 
 await test('管理画面でオフにするとメンバーは入れない', async () => {
-  for (const key of ['pig', 'ch']) {
+  for (const key of ['pig', 'ch', 'yt']) {
     await press(`m:admin:gmtoggle:${key}`, { admin: true });
     const ids = customIds(await press('m:games:open', { admin: false }));
     assert.ok(!ids.includes(`m:${key}:open`), `${key} のボタンが消える`);
