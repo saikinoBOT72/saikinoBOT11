@@ -16,10 +16,9 @@
  * 降りた人の参加費は場に残り、勝った人が全部持っていく。
  *
  * 【レイズ】
- * 誰か1人がレイズすると、その場で残り全員からも上乗せぶんを預かる（escrow）。
- * 遊んでいる最中に別のゲームでコインを使われて払えなくなるのを防ぐため。
- * 預かっただけなので、そのあと降りた人には上乗せぶんを返す。
- * 再レイズは無し。1回上がったら、あとは「ついていく」か「降りる」だけ。
+ * 「提案する周」と「承認する周」を繰り返す形にしてある。何度でも上げられる。
+ * 払うのは自分が押した瞬間の自分のぶんだけなので、
+ * 他人から先に集めて後で返す、という危ない後始末が要らない。
  */
 import { deposit, withdraw } from './economy.js';
 import { draw, newDeck, sortHand } from './cards.js';
@@ -81,10 +80,8 @@ export async function joinTable(db, table, userId) {
               draws: 0,
               exchanged: false,
               folded: false,
-              called: false,
-              // この勝負で場に足した額と、レイズのぶんを預かっているだけの額
+              // この勝負で場に足した額
               paid: 0,
-              escrow: 0,
               staked: table.bet,
             },
           ],
@@ -117,9 +114,7 @@ export function deal(state) {
     draws: 0,
     exchanged: false,
     folded: false,
-    called: false,
     paid: 0,
-    escrow: 0,
   }));
   return { ...state, deck, players, phase: 'draw' };
 }
@@ -169,104 +164,107 @@ export function everyoneExchanged(state) {
 /* ------------------------------------------------------------------ 勝負の段階 */
 
 /**
- * 勝負の段階に入る。level は「この段階で1人が場に足す額」。
- * 最初は参加費と同額で、レイズが入ると上がる。
+ * 勝負の段階は「提案の周」と「承認の周」を行ったり来たりする。
+ *
+ *   propose … 降りる／乗る／レイズを提案。全員が動いたら閉じる
+ *              → 誰も提案しなければ役比べへ
+ *              → 一番高い提案が通って accept へ
+ *   accept  … 上がったぶんを払う（承認）か、降りる
+ *              → 2人以上残っていれば propose に戻る（何度でもレイズできる）
+ *
+ * 【お金の動き】
+ * 払うのは「自分のぶんを、自分が押した瞬間に」だけ。
+ * ほかの人から先に集めることはしないので、集めたあとで中止して返す、
+ * といった後始末がいらない。承認までに払えなくなっていたら降りた扱いにする。
+ */
+export const PROPOSE = 'propose';
+export const ACCEPT = 'accept';
+
+/** 周のはじめに戻す持ちもの。 */
+const freshRound = (player) => ({ ...player, acted: false, proposal: 0 });
+
+/**
+ * 勝負の段階に入る。level は「この段階で1人が場に出しておく額」。
+ * 最初は参加費と同額で、レイズが通るたび上がる。
  */
 export function toBetPhase(state, bet) {
-  return { ...state, phase: 'bet', level: bet };
+  return { ...state, phase: 'bet', step: PROPOSE, level: bet, players: state.players.map(freshRound) };
 }
 
-/** この人があと払う額。レイズで預かってある額とちょうど同じになる。 */
+/** この人があと払わないといけない額。 */
 export function owedBy(state, player) {
   return Math.max(0, (state.level ?? 0) - (player.paid ?? 0));
 }
 
-/** 全員が勝負か降りるかを決めたか。レイズが入ったら決め直しになる。 */
-export function everyoneDecided(state) {
-  return state.players.every((player) => player.folded || (player.called && owedBy(state, player) === 0));
-}
-
-
-/** 勝負に乗る。預かってある額をそのまま場に移す。引き落としは呼び出し側で済ませておく。 */
-export function commitCall(state, userId, amount) {
+/** 場に足す（乗る・承認する）。レイズを出すときは proposal も置く。引き落としは呼び出し側。 */
+export function actInRound(state, userId, { amount, proposal = 0 }) {
   return {
     ...state,
     players: state.players.map((player) =>
       player.userId === userId
         ? {
             ...player,
-            called: true,
+            acted: true,
+            proposal,
             paid: (player.paid ?? 0) + amount,
             staked: player.staked + amount,
-            escrow: 0,
           }
         : player,
     ),
   };
 }
 
-/** 降りる。預かっているだけの額は呼び出し側で返す。 */
+/** 降りる。すでに場に出したぶんは戻らない。 */
 export function foldPlayer(state, userId) {
   return {
     ...state,
     players: state.players.map((player) =>
-      player.userId === userId ? { ...player, folded: true, called: false, escrow: 0 } : player,
+      player.userId === userId ? { ...player, folded: true, acted: true, proposal: 0 } : player,
     ),
   };
 }
 
-/**
- * レイズを反映する。
- * レイズした人はその場で場に足し、ほかの残っている人は「預かっただけ」にする。
- * 引き落としは呼び出し側で全員ぶん済ませてから渡す（誰か払えなければレイズ自体を中止する）。
- * @param escrows {Record<string, number>} 自分以外の残っている人ぜんぶ。userId → 預かった額
- */
-export function applyRaise(state, userId, { raise, escrows }) {
-  const level = (state.level ?? 0) + raise;
-  return {
-    ...state,
-    level,
-    players: state.players.map((player) => {
-      if (player.folded) return player;
-      if (player.userId === userId) {
-        const owed = level - (player.paid ?? 0);
-        return { ...player, called: true, paid: level, staked: player.staked + owed, escrow: 0 };
-      }
-      return { ...player, called: false, escrow: escrows[player.userId] };
-    }),
-  };
+/** 一番高い提案。誰も出していなければ 0。 */
+export function bestProposal(state) {
+  return stayers(state).reduce((best, player) => Math.max(best, player.proposal ?? 0), 0);
+}
+
+/** 提案の周が終わったか。1人しか残っていなければ、待たずに閉じる。 */
+export function proposeRoundOver(state) {
+  return stayers(state).length <= 1 || state.players.every((player) => player.folded || player.acted);
+}
+
+/** 承認の周が終わったか。 */
+export function acceptRoundOver(state) {
+  return state.players.every((player) => player.folded || owedBy(state, player) === 0);
 }
 
 /**
- * 集めたあとで記録する前に、卓が動いていないかを確かめる。
- *
- * 【なぜ必要か】
- * レイズは「先に全員から集めてから記録する」という順番でやっている。
- * その隙に誰かが降りたりコールしたりすると、集めた額の行き先が無くなって
- * コインが消えてしまう。動いていたらレイズを中止して、集めたぶんを返す。
- * @param paidBefore {Record<string, number>} 集める前に見た「その人が場に出していた額」
+ * 提案の周を閉じる。
+ * 誰もレイズしていなければ役比べへ。出ていれば一番高いぶんだけ level を上げて承認の周へ。
  */
-export function betStateUnchanged(state, level, paidBefore) {
-  if ((state.level ?? 0) !== level) return false;
-  const now = stayers(state);
-  if (now.length !== Object.keys(paidBefore).length) return false;
-  return now.every((player) => (player.paid ?? 0) === paidBefore[player.userId]);
+export function closeProposeRound(state) {
+  const raise = bestProposal(state);
+  if (raise <= 0) return { ...state, phase: 'done' };
+  return { ...state, step: ACCEPT, level: (state.level ?? 0) + raise, lastRaise: raise };
+}
+
+/** 承認の周を閉じる。残りが2人以上なら、また提案の周から。 */
+export function closeAcceptRound(state) {
+  if (stayers(state).length <= 1) return { ...state, phase: 'done' };
+  return { ...state, step: PROPOSE, players: state.players.map(freshRound) };
 }
 
 /**
  * レイズできる上限。
- * 「卓に残っている全員が払える額」までに抑えるので、
- * 払えなくて弾かれる人が出ず、場を分ける（サイドポット）必要もない。
+ * 「卓に残っている全員が払える額」までに抑える。
+ * 提案してから承認されるまでのあいだに使われてしまうことはあるので、
+ * そのときは承認できずに降りた扱いになる（払えない人を待たない）。
  * @param balances {Record<string, number>} userId → 所持金
  */
 export function raiseCap(state, balances) {
   const caps = stayers(state).map((player) => (balances[player.userId] ?? 0) - owedBy(state, player));
   return Math.max(0, Math.min(...caps));
-}
-
-/** もうレイズできるか（再レイズは無し）。 */
-export function canRaise(state, bet) {
-  return (state.level ?? 0) <= bet;
 }
 
 /**
@@ -279,12 +277,6 @@ export function canRaise(state, bet) {
  * @returns {Promise<{kind: 'showdown'|'walkover'|'nobody', pot: number, winners: object[], hands: object[]}>}
  */
 export async function settleTable(db, table, state) {
-  // 預かっただけで場に出ていないぶんは、まず持ち主に返す
-  for (const player of state.players) {
-    if ((player.escrow ?? 0) > 0) {
-      await deposit(db, table.guild_id, player.userId, player.escrow, 'poker:refund', table.id);
-    }
-  }
   const pot = state.players.reduce((sum, player) => sum + player.staked, 0);
   const remaining = stayers(state);
 
@@ -316,11 +308,10 @@ export async function settleTable(db, table, state) {
   return { kind: 'showdown', pot, winners, hands };
 }
 
-/** 時間切れで流すときの返金。場に出したぶんも、預かっているだけのぶんも返す。 */
+/** 時間切れで流すときの返金。場に出したぶんを全員に返す。 */
 export async function refundTable(db, table, state) {
   for (const player of state.players) {
-    const amount = player.staked + (player.escrow ?? 0);
-    if (amount > 0) await deposit(db, table.guild_id, player.userId, amount, 'poker:refund', table.id);
+    if (player.staked > 0) await deposit(db, table.guild_id, player.userId, player.staked, 'poker:refund', table.id);
   }
 }
 
@@ -330,7 +321,7 @@ export async function takeCall(db, table, userId, amount) {
   return withdraw(db, table.guild_id, userId, amount, 'poker:call', table.id);
 }
 
-/** 預かっただけのぶんを返す（降りたとき、レイズが通らなかったとき）。 */
+/** 記録できなかったときに引き落としを取り消す。 */
 export async function giveBack(db, table, userId, amount) {
   if (amount > 0) await deposit(db, table.guild_id, userId, amount, 'poker:refund', table.id);
 }

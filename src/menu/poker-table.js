@@ -10,20 +10,21 @@
  * 【進み方】
  *   joining → 2〜4人が座る
  *   draw    → 各自2回まで交換（途中でやめてもよい）
- *   bet     → 勝負・レイズ・降りるの3択（レイズは1回だけ）
+ *   bet     → 「提案の周」と「承認の周」の繰り返し。何度でもレイズできる
  *   done    → 残った人で役比べ
  */
 import {
+  ACCEPT,
   MAX_DRAWS,
   MAX_PLAYERS,
   MIN_PLAYERS,
-  applyRaise,
-  betStateUnchanged,
-  canRaise,
-  commitCall,
+  PROPOSE,
+  acceptRoundOver,
+  actInRound,
+  closeAcceptRound,
+  closeProposeRound,
   createTable,
   deal,
-  everyoneDecided,
   everyoneExchanged,
   exchange,
   foldPlayer,
@@ -33,6 +34,7 @@ import {
   mutate,
   owedBy,
   playerOf,
+  proposeRoundOver,
   raiseCap,
   refundTable,
   seatOf,
@@ -254,9 +256,9 @@ function handPayload(table, state, userId, settings, em, notice = null) {
   }
 
   // 勝負の段階：手札を見ながら決める
-  if (state.phase === 'bet' && owedBy(state, player) > 0) {
+  if (state.phase === 'bet' && myTurn(state, player)) {
     const owed = owedBy(state, player);
-    const held = player.escrow ?? 0;
+    const accepting = state.step === ACCEPT;
     return {
       embeds: [
         withNoticeLine(
@@ -265,16 +267,20 @@ function handPayload(table, state, userId, settings, em, notice = null) {
             title: `🂠 あなたの手札　${hand.label}`,
             description:
               `${renderHand(em, player.cards)}\n\n` +
-              (held > 0
-                ? `誰かがレイズしました。**${coins(held, settings)}** をすでに預かっています。\n` +
-                  'ついていくならそのまま場へ、降りれば預かったぶんは返します。'
-                : `乗るなら追加で ${coins(owed, settings)}。\n` +
-                  `降りれば、いままで出した ${coins(player.staked, settings)} だけの負けで済みます。`),
+              (accepting
+                ? `**${coins(state.lastRaise ?? owed, settings)} のレイズ**が出ました。\n` +
+                  `承認するなら追加で ${coins(owed, settings)}。\n` +
+                  `降りれば、いままで出した ${coins(player.staked, settings)} だけの負けで済みます。`
+                : owed > 0
+                  ? `乗るなら ${coins(owed, settings)}。ここでレイズを提案することもできます。\n` +
+                    `降りれば、いままで出した ${coins(player.staked, settings)} だけの負けで済みます。`
+                  : 'レイズを提案するか、このまま進めるかを選んでください。\n' +
+                    '誰も提案しなければ、ここで役比べになります。'),
           }),
           notice,
         ),
       ],
-      components: betRows(table, state, { owed, held }),
+      components: betRows(table, state, { owed, mine: true }),
     };
   }
 
@@ -291,6 +297,12 @@ function handPayload(table, state, userId, settings, em, notice = null) {
     ],
     components: [],
   };
+}
+
+/** いま自分が押すべき場面か。 */
+function myTurn(state, player) {
+  if (player.folded) return false;
+  return state.step === ACCEPT ? owedBy(state, player) > 0 : !player.acted;
 }
 
 function withNoticeLine(embedObject, notice) {
@@ -391,56 +403,77 @@ async function handleDecide(ix, ctx, table, action, settings, em) {
   if (state.phase !== 'bet') return reply({ content: 'いまは勝負を決める場面ではありません。' });
   if (player.folded) return reply({ content: 'もう降りています。' });
 
-  const owed = owedBy(state, player);
-  const held = player.escrow ?? 0;
-
   if (action === 'fold') {
     const folded = await mutate(
       ctx.db,
       table.id,
       ({ state: current }) => {
         const now = playerOf(current, ix.userId);
-        if (!now) return { reject: 'seat' };
-        if (current.phase !== 'bet' || now.folded || owedBy(current, now) === 0) return { reject: 'late' };
+        if (!now || now.folded) return { reject: 'late' };
+        if (current.phase !== 'bet') return { reject: 'late' };
         return { state: foldPlayer(current, ix.userId) };
       },
       { allow: ['playing'] },
     );
     if (!folded.ok) return reply({ content: 'もう決まっています。' });
-    // レイズで預かっていたぶんは返す。すでに場に出したぶんは戻らない
-    await giveBack(ctx.db, table, ix.userId, held);
-    return afterBetStep(ix, ctx, table, settings, em, held > 0 ? `降りました。預かっていた ${held} は返しました。` : '降りました。');
+    return afterBetStep(ix, ctx, table, settings, em, '降りました。出したぶんは場に残ります。');
   }
 
-  if (owed === 0) return reply({ content: 'もう勝負しています。' });
+  const owed = owedBy(state, player);
+  if (state.step === PROPOSE && player.acted) return reply({ content: 'この周はもう動いています。' });
+  if (state.step === ACCEPT && owed === 0) return reply({ content: 'もう承認しています。' });
 
-  // 預かってあるぶんで足りるなら引き落とし直さない
-  const toTake = Math.max(0, owed - held);
-  if (toTake > 0 && !(await takeCall(ctx.db, table, ix.userId, toTake))) {
-    return reply({ content: `あと ${coins(toTake, settings)} が足りません。降りるしかありません。` });
+  // 払うのは自分のぶんだけ。払えなければ降りた扱い（提案から承認までに使われた場合）
+  if (owed > 0 && !(await takeCall(ctx.db, table, ix.userId, owed))) {
+    return forceFold(ix, ctx, table, settings, em, owed);
   }
 
-  const called = await mutate(
+  const acted = await mutate(
     ctx.db,
     table.id,
     ({ state: current }) => {
       const now = playerOf(current, ix.userId);
-      if (!now) return { reject: 'seat' };
-      if (current.phase !== 'bet' || now.folded) return { reject: 'late' };
+      if (!now || now.folded || current.phase !== 'bet') return { reject: 'late' };
+      if (current.step === PROPOSE && now.acted) return { reject: 'late' };
       if (owedBy(current, now) !== owed) return { reject: 'moved' };
-      return { state: commitCall(current, ix.userId, owed) };
+      return { state: actInRound(current, ix.userId, { amount: owed }) };
     },
     { allow: ['playing'] },
   );
-  if (!called.ok) {
-    if (toTake > 0) await giveBack(ctx.db, table, ix.userId, toTake);
-    return reply({ content: called.reason === 'moved' ? '金額が変わりました。開き直してください。' : 'もう決まっています。' });
+  if (!acted.ok) {
+    if (owed > 0) await giveBack(ctx.db, table, ix.userId, owed);
+    return reply({
+      content: acted.reason === 'moved' ? '金額が変わりました。開き直してください。' : 'もう決まっています。',
+    });
   }
 
-  return afterBetStep(ix, ctx, table, settings, em, `勝負しました（+${owed}）。`);
+  const word = state.step === ACCEPT ? '承認しました' : owed > 0 ? '勝負しました' : 'このままにしました';
+  return afterBetStep(ix, ctx, table, settings, em, owed > 0 ? `${word}（+${owed}）。` : `${word}。`);
 }
 
-/** 勝負の段階で1手動いたあと。全員そろっていれば決着させ、画面を描き直す。 */
+/** 払えなくなっていた人を降ろす。提案から承認までのあいだに使われた場合に起きる。 */
+async function forceFold(ix, ctx, table, settings, em, owed) {
+  await mutate(
+    ctx.db,
+    table.id,
+    ({ state: current }) => {
+      const now = playerOf(current, ix.userId);
+      if (!now || now.folded || current.phase !== 'bet') return { reject: 'late' };
+      return { state: foldPlayer(current, ix.userId) };
+    },
+    { allow: ['playing'] },
+  );
+  return afterBetStep(
+    ix,
+    ctx,
+    table,
+    settings,
+    em,
+    `${coins(owed, settings)} が払えなくなっていたので降りました。出したぶんは場に残ります。`,
+  );
+}
+
+/** 勝負の段階で1手動いたあと。周が終わっていれば次へ進め、画面を描き直す。 */
 async function afterBetStep(ix, ctx, table, settings, em, content) {
   await advanceIfReady(ctx, table.id, settings, em);
   const fresh = await getTable(ctx.db, table.id);
@@ -448,22 +481,23 @@ async function afterBetStep(ix, ctx, table, settings, em, content) {
   return reply({ content });
 }
 
-/* ------------------------------------------------------------------ レイズ */
+/* ------------------------------------------------------------------ レイズの提案 */
 
 /** 「好きな額」の入力フォーム。 */
 async function handleRaiseForm(ix, ctx, table, settings) {
-  const state = stateOf(table);
-  const player = playerOf(state, ix.userId);
-  if (!player || player.folded) return reply({ content: 'この卓で勝負していません。' });
-  if (state.phase !== 'bet') return reply({ content: 'いまは勝負を決める場面ではありません。' });
-  if (!canRaise(state, table.bet)) return reply({ content: 'もう誰かがレイズしています。' });
+  const blocked = raiseBlocked(stateOf(table), ix.userId);
+  if (blocked) return reply({ content: blocked });
 
-  const cap = await capFor(ctx, table, state);
+  const cap = await capFor(ctx, table, stateOf(table));
   if (cap <= 0) return reply({ content: 'これ以上は上げられません。' });
 
   return modalResponse(
-    modal(`pk:raisedo:${table.id}`, 'レイズする額', [
-      textInput('amount', `いくら上げる？（1〜${cap}）`, { placeholder: `例: ${Math.max(1, Math.floor(cap / 2))}`, required: true, max: 12 }),
+    modal(`pk:raisedo:${table.id}`, 'レイズを提案する', [
+      textInput('amount', `いくら上げる？（1〜${cap}）`, {
+        placeholder: `例: ${Math.max(1, Math.floor(cap / 2))}`,
+        required: true,
+        max: 12,
+      }),
     ]),
   );
 }
@@ -479,9 +513,19 @@ async function handleRaise(ix, ctx, table, arg, settings, em) {
   return raiseBy(ix, ctx, table, wanted, settings, em);
 }
 
+/** レイズを出せない理由。出せるなら null。 */
+function raiseBlocked(state, userId) {
+  const player = playerOf(state, userId);
+  if (!player || player.folded) return 'この卓で勝負していません。';
+  if (state.phase !== 'bet') return 'いまは勝負を決める場面ではありません。';
+  if (state.step !== PROPOSE) return 'いまは、出ているレイズを承認するか降りるかの場面です。';
+  if (player.acted) return 'この周はもう動いています。次の周でまた提案できます。';
+  return null;
+}
+
 /**
- * 上限は「卓に残っている全員が払える額」。超えていたらそこまで下げる。
- * 払えなくて弾かれる人が出ないので、場を分ける必要がない。
+ * 上限は「卓に残っている全員が払える額」。
+ * ここを超えなければ、承認したい人が払えなくて詰まることがない。
  */
 async function capFor(ctx, table, state) {
   const balances = {};
@@ -491,62 +535,41 @@ async function capFor(ctx, table, state) {
   return raiseCap(state, balances);
 }
 
+/**
+ * レイズを提案する。
+ * 出す人は「まだ出していないぶん＋上乗せぶん」をその場で払う。
+ * ほかの人からは集めない（集めてから中止する、という後始末を作らないため）。
+ */
 async function raiseBy(ix, ctx, table, wanted, settings, em) {
   const state = stateOf(table);
-  const me = playerOf(state, ix.userId);
-  if (!me || me.folded) return reply({ content: 'この卓で勝負していません。' });
-  if (state.phase !== 'bet') return reply({ content: 'いまは勝負を決める場面ではありません。' });
-  if (!canRaise(state, table.bet)) return reply({ content: 'もう誰かがレイズしています。再レイズはできません。' });
+  const blocked = raiseBlocked(state, ix.userId);
+  if (blocked) return reply({ content: blocked });
 
   const cap = await capFor(ctx, table, state);
   if (cap <= 0) return reply({ content: '卓の誰かがこれ以上払えないので、上げられません。' });
+
   const raise = Math.min(wanted, cap);
+  const owed = owedBy(state, playerOf(state, ix.userId));
+  const total = owed + raise;
 
-  // レイズした人の払いと、残り全員から預かるぶんを先に集める。
-  // 集めてから記録するので、あとで「払えませんでした」が起きない
-  const level = (state.level ?? 0) + raise;
-  const takenFrom = [];
-  const escrows = {};
-  const paidBefore = {};
-  let failed = null;
-
-  for (const player of stayers(state)) {
-    paidBefore[player.userId] = player.paid ?? 0;
-    const amount = level - (player.paid ?? 0);
-    if (amount <= 0) continue;
-    if (!(await takeCall(ctx.db, table, player.userId, amount))) {
-      // 直前に別のゲームで使われた等。ここまで集めたぶんを返して中止する
-      failed = player.userId;
-      break;
-    }
-    takenFrom.push([player.userId, amount]);
-    if (player.userId !== ix.userId) escrows[player.userId] = amount;
+  if (!(await takeCall(ctx.db, table, ix.userId, total))) {
+    return reply({ content: `${coins(total, settings)} が払えません。` });
   }
 
-  const giveEverythingBack = async () => {
-    for (const [userId, amount] of takenFrom) await giveBack(ctx.db, table, userId, amount);
-  };
-
-  if (failed) {
-    await giveEverythingBack();
-    return reply({ content: 'この額は卓の誰かが払えませんでした。もう少し下げてみてください。' });
-  }
-
-  const raised = await mutate(
+  const proposed = await mutate(
     ctx.db,
     table.id,
     ({ state: current }) => {
       const now = playerOf(current, ix.userId);
-      if (!now || now.folded) return { reject: 'seat' };
-      if (current.phase !== 'bet' || !canRaise(current, table.bet)) return { reject: 'late' };
-      // 集めているあいだに誰かが降りた・コールしたら、集めたぶんの行き先が無くなる
-      if (!betStateUnchanged(current, state.level ?? 0, paidBefore)) return { reject: 'moved' };
-      return { state: applyRaise(current, ix.userId, { raise, escrows }) };
+      if (!now || now.folded || current.phase !== 'bet') return { reject: 'late' };
+      if (current.step !== PROPOSE || now.acted) return { reject: 'late' };
+      if (owedBy(current, now) !== owed) return { reject: 'moved' };
+      return { state: actInRound(current, ix.userId, { amount: total, proposal: raise }) };
     },
     { allow: ['playing'] },
   );
-  if (!raised.ok) {
-    await giveEverythingBack();
+  if (!proposed.ok) {
+    await giveBack(ctx.db, table, ix.userId, total);
     return reply({ content: 'ほかの人が先に動きました。開き直してください。' });
   }
 
@@ -557,7 +580,7 @@ async function raiseBy(ix, ctx, table, wanted, settings, em) {
     table,
     settings,
     em,
-    `${coins(raise, settings)} レイズしました${note}。ほかの人からも同額を預かっています。`,
+    `${coins(raise, settings)} のレイズを提案しました${note}。合計 ${coins(total, settings)} 出しています。`,
   );
 }
 
@@ -579,17 +602,29 @@ async function advanceIfReady(ctx, id, settings, em) {
   );
   if (toBet.ok) return;
 
-  const toDone = await mutate(
+  // 周が終わっていれば閉じる。閉じた結果 phase が done になったら役比べへ
+  const closed = await mutate(
     ctx.db,
     id,
     ({ state }) => {
-      if (state.phase !== 'bet' || !everyoneDecided(state)) return { reject: 'wait' };
-      return { state: { ...state, phase: 'done' }, status: 'done' };
+      if (state.phase !== 'bet') return { reject: 'wait' };
+      if (state.step === PROPOSE) {
+        if (!proposeRoundOver(state)) return { reject: 'wait' };
+        const next = closeProposeRound(state);
+        return next.phase === 'done' ? { state: next, status: 'done' } : { state: next };
+      }
+      if (!acceptRoundOver(state)) return { reject: 'wait' };
+      const next = closeAcceptRound(state);
+      return next.phase === 'done' ? { state: next, status: 'done' } : { state: next };
     },
     { allow: ['playing'] },
   );
-  if (!toDone.ok) return;
+  if (!closed.ok) return;
 
+  // まだ勝負が続くなら、次の周の掲示は呼び出し側が描き直す
+  if (closed.state.phase !== 'done') return;
+
+  const toDone = closed;
   const result = await settleTable(ctx.db, toDone.table, toDone.state);
   ctx.waitUntil(
     (async () => {
@@ -626,7 +661,7 @@ function lobbyPayload(table, state, settings) {
         description:
           `<@${table.host_id}> が卓を立てました。**${MIN_PLAYERS}〜${MAX_PLAYERS}人**で遊べます。\n\n` +
           `5枚配って、いらない札を**${MAX_DRAWS}回まで**引き直し。\n` +
-          'そのあと「勝負」「レイズ」「降りる」を決めます。\n\n' +
+          'そのあと「乗る」「レイズを提案」「降りる」。誰も提案しなくなったら役比べです。\n\n' +
           `**席（${state.players.length}/${MAX_PLAYERS}）**\n${seats}`,
         footer: { text: '2分以内に始まらなければ流れます' },
       }),
@@ -669,62 +704,75 @@ function drawPayload(table, state, settings) {
 
 /**
  * 勝負の段階のボタン。
- * まだ誰もレイズしていなければ、レイズの3つ（半額・同額・好きな額）も出す。
+ *   承認の周 … 承認する／降りる
+ *   提案の周 … 乗る（または このまま）／降りる／レイズ3つ
+ * 掲示のボタンは人によって払う額が違うので、数字を出さない（mine のときだけ出す）。
  */
-function betRows(table, state, { owed = null, held = 0 } = {}) {
-  const rows = [
+function betRows(table, state, { owed = null, mine = false } = {}) {
+  if (state.step === ACCEPT) {
+    return [
+      row(
+        button(`pk:call:${table.id}`, mine && owed ? `承認する（+${owed}）` : '承認する', {
+          emoji: '🤝',
+          style: ButtonStyle.SUCCESS,
+        }),
+        button(`pk:fold:${table.id}`, '降りる', { emoji: '🏳️', style: ButtonStyle.SECONDARY }),
+      ),
+    ];
+  }
+
+  // 出すものが無い周は「このまま」。降りても得がないので出さない
+  const settled = mine && owed === 0;
+  const first = [
+    button(`pk:call:${table.id}`, settled ? 'このまま' : mine ? `乗る（+${owed}）` : '乗る', {
+      emoji: settled ? '✅' : '💪',
+      style: settled ? ButtonStyle.PRIMARY : ButtonStyle.SUCCESS,
+    }),
+  ];
+  if (!settled) first.push(button(`pk:fold:${table.id}`, '降りる', { emoji: '🏳️', style: ButtonStyle.SECONDARY }));
+
+  const half = Math.max(1, Math.floor(table.bet / 2));
+  return [
+    row(...first),
     row(
-      button(`pk:call:${table.id}`, owed === null ? '勝負する' : `勝負する（+${owed}）`, {
-        emoji: '💪',
-        style: ButtonStyle.SUCCESS,
-      }),
-      button(`pk:fold:${table.id}`, '降りる', { emoji: '🏳️', style: ButtonStyle.SECONDARY }),
+      button(`pk:raise:${table.id}:half`, `レイズ +${half}`, { emoji: '📈', style: ButtonStyle.PRIMARY }),
+      button(`pk:raise:${table.id}:same`, `レイズ +${table.bet}`, { emoji: '📈', style: ButtonStyle.PRIMARY }),
+      button(`pk:raiseform:${table.id}`, '好きな額', { emoji: '✏️', style: ButtonStyle.PRIMARY }),
     ),
   ];
-  if (canRaise(state, table.bet) && held === 0) {
-    const half = Math.max(1, Math.floor(table.bet / 2));
-    rows.push(
-      row(
-        button(`pk:raise:${table.id}:half`, `レイズ +${half}`, { emoji: '📈', style: ButtonStyle.PRIMARY }),
-        button(`pk:raise:${table.id}:same`, `レイズ +${table.bet}`, { emoji: '📈', style: ButtonStyle.PRIMARY }),
-        button(`pk:raiseform:${table.id}`, '好きな額', { emoji: '✏️', style: ButtonStyle.PRIMARY }),
-      ),
-    );
-  }
-  return rows;
 }
 
 function betPayload(table, state, settings) {
+  const accepting = state.step === ACCEPT;
   const lines = state.players.map((player) => {
-    const mark = player.folded
-      ? '🏳️ 降りた'
-      : owedBy(state, player) > 0
-        ? (player.escrow ?? 0) > 0
-          ? '⏳ 追うか考え中…'
-          : '⏳ 考え中…'
-        : '💪 勝負！';
-    return `　<@${player.userId}>　${mark}`;
+    if (player.folded) return `　<@${player.userId}>　🏳️ 降りた`;
+    if (accepting) {
+      return `　<@${player.userId}>　${owedBy(state, player) === 0 ? '🤝 承認した' : '⏳ 考え中…'}`;
+    }
+    if (!player.acted) return `　<@${player.userId}>　⏳ 考え中…`;
+    return player.proposal > 0
+      ? `　<@${player.userId}>　📈 +${player.proposal} を提案`
+      : `　<@${player.userId}>　✅ 乗った`;
   });
-  const raised = !canRaise(state, table.bet);
+
   return {
     content: '',
     embeds: [
       embed({
         color: COLOR,
-        title: raised ? '♠️ 簡ポーカー　レイズされた！' : '♠️ 簡ポーカー　勝負か、降りるか',
+        title: accepting ? '♠️ 簡ポーカー　レイズが出た！' : '♠️ 簡ポーカー　勝負',
         description:
-          (raised
-            ? `**1人あたり ${state.level}** まで上がりました。上乗せぶんは全員から預かってあります。\n` +
-              '降りれば預かったぶんは返ります。再レイズはできません。\n\n'
-            : `乗るなら追加で **${table.bet}**。降りれば参加費の **${table.bet}** だけの負けで済みます。\n\n`) +
-          lines.join('\n'),
+          (accepting
+            ? `**+${state.lastRaise}** のレイズが通りました。1人あたり **${state.level}** までです。\n` +
+              '承認するか、降りるかを決めてください。\n\n'
+            : `1人あたり **${state.level}**。レイズを提案すると、全員に承認するか降りるかを聞きます。\n` +
+              '誰も提案しなければ、ここで役比べです。\n\n') + lines.join('\n'),
         fields: [{ name: '場', value: coins(potOf(state), settings), inline: true }],
-        footer: { text: '手札を見てから決められます' },
+        footer: { text: accepting ? '手札を見てから決められます' : '何度でもレイズできます' },
       }),
     ],
     components: [
       row(button(`pk:hand:${table.id}`, '手札を見る', { emoji: '🃏', style: ButtonStyle.PRIMARY })),
-      // 人によって払う額が違うので、掲示のボタンには数字を出さない
       ...betRows(table, state),
     ],
   };
