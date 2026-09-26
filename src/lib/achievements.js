@@ -1,4 +1,5 @@
 import { deposit, getBalance } from './economy.js';
+import { toWholeNumber } from './format.js';
 import { getStreak } from './streak.js';
 
 /** 管理者が選べる達成条件。 */
@@ -117,16 +118,6 @@ export function parseAchievementLines(text) {
   }
 
   return { entries, errors };
-}
-
-/** 全角数字と桁区切りも受ける。整数でなければ null。 */
-function toWholeNumber(input) {
-  const normalized = String(input ?? '')
-    .trim()
-    .replace(/[０-９]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0))
-    .replace(/[,，\s+＋]/g, '');
-  if (!/^\d+$/.test(normalized)) return null;
-  return Number(normalized);
 }
 
 /** いまの称号を貼り付け形式で書き出す。これをそのまま貼り戻せる。 */

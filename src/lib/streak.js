@@ -1,4 +1,5 @@
 import { deposit } from './economy.js';
+import { toWholeNumber } from './format.js';
 import { dateKey, previousDay } from './calendar.js';
 
 // 「1日」の区切りは calendar.js が決める。ここではその日付文字列だけを見る。
@@ -137,6 +138,93 @@ export function describeStreakReward(reward, settings) {
   const range = reward.to_days === 0 ? `${reward.from_days}日目以降` : `${reward.from_days}〜${reward.to_days}日目`;
   const amount = settings ? `${settings.currency_emoji}${reward.reward}` : `${reward.reward}`;
   return `${range} は毎日 ${amount}`;
+}
+
+/* ------------------------------------------------------------------ 一括登録 */
+
+/**
+ * 連日ボーナスをテキストで一括登録するための形式（称号の一括登録と同じ考え方）。
+ *
+ *   アクション | 何日目から | 何日目まで | 毎日のコイン
+ *   筋トレ     | 3          | 6          | 50
+ *   筋トレ     | 7          | 13         | 100
+ *   筋トレ     | 14         |            | 200      ← 「まで」が空欄ならそれ以降ずっと
+ *
+ * ・区切りは | か ｜（全角）
+ * ・# で始まる行と空行は読み飛ばす
+ * ・同じアクションの同じ「何日目から」は上書き（貼り直し自由）
+ */
+export const STREAK_BULK_COLUMNS = 'アクション | 何日目から | 何日目まで | 毎日のコイン';
+
+const STREAK_BULK_SEPARATOR = /[|｜]/;
+
+/**
+ * 貼り付けたテキストを1行ずつ読む。DB には触らない。
+ * 悪い行は捨てて理由を集める（1行おかしいだけで全部が入らないのは不便なので）。
+ * @returns {{entries: object[], errors: {line: number, text: string, reason: string}[]}}
+ */
+export function parseStreakLines(text) {
+  const entries = [];
+  const errors = [];
+  const seen = new Set();
+
+  const lines = String(text ?? '').split(/\r?\n/);
+  for (const [index, raw] of lines.entries()) {
+    const line = index + 1;
+    const trimmed = raw.trim();
+    if (trimmed === '' || trimmed.startsWith('#')) continue;
+
+    const columns = trimmed.split(STREAK_BULK_SEPARATOR).map((column) => column.trim());
+    const [activity, from, to, reward] = columns;
+
+    if (columns.length < 4) {
+      errors.push({ line, text: trimmed, reason: `列が ${columns.length} 個しかありません（${STREAK_BULK_COLUMNS}）` });
+      continue;
+    }
+    if (!activity) {
+      errors.push({ line, text: trimmed, reason: 'アクション名が空です' });
+      continue;
+    }
+    const fromDays = toWholeNumber(from);
+    if (fromDays === null || fromDays < 1 || fromDays > 3650) {
+      errors.push({ line, text: trimmed, reason: `何日目から "${from}" は1〜3650の整数にしてください` });
+      continue;
+    }
+    // 空欄は「それ以降ずっと」。DB では 0 で表す
+    const toDays = to === '' ? 0 : toWholeNumber(to);
+    if (toDays === null || toDays > 3650) {
+      errors.push({ line, text: trimmed, reason: `何日目まで "${to}" は整数か空欄にしてください` });
+      continue;
+    }
+    if (toDays !== 0 && toDays < fromDays) {
+      errors.push({ line, text: trimmed, reason: `何日目まで（${toDays}）が何日目から（${fromDays}）より前です` });
+      continue;
+    }
+    const coinsPerDay = toWholeNumber(reward);
+    if (coinsPerDay === null || coinsPerDay < 1) {
+      errors.push({ line, text: trimmed, reason: `毎日のコイン "${reward}" は1以上の整数にしてください` });
+      continue;
+    }
+    const key = `${activity}\u0000${fromDays}`;
+    if (seen.has(key)) {
+      errors.push({ line, text: trimmed, reason: `「${activity}」の${fromDays}日目からが同じ貼り付けの中で重複しています` });
+      continue;
+    }
+
+    seen.add(key);
+    entries.push({ line, activity, fromDays, toDays, reward: coinsPerDay });
+  }
+
+  return { entries, errors };
+}
+
+/** いまの連日ボーナスを貼り付け形式で書き出す。これをそのまま貼り戻せる。 */
+export function formatStreakLines(rewards) {
+  return rewards
+    .map((reward) =>
+      [reward.activity, reward.from_days, reward.to_days === 0 ? '' : reward.to_days, reward.reward].join(' | '),
+    )
+    .join('\n');
 }
 
 /** アクション自体が消えたらボーナス設定も片付ける。 */

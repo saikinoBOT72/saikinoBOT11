@@ -11,8 +11,11 @@ import {
   removeAchievement,
 } from '../lib/achievements.js';
 import {
+  STREAK_BULK_COLUMNS,
   describeStreakReward,
+  formatStreakLines,
   listStreakRewards,
+  parseStreakLines,
   removeStreakReward,
   removeStreakRewardsFor,
   upsertStreakReward,
@@ -160,7 +163,8 @@ export async function streak(ix, _args, ctx, notice = null) {
           color: 0xe67e22,
           title: '🔥 連日ボーナス',
           description:
-            'アクションごとに「何日目から何日目までは毎日何コイン」を決められます。\n連続はアクション別に数えるので、筋トレと勉強は別々です。\n\n' +
+            'アクションごとに「何日目から何日目までは毎日何コイン」を決められます。\n連続はアクション別に数えるので、筋トレと勉強は別々です。\n' +
+            'たくさんあるときは **📥 貼り付けて一括登録** でまとめて入れられます。\n\n' +
             summary.join('\n'),
           footer: { text: '1日空くとそのアクションの連続は1日目に戻ります' },
         }),
@@ -181,8 +185,104 @@ export async function streak(ix, _args, ctx, notice = null) {
           ),
         })),
       ),
+      row(
+        button(id('admin', 'streakbulk'), '貼り付けて一括登録', { emoji: '📥', style: ButtonStyle.PRIMARY }),
+        button(id('admin', 'streakout'), '書き出す', { emoji: '📤' }),
+      ),
       row(backButton('admin'), homeButton()),
     ],
+  });
+}
+
+/**
+ * 連日ボーナスの貼り付け用モーダル（称号の一括登録と同じ考え方）。
+ * 1行 = 1段階。アクションをまたいでまとめて貼れる。
+ */
+export async function streakbulk(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const activities = await listActivities(ctx.db, ix.guildId);
+  const example = activities[0]?.name ?? '筋トレ';
+
+  return openModal(
+    modal(id('admin', 'streakbulksave'), '連日ボーナスを一括登録', [
+      textInput('text', STREAK_BULK_COLUMNS, {
+        style: TextInputStyle.PARAGRAPH,
+        required: true,
+        max: 4000,
+        placeholder: `${example} | 3 | 6 | 50\n${example} | 7 | 13 | 100\n${example} | 14 |  | 200`,
+      }),
+    ]),
+  );
+}
+
+export async function streakbulksave(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const { entries, errors } = parseStreakLines(readText(ix, 'text'));
+
+  // アクションが本当にあるかは DB を見ないと分からないので、ここで弾く
+  const known = new Set((await listActivities(ctx.db, ix.guildId)).map((activity) => activity.name));
+  const ok = [];
+  for (const entry of entries) {
+    if (!known.has(entry.activity)) {
+      errors.push({ line: entry.line, text: entry.activity, reason: `アクション「${entry.activity}」は登録されていません` });
+      continue;
+    }
+    ok.push(entry);
+  }
+
+  // 新規か上書きかを数えるため、先に今の設定を見ておく
+  const keyOf = (activity, fromDays) => `${activity}\u0000${fromDays}`;
+  const before = new Set(
+    (await listStreakRewards(ctx.db, ix.guildId)).map((reward) => keyOf(reward.activity, reward.from_days)),
+  );
+  for (const entry of ok) {
+    await upsertStreakReward(ctx.db, ix.guildId, entry.activity, entry.fromDays, entry.toDays, entry.reward);
+  }
+
+  const added = ok.filter((entry) => !before.has(keyOf(entry.activity, entry.fromDays))).length;
+  const updated = ok.length - added;
+
+  const report = [`新規 **${added}** 件／上書き **${updated}** 件`];
+  if (errors.length > 0) {
+    report.push(`飛ばした行 **${errors.length}** 件`);
+    // 全部は出さない（画面に入りきらないので最初の5件だけ）
+    for (const error of errors.sort((a, b) => a.line - b.line).slice(0, 5)) {
+      report.push(`・${error.line}行目: ${error.reason}`);
+    }
+    if (errors.length > 5) report.push(`・ほか ${errors.length - 5} 件`);
+  }
+  return streak(ix, [], ctx, report.join('\n'));
+}
+
+/** いまの連日ボーナスを貼り付け形式で出す。バックアップにも引っ越しにも使える。 */
+export async function streakout(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const rewards = await listStreakRewards(ctx.db, ix.guildId);
+  if (rewards.length === 0) return streak(ix, [], ctx, 'まだ連日ボーナスが設定されていません。');
+
+  const activities = await listActivities(ctx.db, ix.guildId);
+  const text = formatStreakLines(rewards);
+  // embed の説明は4096文字まで。あふれる分は切って、続きは消してから出し直してもらう
+  const body = text.length > 3400 ? `${text.slice(0, 3400)}\n…（長すぎるため以降は省略）` : text;
+
+  return show(ix, {
+    embeds: [
+      embed({
+        color: 0xe67e22,
+        title: '📤 連日ボーナスの書き出し',
+        description:
+          `\`\`\`\n${STREAK_BULK_COLUMNS}\n${body}\n\`\`\`\n` +
+          'このまま **📥 貼り付けて一括登録** に貼り戻せます。\n' +
+          '「何日目まで」が空欄の行は、それ以降ずっとの意味です。',
+        fields: [
+          {
+            name: '使えるアクション名',
+            value: activities.map((activity) => `\`${activity.name}\``).join(' / ') || '（未登録）',
+          },
+        ],
+      }),
+    ],
+    components: [row(button(id('admin', 'streak'), '連日ボーナスへ', { emoji: '🔥' }), homeButton())],
   });
 }
 
@@ -1625,6 +1725,9 @@ export const actions = {
   anntoggle,
   anndel,
   streak,
+  streakbulk,
+  streakbulksave,
+  streakout,
   streakact,
   streakview,
   streaknew,

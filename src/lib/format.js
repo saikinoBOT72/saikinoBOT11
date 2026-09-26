@@ -34,3 +34,16 @@ export function truncate(text, max) {
   if (!text) return '';
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }
+
+/**
+ * 貼り付けたテキストの数字を読む。全角数字・桁区切り・＋ も受ける。
+ * 整数でなければ null（称号と連日ボーナスの一括登録で共用）。
+ */
+export function toWholeNumber(input) {
+  const normalized = String(input ?? '')
+    .trim()
+    .replace(/[０-９]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0))
+    .replace(/[,，\s+＋]/g, '');
+  if (!/^\d+$/.test(normalized)) return null;
+  return Number(normalized);
+}

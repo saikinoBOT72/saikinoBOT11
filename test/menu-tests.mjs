@@ -2888,6 +2888,118 @@ await test('管理者でなければ一括登録できない', async () => {
   assert.equal((await achLib.listAchievements(db, GUILD)).length, before);
 });
 
+section('[連日ボーナスの一括設定]');
+
+await test('連日ボーナスの貼り付け形式を読める', () => {
+  const { entries, errors } = streakLib.parseStreakLines(
+    ['# コメントは飛ばす', '', '筋トレ | 3 | 6 | 50', '筋トレ｜７｜１３｜１，０００', '筋トレ | 14 |  | 200'].join('\n'),
+  );
+  assert.equal(errors.length, 0);
+  assert.deepEqual(entries[0], { line: 3, activity: '筋トレ', fromDays: 3, toDays: 6, reward: 50 });
+  assert.equal(entries[1].reward, 1000, '全角・全角区切り・桁区切りも読む');
+  assert.equal(entries[2].toDays, 0, '「まで」が空欄ならそれ以降ずっと（0）');
+});
+
+await test('おかしな連日ボーナスの行は理由つきで飛ばす', () => {
+  const { entries, errors } = streakLib.parseStreakLines(
+    [
+      '列たりない | 3 | 6',
+      ' | 3 | 6 | 50',
+      '筋トレ | 0 | 6 | 50',
+      '筋トレ | 5 | 2 | 50',
+      '筋トレ | 3 | 6 | 0',
+      '筋トレ | 3 | 6 | 50',
+      '筋トレ | 3 | 9 | 70',
+    ].join('\n'),
+  );
+  assert.equal(entries.length, 1, '通るのは最初の「3日目から」だけ');
+  assert.equal(errors.length, 6);
+  assert.match(errors[0].reason, /列が/);
+  assert.match(errors[1].reason, /アクション名が空/);
+  assert.match(errors[2].reason, /1〜3650/);
+  assert.match(errors[3].reason, /より前/);
+  assert.match(errors[4].reason, /1以上/);
+  assert.match(errors[5].reason, /重複/);
+});
+
+await test('連日ボーナスは書き出したものをそのまま読み戻せる', () => {
+  const rows = [
+    { activity: '筋トレ', from_days: 3, to_days: 6, reward: 50 },
+    { activity: '筋トレ', from_days: 14, to_days: 0, reward: 200 },
+  ];
+  const text = streakLib.formatStreakLines(rows);
+  const { entries, errors } = streakLib.parseStreakLines(text);
+  assert.equal(errors.length, 0);
+  assert.deepEqual(
+    entries.map((entry) => [entry.activity, entry.fromDays, entry.toDays, entry.reward]),
+    rows.map((row) => [row.activity, row.from_days, row.to_days, row.reward]),
+    '往復して同じ設定に戻る（「以降ずっと」も含めて）',
+  );
+});
+
+await test('管理メニューから連日ボーナスを貼り付けて一括登録できる', async () => {
+  for (const name of ['筋トレ', '勉強']) {
+    await act.upsertActivity(db, GUILD, {
+      name, emoji: '💪', reward: 10, cooldownSec: 0, dailyLimit: 1, description: null,
+    });
+  }
+  const screen = await press('m:admin:streak', { admin: true });
+  assert.ok(customIds(screen).includes('m:admin:streakbulk'), '一括登録のボタンがある');
+  assert.ok(customIds(screen).includes('m:admin:streakout'), '書き出しのボタンがある');
+
+  const paste = ['筋トレ | 3 | 6 | 50', '筋トレ | 7 |  | 100', '勉強 | 5 | 9 | 30'].join('\n');
+  const done = await press('m:admin:streakbulksave', { admin: true, type: 5, fields: { text: paste } });
+  assert.match(screenText(done), /新規 \*\*3\*\* 件/);
+
+  const rows = await streakLib.listStreakRewards(db, GUILD);
+  const muscle = rows.filter((row) => row.activity === '筋トレ');
+  assert.equal(muscle.length, 2);
+  assert.equal(muscle.find((row) => row.from_days === 7).to_days, 0, '空欄はそれ以降ずっと');
+  assert.equal(rows.find((row) => row.activity === '勉強').reward, 30, 'アクションをまたいで入る');
+});
+
+await test('同じ「何日目から」を貼り直すと上書きになる', async () => {
+  const done = await press('m:admin:streakbulksave', {
+    admin: true, type: 5, fields: { text: '筋トレ | 3 | 6 | 80' },
+  });
+  assert.match(screenText(done), /新規 \*\*0\*\* 件／上書き \*\*1\*\* 件/);
+  const row = (await streakLib.listStreakRewards(db, GUILD, '筋トレ')).find((r) => r.from_days === 3);
+  assert.equal(row.reward, 80, '50 から 80 に変わる');
+});
+
+await test('登録されていないアクションの行は飛ばして、ほかは入れる', async () => {
+  const done = await press('m:admin:streakbulksave', {
+    admin: true,
+    type: 5,
+    fields: { text: ['そんなアクションはない | 1 | 2 | 10', '勉強 | 10 |  | 60'].join('\n') },
+  });
+  const text = screenText(done);
+  assert.match(text, /新規 \*\*1\*\* 件/, '正しい行は入る');
+  assert.match(text, /1行目: アクション「そんなアクションはない」は登録されていません/);
+  const rows = await streakLib.listStreakRewards(db, GUILD);
+  assert.ok(!rows.some((row) => row.activity === 'そんなアクションはない'));
+});
+
+await test('書き出すと貼り戻せる形で出る', async () => {
+  const out = await press('m:admin:streakout', { admin: true });
+  const text = screenText(out);
+  assert.match(text, /アクション \| 何日目から \| 何日目まで \| 毎日のコイン/, '見出しがある');
+  assert.match(text, /筋トレ \| 7 \|  \| 100/, '「以降ずっと」は空欄で書き出す');
+
+  // 書き出したものをそのまま貼り戻しても、全部「上書き」になって壊れない
+  const block = text.split('```')[1].split('\n').filter((line) => line && !line.startsWith('アクション |')).join('\n');
+  const again = await press('m:admin:streakbulksave', { admin: true, type: 5, fields: { text: block } });
+  assert.match(screenText(again), /新規 \*\*0\*\* 件/, '貼り戻しで増えない');
+});
+
+await test('管理者でなければ連日ボーナスを一括登録できない', async () => {
+  const before = (await streakLib.listStreakRewards(db, GUILD)).length;
+  await press('m:admin:streakbulksave', {
+    admin: false, type: 5, fields: { text: '筋トレ | 99 |  | 999' },
+  });
+  assert.equal((await streakLib.listStreakRewards(db, GUILD)).length, before, '増えていない');
+});
+
 section('[宝くじのまとめ買いとプール金]');
 
 await test('番号をまとめて指定して買える', async () => {
