@@ -5,7 +5,7 @@
  * ここにはブラックジャックならではの中身（配り方・ディーラーの動き・精算）だけを置く。
  */
 import { deposit, withdraw } from './economy.js';
-import { MAX_PLAYERS, dealerShouldHit, isBlackjack, outcome, payout } from './blackjack.js';
+import { DECKS, MAX_PLAYERS, dealerShouldHit, isBlackjack, outcome, payout } from './blackjack.js';
 import { draw, newDeck } from './cards.js';
 import { createTableStore } from './card-table.js';
 
@@ -63,9 +63,17 @@ export async function joinTable(db, table, userId) {
 
 /* ------------------------------------------------------------------ 配る・進める */
 
-/** 山札を作って、全員とディーラーに2枚ずつ配る。 */
+/**
+ * 山札を作って、全員とディーラーに2枚ずつ配る。
+ *
+ * 【山札は DECKS 組ぶん混ぜて、上の52枚だけ持つ】
+ * よく混ぜた山札の上から引くので、上の52枚だけを残しても引く札の出方は変わらない。
+ * 6組（312枚）をまるごと state に入れると、1手ごとに D1 へ書く量が6倍になるため、
+ * 保存する量は1組のときと同じにしてある。1回の勝負で52枚を使い切ることはまずない
+ * （使い切っても draw が新しい山札を足す）。
+ */
 export function deal(state) {
-  const deck = newDeck();
+  const deck = newDeck(DECKS).slice(-52);
   const players = state.players.map((player) => ({ ...player, cards: [draw(deck), draw(deck)] }));
   const dealer = [draw(deck), draw(deck)];
 

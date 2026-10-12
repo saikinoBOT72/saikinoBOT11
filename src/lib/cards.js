@@ -7,11 +7,16 @@ import { SUIT_KEYS, cardFace } from './emoji.js';
 
 export const RANK_LABELS = ['', 'A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
 
-/** 52枚を切った山札。上（末尾）から引く。 */
-export function newDeck() {
+/**
+ * 切った山札。上（末尾）から引く。
+ * decks に 2 以上を入れると、その組数ぶんのトランプを混ぜる（同じ札が何枚も入る）。
+ */
+export function newDeck(decks = 1) {
   const deck = [];
-  for (let suit = 0; suit < SUIT_KEYS.length; suit++) {
-    for (let rank = 1; rank <= 13; rank++) deck.push({ rank, suit });
+  for (let copy = 0; copy < decks; copy++) {
+    for (let suit = 0; suit < SUIT_KEYS.length; suit++) {
+      for (let rank = 1; rank <= 13; rank++) deck.push({ rank, suit });
+    }
   }
   // Fisher–Yates
   for (let i = deck.length - 1; i > 0; i--) {

@@ -5,11 +5,21 @@
  * 同じ卓に **3人まで** 座れて、全員がディーラー1人と勝負する（プレイヤー同士は戦わない）。
  *
  * 数え方: A は 11 として数え、21 を超えるなら 1 に落とす。J・Q・K は 10。
- * ディーラーは 17 以上になるまで必ず引き、17 以上なら必ず止まる。
+ * ディーラーは 17 以上になるまで必ず引く。ただし A を 11 と数えた 17（ソフト17）では
+ * もう1枚引く。
+ *
+ * 【胴元の取り分】
+ * 山札を DECKS 組にして、ディーラーがソフト17で引くようにしてある。
+ * どちらも本物のカジノでよくあるルールで、画面の見た目は変わらない。
+ * 1組・ソフト17で止まるルールだと、上手い人の還元率が 99.5% あってほぼ負けなかった。
+ * いまのルールで約 98.6%（ふつうの遊び方では約 94%）。
  */
 export const MAX_PLAYERS = 3;
 export const BLACKJACK = 21;
 export const DEALER_STANDS = 17;
+
+/** 山札に混ぜるトランプの組数。 */
+export const DECKS = 6;
 
 /** ブラックジャック（最初の2枚で21）のときの払い戻し。賭け金の2.5倍が戻る＝1.5倍の儲け。 */
 export const BLACKJACK_PAYOUT = 2.5;
@@ -43,9 +53,10 @@ export function isBlackjack(cards) {
   return cards.length === 2 && handValue(cards).total === BLACKJACK;
 }
 
-/** ディーラーはもう1枚引くか。 */
+/** ディーラーはもう1枚引くか。17 未満なら引く。ソフト17（A を 11 と数えた17）でも引く。 */
 export function dealerShouldHit(cards) {
-  return handValue(cards).total < DEALER_STANDS;
+  const { total, soft } = handValue(cards);
+  return total < DEALER_STANDS || (total === DEALER_STANDS && soft);
 }
 
 /**

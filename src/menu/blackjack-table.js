@@ -407,7 +407,7 @@ function tablePayload(table, state, settings, em, { hideDealer = true, frozen = 
           `**ディーラー**　${renderHand(em, state.dealer, { hideFrom: hideDealer ? 1 : null })}　` +
           `${hideDealer ? '**?**' : `**${describeValue(state.dealer)}**`}\n\n` +
           lines.join('\n'),
-        footer: { text: `参加費 ${table.bet}・ディーラーは17以上で止まります` },
+        footer: { text: `参加費 ${table.bet}・ディーラーは17以上になるまで引きます` },
       }),
     ],
     components: frozen || !turnPlayer ? [] : [moveRow(table, state.players[state.turn])],

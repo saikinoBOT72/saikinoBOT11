@@ -1531,10 +1531,51 @@ await test('ブラックジャックは最初の2枚のときだけ', () => {
   assert.equal(bj.isBust([card(13), card(12), card(5)]), true);
 });
 
-await test('ディーラーは17以上で止まる', () => {
+await test('ディーラーは17以上で止まるが、ソフト17では引く', () => {
   assert.equal(bj.dealerShouldHit([card(10), card(6)]), true, '16は引く');
-  assert.equal(bj.dealerShouldHit([card(10), card(7)]), false, '17は止まる');
-  assert.equal(bj.dealerShouldHit([card(1), card(6)]), false, 'ソフト17も止まる');
+  assert.equal(bj.dealerShouldHit([card(10), card(7)]), false, 'ハード17は止まる');
+  assert.equal(bj.dealerShouldHit([card(1), card(6)]), true, 'ソフト17（A＋6）は引く');
+  assert.equal(bj.dealerShouldHit([card(1), card(6), card(10)]), false, 'A を1と数えた17はハード17なので止まる');
+  assert.equal(bj.dealerShouldHit([card(1), card(7)]), false, 'ソフト18は止まる');
+  assert.equal(bj.dealerShouldHit([card(1), card(2), card(4)]), true, '3枚でもソフト17なら引く');
+});
+
+await test('山札は6組を混ぜている', () => {
+  assert.equal(bj.DECKS, 6);
+  const shoe = cards.newDeck(bj.DECKS);
+  assert.equal(shoe.length, 52 * 6);
+  // 同じ札がちょうど6枚ずつ入っている
+  const counts = new Map();
+  for (const one of shoe) counts.set(`${one.suit}-${one.rank}`, (counts.get(`${one.suit}-${one.rank}`) ?? 0) + 1);
+  assert.equal(counts.size, 52);
+  assert.ok([...counts.values()].every((n) => n === 6));
+  assert.equal(cards.newDeck().length, 52, 'ほかのゲーム用の1組はそのまま');
+});
+
+await test('配った山札は保存する量を1組ぶんに抑えている', async () => {
+  const { deal } = await import(src('lib/blackjack-table.js'));
+  const state = deal({ players: [{ userId: 'a', status: 'playing' }], dealer: [], deck: [], turn: 0 });
+  // 52枚のうち、プレイヤー2枚とディーラー2枚を配ったぶんが減っている
+  assert.equal(state.deck.length, 52 - 4);
+});
+
+// 1組だけの山札では、1回の勝負に同じ札（同じマークと数字）が2枚出ることはない。
+// 6組なら何度か配れば必ず出てくる
+await test('同じ札が1回の勝負に2枚出ることがある（6組の証拠）', async () => {
+  const { deal } = await import(src('lib/blackjack-table.js'));
+  let duplicated = false;
+  for (let i = 0; i < 400 && !duplicated; i++) {
+    const state = deal({
+      players: [{ userId: 'a', status: 'playing' }, { userId: 'b', status: 'playing' }, { userId: 'c', status: 'playing' }],
+      dealer: [],
+      deck: [],
+      turn: 0,
+    });
+    const shown = [...state.players.flatMap((player) => player.cards), ...state.dealer, ...state.deck.slice(-20)];
+    const keys = shown.map((one) => `${one.suit}-${one.rank}`);
+    duplicated = new Set(keys).size < keys.length;
+  }
+  assert.ok(duplicated, '1組の山札のままになっている');
 });
 
 await test('勝敗と払い戻し', () => {
