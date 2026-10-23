@@ -138,8 +138,8 @@ export function gated(key, actions) {
 
 /**
  * 画面まるごと見張る。
- * 釣りのように、中の操作でもコインが動く（餌や竿を買う・魚を売る）のに、
- * 賭けの途中という状態が無いものに使う。古いメッセージのボタンからも入れない。
+ * おみくじのように、賭けの途中という状態が無いものに使う。
+ * 古いメッセージのボタンからも入れない。
  */
 export function gatedAll(key, actions) {
   return Object.fromEntries(Object.entries(actions).map(([name, fn]) => [name, gate(key, fn)]));
