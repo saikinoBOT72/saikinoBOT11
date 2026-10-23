@@ -10,7 +10,6 @@ import * as highlow from './highlow.js';
 import * as doors from './doors.js';
 import * as lottery from './lottery.js';
 import * as poll from './poll.js';
-import * as fishing from './fishing.js';
 import * as omikuji from './omikuji.js';
 import { MENU_PREFIX } from './common.js';
 import { gated, gatedAll } from './games.js';
@@ -39,7 +38,6 @@ export const screens = {
   poll: gated('poll', poll.actions),
   doors: doors.actions,
   lot: gated('lot', lottery.actions),
-  fish: gatedAll('fish', fishing.actions),
   omi: gatedAll('omi', omikuji.actions),
   bj: gated('bj', games.bj),
   pk: gated('pk', games.pk),

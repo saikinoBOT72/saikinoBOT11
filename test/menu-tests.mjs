@@ -1776,9 +1776,6 @@ await test('サイコロとトランプが揃うと、ゲームの表示が入�
       items.push({ id: `2${suitIndex}${String(rankIndex).padStart(16, '0')}`, name: `${suit}_${rank}`, animated: false });
     }
   }
-  for (let id = 1; id <= 78; id++) {
-    items.push({ id: `3${String(id).padStart(17, '0')}`, name: `fish_${id}`, animated: false });
-  }
   ctx.applicationEmojis.items = items;
 
   const payload = await press('m:admin:emoji', { admin: true });
@@ -2116,7 +2113,7 @@ await test('どの画面にも同じ custom_id のボタンが2つ無い', async
     'm:wallet:open', 'm:wallet:rank', 'm:titles:open', 'm:privacy:open',
     'm:admin:open', 'm:admin:acts', 'm:admin:streak', 'm:admin:ach', 'm:admin:ann',
     'm:admin:lot', 'm:admin:emoji', 'm:lot:open', 'm:hl:open', 'm:doors:open',
-    'm:poll:open', 'm:fish:open', 'm:fish:shop', 'm:fish:dex:0', 'm:fish:url',
+    'm:poll:open',
   ];
   for (const screen of screensToCheck) {
     const payload = await press(screen, { admin: true });
@@ -2126,12 +2123,6 @@ await test('どの画面にも同じ custom_id のボタンが2つ無い', async
     // 文章の組み立てを間違えると "null がそろって" のような表示が出てしまう
     assert.doesNotMatch(screenText(payload), /\bnull\b|\bundefined\b|NaN/, `${screen} に null/undefined が出ている`);
   }
-});
-
-await test('釣りはゲームの中にあり、誰でも開ける', async () => {
-  assert.ok(customIds(await press('m:games:open')).includes('m:fish:open'), 'あそぶに置く');
-  assert.ok(!customIds(await press('m:home:open')).includes('m:fish:open'), 'ホームには置かない');
-  assert.match(screenText(await press('m:fish:open', { admin: false })), /釣り/, '管理者でなくても入れる');
 });
 
 await test('ランキングはお財布、持ち物はショップから開ける', async () => {
@@ -3293,14 +3284,6 @@ await test('オフのゲームは古いボタンから入ろうとしても弾�
 await test('もう一度押すとオンに戻る', async () => {
   await press('m:admin:gmtoggle:rr', { admin: true });
   assert.ok(customIds(await press('m:games:open')).includes('m:rr:open'));
-});
-
-await test('釣りもオンオフできる', async () => {
-  await press('m:admin:gmtoggle:fish', { admin: true });
-  assert.ok(!customIds(await press('m:games:open')).includes('m:fish:open'));
-  assert.match(screenText(await press('m:fish:shop')), /遊べません/, '中の画面にも入れない');
-  await press('m:admin:gmtoggle:fish', { admin: true });
-  assert.ok(customIds(await press('m:games:open')).includes('m:fish:open'));
 });
 
 await test('管理者でなければ切り替えられない', async () => {
