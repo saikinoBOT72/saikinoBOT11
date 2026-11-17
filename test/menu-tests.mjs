@@ -274,6 +274,49 @@ await test('スロットはまず回転中を出し、少しずつ結果が現�
   assertAllButtonsWork({ data: last }, 'スロット結果');
 });
 
+await test('スロットは左2つがそろうと「リーチ」でじらしてから止まる', async () => {
+  await eco.setBalance(db, GUILD, ME, 100000, 'test');
+  let reached = null;
+  for (let attempt = 0; attempt < 200 && !reached; attempt++) {
+    ctx.animated.length = 0;
+    await press('m:slot:bet:10');
+    const second = ctx.animated[1];
+    if (/リーチ/.test(second.embeds[0].title)) reached = second;
+    else assert.match(second.embeds[0].title, /回転中/, 'そろっていなければふつうの回転中');
+  }
+  assert.ok(reached, '200回のうち一度はリーチになる');
+  await eco.setBalance(db, GUILD, ME, 5000, 'test');
+});
+
+await test('スロットを10回まとめて回すと、10回ぶんを1回で精算して一覧で見せる', async () => {
+  await eco.setBalance(db, GUILD, ME, 5000, 'test');
+  const pick = await press('m:slot:tens');
+  assert.ok(customIds(pick).includes('m:slot:ten:10'));
+  assertAllButtonsWork(pick, '10回まとめての賭け金');
+
+  ctx.animated.length = 0;
+  const ledgerBefore = (await db.get('SELECT COUNT(*) AS n FROM ledger WHERE user_id = ?1', ME)).n;
+  const spinning = await press('m:slot:ten:10');
+  assert.match(firstEmbed(spinning).title, /10回まとめて/);
+  const last = finalFrame(ctx);
+  const lines = last.embeds[0].description.split('\n');
+  assert.equal(lines.length, 10, '10回ぶんの出目');
+  const fields = Object.fromEntries(last.embeds[0].fields.map((f) => [f.name, f.value]));
+  assert.equal(fields['賭け金'], '100');
+  const net = Number(fields['収支'].replace(/[+,]/g, ''));
+  assert.equal(await eco.getBalance(db, GUILD, ME), 5000 + net);
+  const added = (await db.get('SELECT COUNT(*) AS n FROM ledger WHERE user_id = ?1', ME)).n - ledgerBefore;
+  assert.ok(added === 1 || added === 2, '賭けと払い戻しをまとめて記録する');
+  assertBigArt({ data: last }, '10回まとめて');
+  assertAllButtonsWork({ data: last }, '10回まとめての結果');
+
+  await eco.setBalance(db, GUILD, ME, 50, 'test');
+  const short = await press('m:slot:ten:10');
+  assert.match(firstEmbed(short).description, /足りません/);
+  assert.equal(await eco.getBalance(db, GUILD, ME), 50);
+  await eco.setBalance(db, GUILD, ME, 5000, 'test');
+});
+
 await test('所持金を超える賭け金は弾かれる', async () => {
   await eco.setBalance(db, GUILD, ME, 50, 'test');
   const payload = await press('m:slot:bet:1000');

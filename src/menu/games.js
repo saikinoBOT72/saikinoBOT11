@@ -582,7 +582,10 @@ async function slotOpen(ix, _args, ctx, notice = null) {
         notice,
       ),
     ],
-    components: amountRows(['slot', 'bet'], balance, { maxBet: settings.max_bet, extra: [backButton('games')] }),
+    components: amountRows(['slot', 'bet'], balance, {
+      maxBet: settings.max_bet,
+      extra: [button(id('slot', 'tens'), '10回まとめて', { emoji: '🔟' }), backButton('games')],
+    }),
   });
 }
 
@@ -622,16 +625,19 @@ async function slotSpin(ix, ctx, bet) {
 
   // リールは content に絵文字だけで置く。Discord がいちばん大きく描いてくれる。
   const reelLine = (reels) => reels.join('');
-  const spinning = (reels, note) => ({
+  const spinning = (reels, note, hot = false) => ({
     content: reelLine(reels),
     embeds: [
       embed({
-        color: 0xe67e22,
+        color: hot ? 0xe74c3c : 0xe67e22,
         title: note,
         footer: { text: `賭け金 ${bet.toLocaleString('ja-JP')}` },
       }),
     ],
   });
+  // 左2つがそろったら「リーチ」。最後のリールは少しじらしてから止める（結果はもう決まっている）
+  const reach = result.reels[0] === result.reels[1];
+  const reachNote = HOT_SYMBOLS.has(result.reels[0]) ? '⚡ 激アツ リーチ！' : '🔥 リーチ！';
 
   const final = resultEmbed({
     art: reelLine(result.reels),
@@ -647,6 +653,10 @@ async function slotSpin(ix, ctx, bet) {
         style: ButtonStyle.SUCCESS,
         disabled: after < bet,
       }),
+      button(id('slot', 'ten', String(bet)), `10回まとめて（${(bet * TEN_SPINS).toLocaleString('ja-JP')}）`, {
+        emoji: '🔟',
+        disabled: after < bet * TEN_SPINS,
+      }),
       button(id('slot', 'open'), '賭け金を変える', { emoji: '💰' }),
       shareButton(),
       homeButton(),
@@ -656,8 +666,14 @@ async function slotSpin(ix, ctx, bet) {
   // 左のリールから1つずつ止まっていく
   ctx.animate(ix, [
     { after: 800, payload: { ...spinning([result.reels[0], em.slot_spin, em.slot_spin], '🎰 回転中…'), components: [] } },
-    { after: 800, payload: { ...spinning([result.reels[0], result.reels[1], em.slot_spin], '🎰 回転中…'), components: [] } },
-    { after: 800, payload: { ...final, components: finalComponents } },
+    {
+      after: 800,
+      payload: {
+        ...spinning([result.reels[0], result.reels[1], em.slot_spin], reach ? reachNote : '🎰 回転中…', reach),
+        components: [],
+      },
+    },
+    { after: reach ? 1800 : 800, payload: { ...final, components: finalComponents } },
   ]);
 
   // 3つそろいは必ず、それ以外は設定した額を超えたら実況する
@@ -677,6 +693,127 @@ async function slotSpin(ix, ctx, bet) {
   return show(ix, { ...spinning([em.slot_spin, em.slot_spin, em.slot_spin], '🎰 回転中…'), components: [] });
 }
 
+/** リーチでいちばん盛り上がる絵柄（7 と 💎）。 */
+const HOT_SYMBOLS = new Set([em.slot_seven, em.slot_diamond]);
+
+/* --------------------------------------------------- スロット：10回まとめて */
+
+const TEN_SPINS = 10;
+
+/** 10回まとめて：1回ぶんの賭け金を選ぶ。 */
+async function slotTens(ix, _args, ctx, notice = null) {
+  const settings = await ctx.settings(ix.guildId);
+  const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
+  return show(ix, {
+    embeds: [
+      withNotice(
+        embed({
+          color: 0xe67e22,
+          title: '🔟 10回まとめて回す',
+          description:
+            `所持金 ${coins(balance, settings)}\n\n` +
+            `**1回ぶんの賭け金**を選んでください。10回ぶん（×${TEN_SPINS}）を先に払い、当たりはまとめて受け取ります。\n` +
+            '1回ずつ回すのと、当たりやすさ・配当は同じです。',
+        }),
+        notice,
+      ),
+    ],
+    components: amountRows(['slot', 'ten'], Math.floor(balance / TEN_SPINS), {
+      maxBet: settings.max_bet,
+      customId: id('slot', 'tencustom'),
+      extra: [backButton('slot', 'スロットへ')],
+    }),
+  });
+}
+
+function slotTenCustom() {
+  return openModal(amountModal(id('slot', 'tenamount'), 'スロット10回まとめて', '1回ぶんの賭け金'));
+}
+
+async function slotTenAmount(ix, _args, ctx) {
+  const amount = readInt(ix, 'amount', { min: 1 });
+  if (isError(amount)) return slotTens(ix, [], ctx, amount.error);
+  return slotTen(ix, [String(amount)], ctx);
+}
+
+async function slotTen(ix, [rawBet], ctx) {
+  const bet = Number(rawBet);
+  const total = bet * TEN_SPINS;
+  const settings = await ctx.settings(ix.guildId);
+  const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
+  const check = checkBet(bet, balance, settings);
+  if (!check.ok) return slotTens(ix, [], ctx, check.message);
+  if (balance < total) return slotTens(ix, [], ctx, `10回ぶん（${total.toLocaleString('ja-JP')}）に足りません。`);
+
+  const results = Array.from({ length: TEN_SPINS }, () => spin());
+  const payout = results.reduce((sum, result) => sum + result.multiplier * bet, 0);
+  const settled = await settleWager(ctx.db, ix.guildId, ix.userId, {
+    bet: total,
+    payout,
+    betReason: 'slot:bet',
+    winReason: 'slot:win',
+    detail: `10回 x${payout / bet}`,
+  });
+  if (!settled.ok) return slotTens(ix, [], ctx, '残高が足りません。');
+  const net = payout - total;
+
+  const best = results.reduce((top, result) => (result.multiplier > top.multiplier ? result : top), results[0]);
+  const hits = results.filter((result) => result.multiplier > 0).length;
+  const lines = results.map(
+    (result, index) =>
+      `\`${String(index + 1).padStart(2, ' ')}\`　${result.reels.join('')}　${result.multiplier > 0 ? `**×${result.multiplier}**` : '—'}`,
+  );
+
+  const final = resultEmbed({
+    art: best.reels.join(''),
+    verdict: hits === 0 ? '💧 10回ともはずれ' : `${slotVerdict(best)}（10回中 ${hits} 回当たり）`,
+    color: net > 0 ? 0x2ecc71 : payout > 0 ? 0xf39c12 : 0x95a5a6,
+    detail: lines.join('\n'),
+    fields: moneyFields(total, net, settled.balance, settings, { coins }),
+  });
+
+  ctx.animate(ix, [
+    {
+      after: 1200,
+      payload: {
+        ...final,
+        components: [
+          row(
+            button(id('slot', 'ten', String(bet)), `もう10回（${total.toLocaleString('ja-JP')}）`, {
+              emoji: '🔟',
+              style: ButtonStyle.SUCCESS,
+              disabled: settled.balance < total,
+            }),
+            button(id('slot', 'bet', String(bet)), `1回だけ（${bet}）`, { emoji: '🎰', disabled: settled.balance < bet }),
+            button(id('slot', 'open'), '賭け金を変える', { emoji: '💰' }),
+            shareButton(),
+            homeButton(),
+          ),
+        ],
+      },
+    },
+  ]);
+
+  const triple = results.find((result) => result.kind === 'triple');
+  goLive(ctx, ix, settings, {
+    net,
+    force: Boolean(triple),
+    embed: embed({
+      color: net > 0 ? 0xf1c40f : 0x95a5a6,
+      title: triple ? '🎉 大当たり！' : net > 0 ? '🎰 スロットで大勝ち' : '🎰 スロットで大負け',
+      description: triple
+        ? `<@${ix.userId}> がスロット10回まとめての中で **${triple.symbol} 3つ揃い（x${triple.multiplier}）**！`
+        : `<@${ix.userId}> がスロット10回まとめてで **${net > 0 ? '+' : ''}${net.toLocaleString('ja-JP')}**`,
+    }),
+  });
+
+  return show(ix, {
+    content: `${em.slot_spin}${em.slot_spin}${em.slot_spin}`,
+    embeds: [embed({ color: 0xe67e22, title: '🔟 10回まとめて回転中…', footer: { text: `賭け金 ${total.toLocaleString('ja-JP')}` } })],
+    components: [],
+  });
+}
+
 /** 結果のひとこと。いちばん先に読ませたいので短く。 */
 function slotVerdict(result) {
   if (result.kind === 'triple') return `🎉 3つそろい！ ×${result.multiplier}`;
@@ -690,7 +827,16 @@ function slotDetail(result, payout, settings) {
   return `${result.symbol} がそろって ${coins(payout, settings)} 獲得。`;
 }
 
-export const slot = { open: slotOpen, bet: slotBet, custom: slotCustom, amount: slotAmount };
+export const slot = {
+  open: slotOpen,
+  bet: slotBet,
+  custom: slotCustom,
+  amount: slotAmount,
+  tens: slotTens,
+  ten: slotTen,
+  tencustom: slotTenCustom,
+  tenamount: slotTenAmount,
+};
 
 /* ------------------------------------------------------------------ コイントス */
 
