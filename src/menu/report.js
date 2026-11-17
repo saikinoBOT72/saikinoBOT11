@@ -1,4 +1,4 @@
-import { canReport, getActivity, listActivities, reportStats } from '../lib/activities.js';
+import { getActivity, listActivities, reportGates, reportStats } from '../lib/activities.js';
 import { announceChannelFor, attemptReport, reportEmbed } from '../lib/reporting.js';
 import { coins, duration, truncate } from '../lib/format.js';
 import { describeDayStart } from '../lib/calendar.js';
@@ -29,8 +29,10 @@ export async function open(ix, _args, ctx, notice = null) {
 
   const lines = [];
   const options = [];
-  for (const activity of activities.slice(0, 25)) {
-    const gate = await canReport(ctx.db, ix.guildId, ix.userId, activity, ctx.calendar);
+  const shown = activities.slice(0, 25);
+  const gates = await reportGates(ctx.db, ix.guildId, ix.userId, shown, ctx.calendar);
+  for (const activity of shown) {
+    const gate = gates.get(activity.name);
     const limits = [];
     if (activity.cooldown_sec > 0) limits.push(`${duration(activity.cooldown_sec)}おき`);
     if (activity.daily_limit > 0) limits.push(`1日${activity.daily_limit}回`);

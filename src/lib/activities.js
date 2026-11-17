@@ -150,6 +150,45 @@ export async function claimReport(db, guildId, userId, activity, calendar, note 
   return results.at(-1).changes === 1;
 }
 
+/**
+ * 全アクションぶんの「報告できるか」をまとめて調べる。
+ * canReport をアクションごとに呼ぶと、画面を1つ出すのに 2×アクション数 回の問い合わせになる。
+ * ここでは「今日の回数」と「最後に報告した時刻」を1回ずつ、アクションごとにまとめて引く。
+ * @returns {Promise<Map<string, ReturnType<typeof canReport> extends Promise<infer T> ? T : never>>}
+ */
+export async function reportGates(db, guildId, userId, activities, calendar, now = Date.now()) {
+  const [todayRows, lastRows] = await Promise.all([
+    db.all(
+      `SELECT activity, COUNT(*) AS n FROM activity_logs
+        WHERE guild_id = ?1 AND user_id = ?2 AND created_at >= ?3 GROUP BY activity`,
+      guildId,
+      userId,
+      startOfToday(calendar, new Date(now)),
+    ),
+    db.all(
+      'SELECT activity, MAX(created_at) AS at FROM activity_logs WHERE guild_id = ?1 AND user_id = ?2 GROUP BY activity',
+      guildId,
+      userId,
+    ),
+  ]);
+  const today = new Map(todayRows.map((row) => [row.activity, row.n]));
+  const last = new Map(lastRows.map((row) => [row.activity, row.at]));
+
+  const gates = new Map();
+  for (const activity of activities) {
+    const count = today.get(activity.name) ?? 0;
+    const at = last.get(activity.name);
+    if (activity.daily_limit > 0 && count >= activity.daily_limit) {
+      gates.set(activity.name, { ok: false, reason: 'daily', limit: activity.daily_limit, count });
+    } else if (activity.cooldown_sec > 0 && at && at + activity.cooldown_sec * 1000 > now) {
+      gates.set(activity.name, { ok: false, reason: 'cooldown', retryAtMs: at + activity.cooldown_sec * 1000, count });
+    } else {
+      gates.set(activity.name, { ok: true, count });
+    }
+  }
+  return gates;
+}
+
 export async function logReport(db, guildId, userId, name, reward, note = null) {
   await db.run(
     'INSERT INTO activity_logs (guild_id, user_id, activity, reward, note, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)',

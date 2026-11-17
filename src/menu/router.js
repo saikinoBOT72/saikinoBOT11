@@ -12,6 +12,7 @@ import * as lottery from './lottery.js';
 import * as poll from './poll.js';
 import * as omikuji from './omikuji.js';
 import { MENU_PREFIX } from './common.js';
+import { deferUpdate } from '../discord/respond.js';
 import { gated, gatedAll } from './games.js';
 
 /**
@@ -59,13 +60,57 @@ export function findHandler(customId) {
   return handler ? { handler, args } : null;
 }
 
+/**
+ * 返事の前に Discord へ投稿したり問い合わせたりする、時間のかかる操作。
+ *
+ * Discord は3秒以内に返事が無いと「応答しませんでした」と出す。投稿先が混んでいると
+ * 間に合わないことがあるので、これらは先に「受け取った」とだけ返し、
+ * 終わってから画面を書き換える（15分の猶予がある）。
+ */
+export const SLOW_ACTIONS = new Set([
+  'admin:emoji', 'admin:panelch', 'admin:routeto', 'admin:logch', 'admin:prefgame', 'admin:preflive',
+  'poll:create',
+  'pk:go', 'pk:amount', 'pig:go', 'pig:amount', 'ch:go', 'ch:amount', 'yt:go', 'yt:amount', 'yt:solo',
+  'bj:go', 'bj:solo', 'rps:go', 'rps:amount', 'cc:go', 'cc:amount',
+  'rr:go', 'rr:amount', 'cs:go', 'cs:amount', 'mine:go', 'mine:amount', 'dd:go', 'dd:amount',
+]);
+
 export async function handleComponent(ix, ctx) {
   const found = findHandler(ix.customId);
   if (!found) {
     console.warn(`未知のメニュー操作: ${ix.customId}`);
     return home.open(ix, [], ctx, 'その操作は使えなくなっています。メニューを開き直しました。');
   }
+
+  const [, screen, action] = ix.customId.split(':');
+  const canDefer = ix.isComponent || (ix.isModalSubmit && ix.fromMessage);
+  if (ctx.deferSlow && canDefer && SLOW_ACTIONS.has(`${screen}:${action}`)) {
+    ctx.waitUntil(finishLater(ix, ctx, found));
+    return deferUpdate();
+  }
   return found.handler(ix, found.args, ctx);
+}
+
+/** 先に「受け取った」と返したあと、処理を済ませて画面を書き換える。 */
+async function finishLater(ix, ctx, found) {
+  const appId = ix.raw.application_id;
+  const token = ix.raw.token;
+  try {
+    const response = await found.handler(ix, found.args, ctx);
+    const body = await response.json();
+    if (body?.data && (body.type === 4 || body.type === 7)) {
+      await ctx.rest.editOriginalResponse(appId, token, body.data);
+    }
+  } catch (error) {
+    await ctx.reportError(ix.guildId, ix.customId.split(':').slice(0, 3).join(':'), error);
+    await ctx.rest
+      .editOriginalResponse(appId, token, {
+        content: '⚠️ 処理中にエラーが起きました。もう一度お試しください。続くようならサーバー管理者に伝えてください。',
+        embeds: [],
+        components: [],
+      })
+      .catch((inner) => console.error('エラーの表示に失敗:', inner));
+  }
 }
 
 export const openHome = home.open;

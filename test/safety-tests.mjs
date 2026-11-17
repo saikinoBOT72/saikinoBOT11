@@ -287,6 +287,28 @@ await test('管理用チャンネルへのお知らせは、同じエラーな�
   assert.equal(await recordError(ctx.db, GUILD, '場所', new Error('こわれた'), 1_000_000 + 31 * 60_000), 'log1', '30分たてばまた知らせる');
 });
 
+section('[時間のかかる操作]');
+
+await test('本番では、卓を立てるような遅い操作は先に「受け取った」と返し、あとで画面を書き換える', async () => {
+  const ctx = fresh();
+  ctx.deferSlow = true;
+  await eco.setBalance(ctx.db, GUILD, ME, 1000, 'test');
+  const response = await handleComponent(new Ix(rawInteraction({ customId: 'm:pig:go:100' })), ctx);
+  const body = await response.json();
+  assert.equal(body.type, 6, '先に受け取ったとだけ返す');
+  await ctx.settle();
+  const edited = ctx.edited.find((entry) => entry.channelId === '@original');
+  assert.ok(edited, 'あとで画面を書き換える');
+  assert.match(JSON.stringify(edited.payload), /卓を立てました/);
+});
+
+await test('すぐ終わる操作は、そのまま返す', async () => {
+  const ctx = fresh();
+  ctx.deferSlow = true;
+  const response = await handleComponent(new Ix(rawInteraction({ customId: 'm:home:open' })), ctx);
+  assert.equal((await response.json()).type, 7);
+});
+
 section('[版の表示]');
 
 await test('新しい版になったら、管理用チャンネルに一度だけ知らせる', async () => {

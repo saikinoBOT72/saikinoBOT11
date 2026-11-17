@@ -42,6 +42,7 @@ export default {
     const ctx = createContext(env, executionCtx);
     ctx.ix = ix;
 
+    const startedAt = Date.now();
     try {
       // 「1日」の区切りはサーバーごとに変えられるので、ここで合わせておく
       if (ix.guildId) ctx.calendar = await ctx.calendarFor(ix.guildId);
@@ -49,6 +50,10 @@ export default {
     } catch (error) {
       ctx.waitUntil(ctx.reportError(ix.guildId, placeOf(ix), error));
       return reply({ content: '⚠️ 処理中にエラーが起きました。もう一度お試しください。続くようならサーバー管理者に伝えてください。' });
+    } finally {
+      // 3秒を超えると「応答しませんでした」になる。近づいているものはログに残して、直す手がかりにする
+      const took = Date.now() - startedAt;
+      if (took > 1500) console.warn(`遅い応答: ${placeOf(ix)} ${took}ms`);
     }
   },
 

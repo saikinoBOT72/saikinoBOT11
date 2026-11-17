@@ -65,6 +65,9 @@ export function createContext(env, executionCtx) {
     /** いま応えている操作（押した人にあとから一言送るのに使う）。index.js が入れる。 */
     ix: null,
 
+    /** 時間のかかる操作は、先に「受け取った」と返してから済ませる（menu/router.js）。 */
+    deferSlow: true,
+
     /** 応答を返したあとで走らせる処理（チャンネルへの告知など）。 */
     waitUntil(promise) {
       if (executionCtx?.waitUntil) executionCtx.waitUntil(promise.catch((error) => console.error(error)));
