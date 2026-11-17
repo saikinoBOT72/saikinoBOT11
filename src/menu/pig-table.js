@@ -40,6 +40,7 @@ import { diceFaces } from '../lib/emoji.js';
 import { coins } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
+import { handleDisband, handleLeave, lobbyButtons } from './lobby.js';
 import { reply, update } from '../discord/respond.js';
 import { noteFor, stampDeadline } from './deadline.js';
 import { foldLater } from '../lib/guild-prefs.js';
@@ -96,6 +97,8 @@ export async function handleComponent(ix, ctx) {
   // 出目を出す操作のときだけ絵文字を読む
   const em = await ctx.emoji();
   if (action === 'start') return handleStart(ix, ctx, table, settings, em);
+  if (action === 'leave') return handleLeave(ix, ctx, table, { mutate, lobby: (t, s) => lobbyPayload(t, s, settings), refundReason: 'pig:refund' });
+  if (action === 'disband') return handleDisband(ix, ctx, table, { close, stateOf, refundReason: 'pig:refund' });
   if (action === 'roll') return handleRoll(ix, ctx, table, settings, em);
   if (action === 'hold') return handleHold(ix, ctx, table, settings, em);
   return reply({ content: '不明な操作です。' });
@@ -231,6 +234,7 @@ function lobbyPayloadBody(table, state, settings) {
           style: ButtonStyle.PRIMARY,
           disabled: state.players.length < MIN_PLAYERS,
         }),
+        ...lobbyButtons('pg', table.id),
       ),
     ],
   };

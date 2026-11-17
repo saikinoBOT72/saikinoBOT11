@@ -7,7 +7,7 @@
 import { deposit, withdraw } from './economy.js';
 import { DECKS, MAX_PLAYERS, dealerShouldHit, isBlackjack, outcome, payout } from './blackjack.js';
 import { draw, newDeck } from './cards.js';
-import { createTableStore } from './card-table.js';
+import { createTableStore, keptSeat } from './card-table.js';
 
 /** 参加を待つ時間と、席についてからの持ち時間。 */
 export const JOIN_TIMEOUT_MS = 120_000;
@@ -58,6 +58,8 @@ export async function joinTable(db, table, userId) {
     );
     return { ok: false, reason: 'insufficient' };
   }
+  // 払っているあいだに「抜ける」「解散」が割り込んでいたら、払ったぶんを返す
+  if (!(await keptSeat(db, table, userId, { getTable, stateOf, refundReason: 'blackjack:refund' }))) return { ok: false, reason: 'closed' };
   return claimed;
 }
 

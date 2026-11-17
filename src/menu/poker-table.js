@@ -57,6 +57,7 @@ import { getBalance, getSettings } from '../lib/economy.js';
 import { coins } from '../lib/format.js';
 import { button, embed, modal, row, textInput } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
+import { handleDisband, handleLeave, lobbyButtons } from './lobby.js';
 import { deferUpdate, modalResponse, reply, update } from '../discord/respond.js';
 import { readText } from './common.js';
 import { noteFor, stampDeadline } from './deadline.js';
@@ -114,6 +115,8 @@ export async function handleComponent(ix, ctx) {
   // Discord の3秒の制限に余裕を持たせるため
   if (action === 'join') return handleJoin(ix, ctx, table, settings);
   if (action === 'start') return handleStart(ix, ctx, table, settings);
+  if (action === 'leave') return handleLeave(ix, ctx, table, { mutate, lobby: (t, s) => lobbyPayload(t, s, settings), refundReason: 'poker:refund' });
+  if (action === 'disband') return handleDisband(ix, ctx, table, { close, stateOf, refundReason: 'poker:refund' });
   if (action === 'hand') return handleHand(ix, ctx, table, settings, await ctx.emoji());
   if (action === 'keep') return handleKeep(ix, ctx, table, Number(arg), settings, await ctx.emoji());
   if (action === 'swap') return handleSwap(ix, ctx, table, settings, await ctx.emoji());
@@ -686,6 +689,7 @@ function lobbyPayloadBody(table, state, settings) {
           style: ButtonStyle.PRIMARY,
           disabled: state.players.length < MIN_PLAYERS,
         }),
+        ...lobbyButtons('pk', table.id),
       ),
     ],
   };

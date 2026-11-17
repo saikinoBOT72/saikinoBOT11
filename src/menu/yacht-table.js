@@ -45,6 +45,7 @@ import { getSettings } from '../lib/economy.js';
 import { coins } from '../lib/format.js';
 import { button, embed, row, stringSelect } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
+import { handleDisband, handleLeave, lobbyButtons } from './lobby.js';
 import { reply, update } from '../discord/respond.js';
 import { diceFaces } from '../lib/emoji.js';
 import { noteFor, stampDeadline } from './deadline.js';
@@ -159,6 +160,8 @@ export async function handleComponent(ix, ctx) {
   const settings = await getSettings(ctx.db, table.guild_id);
   if (action === 'join') return handleJoin(ix, ctx, table, settings);
   if (action === 'start') return handleStart(ix, ctx, table, settings);
+  if (action === 'leave') return handleLeave(ix, ctx, table, { mutate, lobby: (t, s) => lobbyPayload(t, s, settings), refundReason: 'yacht:refund' });
+  if (action === 'disband') return handleDisband(ix, ctx, table, { close, stateOf, refundReason: 'yacht:refund' });
 
   const em = await ctx.emoji();
   if (action === 'card') return handleCard(ix, table, em);
@@ -526,6 +529,7 @@ function lobbyPayloadBody(table, state, settings) {
           style: ButtonStyle.PRIMARY,
           disabled: state.players.length < neededPlayers(table),
         }),
+        ...lobbyButtons('yt', table.id),
       ),
     ],
   };

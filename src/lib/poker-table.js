@@ -23,7 +23,7 @@
 import { deposit, withdraw } from './economy.js';
 import { draw, newDeck, sortHand } from './cards.js';
 import { bestOf, evaluate } from './poker.js';
-import { createTableStore } from './card-table.js';
+import { createTableStore, keptSeat } from './card-table.js';
 
 export const MIN_PLAYERS = 2;
 export const MAX_PLAYERS = 4;
@@ -101,6 +101,8 @@ export async function joinTable(db, table, userId) {
     );
     return { ok: false, reason: 'insufficient' };
   }
+  // 払っているあいだに「抜ける」「解散」が割り込んでいたら、払ったぶんを返す
+  if (!(await keptSeat(db, table, userId, { getTable, stateOf, refundReason: 'poker:refund' }))) return { ok: false, reason: 'closed' };
   return claimed;
 }
 

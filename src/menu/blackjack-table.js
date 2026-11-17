@@ -32,6 +32,7 @@ import { getSettings, withdraw } from '../lib/economy.js';
 import { coins } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
+import { handleDisband, handleLeave, lobbyButtons } from './lobby.js';
 import { reply, update } from '../discord/respond.js';
 import { rematchButton } from './rematch.js';
 import { noteFor, stampDeadline } from './deadline.js';
@@ -133,6 +134,8 @@ export async function handleComponent(ix, ctx) {
 
   if (action === 'join') return handleJoin(ix, ctx, table, settings, em);
   if (action === 'start') return handleStart(ix, ctx, table, settings, em);
+  if (action === 'leave') return handleLeave(ix, ctx, table, { mutate, lobby: (t, s) => lobbyPayload(t, s, settings, em), refundReason: 'blackjack:refund' });
+  if (action === 'disband') return handleDisband(ix, ctx, table, { close, stateOf, refundReason: 'blackjack:refund' });
   if (action === 'hit' || action === 'stand' || action === 'double') {
     return handleMove(ix, ctx, table, action, settings, em);
   }
@@ -375,6 +378,7 @@ function lobbyPayloadBody(table, state, settings, em) {
       row(
         button(`bj:join:${table.id}`, '座る', { emoji: '🪑', style: ButtonStyle.SUCCESS }),
         button(`bj:start:${table.id}`, '始める（卓主）', { emoji: '▶️', style: ButtonStyle.PRIMARY }),
+        ...lobbyButtons('bj', table.id),
       ),
     ],
   };
