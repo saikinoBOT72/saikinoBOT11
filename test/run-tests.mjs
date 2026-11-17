@@ -2082,6 +2082,30 @@ await test('日曜19時に宝くじを抽選して発表する', async () => {
   assert.equal(cronCtx.sent.length, 0, '同じ回は一度だけ');
 });
 
+await test('日曜19時台に止まっていた週の宝くじは、あとから追いかけて抽選する', async () => {
+  const cronCtx = cronContext();
+  await lottery.setChannel(db, 'lot-late', 'chan-late');
+  await eco.setBalance(db, 'lot-late', 'l1', 1000, 'test');
+  await lottery.buyTicket(db, 'lot-late', '2026-09-20', 'l1', 7);
+  const carry = (await lottery.getLottery(db, 'lot-late')).carryover;
+
+  // 9/20 の19時台は動かず、翌月曜の朝に初めて見回りが動いた
+  await cron.drawLotteries(cronCtx, new Date('2026-09-21T08:00:00+09:00'));
+  const late = cronCtx.sent.filter((entry) => entry.channelId === 'chan-late');
+  assert.equal(late.length, 1, '遅れて1回だけ引く');
+  assert.match(JSON.stringify(late[0].payload), /遅れて抽選/);
+  const drawn = (await lottery.recentDraws(db, 'lot-late', 1))[0];
+  assert.equal(drawn.draw_key, '2026-09-20');
+  assert.equal(drawn.pool, lottery.TICKET_PRICE);
+
+  const after = await lottery.getLottery(db, 'lot-late');
+  assert.equal(after.carryover, drawn.winner_id ? lottery.SEED_POOL : carry + lottery.TICKET_PRICE, '持ち越しも正しく動く');
+
+  cronCtx.sent.length = 0;
+  await cron.drawLotteries(cronCtx, new Date('2026-09-21T08:01:00+09:00'));
+  assert.equal(cronCtx.sent.filter((entry) => entry.channelId === 'chan-late').length, 0, '二度は引かない');
+});
+
 await test('1つの定期処理がこけても、残りは動く', async () => {
   const cronCtx = cronContext();
   cronCtx.db = {

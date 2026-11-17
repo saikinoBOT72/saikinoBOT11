@@ -23,6 +23,12 @@ export async function open(ix, _args, ctx, notice = null) {
             { name: '報告の記録', value: `${data.reports} 件`, inline: true },
             { name: '出品', value: `${data.items} 件`, inline: true },
             { name: '購入履歴', value: `${data.purchases} 件`, inline: true },
+            { name: '連続記録', value: `${data.streaks} 件`, inline: true },
+            { name: '称号', value: `${data.titles} 件`, inline: true },
+            { name: 'おみくじ', value: `${data.omikuji} 件`, inline: true },
+            { name: '宝くじの券', value: `${data.lottery} 件`, inline: true },
+            { name: '予想大会', value: `${data.polls} 件`, inline: true },
+            { name: '勝負の記録', value: `${data.games} 件`, inline: true },
           ],
           footer: { text: 'いつでも自分で全部消せます' },
         }),
@@ -45,8 +51,12 @@ export async function confirm(ix, _args, ctx) {
         color: 0xe74c3c,
         title: '本当に削除しますか？',
         description:
-          '**所持金・報告の記録・出品・購入履歴がすべて消えます。元には戻せません。**\n\n' +
+          '**所持金・記録・連続記録・称号・出品・購入履歴・宝くじの券など、このサーバーでのあなたのデータがすべて消えます。元には戻せません。**\n\n' +
           `いま消えるもの: 所持金 ${data.balance}／記録 ${data.ledger + data.reports} 件／出品 ${data.items} 件\n\n` +
+          '・進行中の1対1の勝負は中止して、相手に預かりを返します\n' +
+          '・あなたが立てた予想大会は中止して、全員に返します\n' +
+          '・参加中の卓（ポーカーなど）があるときは、終わってからもう一度押してください\n' +
+          '・チャンネルにすでに流れたメッセージは消えません（気になるものはサーバー管理者に相談してください）\n\n' +
           '削除後にまた遊ぶと、新しく初期残高から始まります。',
       }),
     ],
@@ -60,7 +70,11 @@ export async function confirm(ix, _args, ctx) {
 }
 
 export async function purge(ix, _args, ctx) {
-  const removed = await deleteUserData(ctx.db, ix.guildId, ix.userId);
+  const outcome = await deleteUserData(ctx.db, ix.guildId, ix.userId);
+  if (outcome.blocked) {
+    return open(ix, [], ctx, '参加中の卓（ポーカー・ヨットなど）があります。終わってから（長くても15分ほど）もう一度削除してください。');
+  }
+  const removed = outcome.before;
 
   return show(ix, {
     embeds: [

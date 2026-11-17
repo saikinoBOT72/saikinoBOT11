@@ -37,10 +37,9 @@ import {
   drawLottery,
   formatNumber,
   isDrawTime,
-  poolOf,
+  missedDraws,
 } from './lib/lottery.js';
 import { embed } from './discord/builders.js';
-import { EMOJI as em } from './lib/emoji.js';
 
 /** 定期処理の一覧。増えたらここに足す。 */
 export const STEPS = [
@@ -281,37 +280,46 @@ export async function postDueAnnouncements(ctx) {
   if (due.length > 0) console.log(`${due.length} 件の発表を処理しました`);
 }
 
-/** 毎週日曜の夜、宝くじを抽選して発表する。 */
+/**
+ * 毎週日曜の夜、宝くじを抽選して発表する。
+ * あわせて、引きそびれた回（その時間に Bot が止まっていた等）があれば、古い順に追いかけて引く。
+ */
 export async function drawLotteries(ctx, now = new Date()) {
-  if (!isDrawTime(ctx.calendar, now)) return;
+  const onTime = isDrawTime(ctx.calendar, now);
+  const today = dateKey(ctx.calendar, now);
 
-  const drawKey = dateKey(ctx.calendar, now);
   for (const lottery of await activeLotteries(ctx.db)) {
-    try {
-      const before = await poolOf(ctx.db, lottery.guild_id, drawKey);
-      const result = await drawLottery(ctx.db, lottery, drawKey);
-      if (!result) continue; // すでに引いてある
+    const keys = await missedDraws(ctx.db, lottery.guild_id, ctx.calendar, now);
+    if (onTime && !keys.includes(today)) keys.push(today);
 
-      const settings = await ctx.settings(lottery.guild_id);
-      await ctx.rest.createMessage(lottery.channel_id, {
-        content: result.winnerId ? `<@${result.winnerId}>` : '',
-        embeds: [lotteryEmbed(result, before, settings, em)],
-        allowed_mentions: { users: result.winnerId ? [result.winnerId] : [] },
-      });
-    } catch (error) {
-      console.error(`宝くじの抽選に失敗 (${lottery.guild_id}):`, error);
+    for (const drawKey of keys) {
+      try {
+        const result = await drawLottery(ctx.db, lottery, drawKey);
+        if (!result) continue; // すでに引いてある
+
+        const settings = await ctx.settings(lottery.guild_id);
+        const late = drawKey !== today || !onTime;
+        await ctx.rest.createMessage(lottery.channel_id, {
+          content: result.winnerId ? `<@${result.winnerId}>` : '',
+          embeds: [lotteryEmbed(result, settings, late ? drawKey : null)],
+          allowed_mentions: { users: result.winnerId ? [result.winnerId] : [] },
+        });
+      } catch (error) {
+        console.error('宝くじの抽選に失敗:', error);
+      }
     }
   }
 }
 
-function lotteryEmbed(result, before, settings, em) {
+function lotteryEmbed(result, settings, lateKey = null) {
+  const late = lateKey ? `⏰ ${lateKey} の回を、遅れて抽選しました。\n` : '';
   const number = formatNumber(result.number);
   if (result.winnerId) {
     return embed({
       color: 0xf1c40f,
       title: `🎉 ${number} — 当選者あり！`,
       description:
-        `# ${number}\n` +
+        `${late}# ${number}\n` +
         `**<@${result.winnerId}> が当てました！**\n` +
         `${settings.currency_emoji} **${result.prize.toLocaleString('ja-JP')}** ${settings.currency_name} を総取りです。`,
       fields: [
@@ -327,7 +335,7 @@ function lotteryEmbed(result, before, settings, em) {
     color: 0x16a085,
     title: result.tickets > 0 ? `${number} — 当たりなし、来週へ持ち越し` : `${number} — 今回は売れませんでした`,
     description:
-      `# ${number}\n` +
+      `${late}# ${number}\n` +
       (result.tickets > 0
         ? '当たった人はいませんでした。売上はまるごと**来週に持ち越し**です。'
         : '今回は1枚も売れませんでした。'),

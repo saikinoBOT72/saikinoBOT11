@@ -281,16 +281,27 @@ export async function pickFreeNumbers(db, guildId, drawKey, count) {
  * @returns {Promise<null | {number, winnerId, prize, pool, carryover, tickets}>}
  */
 export async function drawLottery(db, lottery, drawKey, number = drawNumber()) {
-  // 「この回はもう引いた」を先に立てる。取れなければ誰かが引いている
+  // 「この回はもう引いた」を先に立てる。抽選の記録（回ごとに1行）を先に作れた1つだけが引く。
+  // 回ごとに印が付くので、遅れて昔の回を引いても、ほかの回の印を上書きしない
   const claimed = await db.run(
-    'UPDATE lottery SET last_draw_key = ?2 WHERE guild_id = ?1 AND (last_draw_key IS NULL OR last_draw_key != ?2)',
+    `INSERT OR IGNORE INTO lottery_draws (guild_id, draw_key, number, winner_id, prize, pool, carryover, tickets, created_at)
+     VALUES (?1, ?2, ?3, NULL, 0, 0, 0, 0, ?4)`,
+    lottery.guild_id,
+    drawKey,
+    number,
+    Date.now(),
+  );
+  if (claimed.changes !== 1) return null;
+  await db.run(
+    'UPDATE lottery SET last_draw_key = ?2 WHERE guild_id = ?1 AND (last_draw_key IS NULL OR last_draw_key < ?2)',
     lottery.guild_id,
     drawKey,
   );
-  if (claimed.changes !== 1) return null;
 
+  // 持ち越しは、いま読み直した値を使う（追いかけて何回ぶんか続けて引くときにずれないように）
+  const fresh = (await getLottery(db, lottery.guild_id)) ?? lottery;
   const { tickets, pool } = await poolOf(db, lottery.guild_id, drawKey);
-  const carryover = lottery.carryover;
+  const carryover = fresh.carryover;
   const hit = await db.get(
     'SELECT * FROM lottery_tickets WHERE guild_id = ?1 AND draw_key = ?2 AND number = ?3',
     lottery.guild_id,
@@ -302,26 +313,40 @@ export async function drawLottery(db, lottery, drawKey, number = drawNumber()) {
   if (hit) {
     await deposit(db, lottery.guild_id, hit.user_id, prize, 'lottery:win', `${drawKey} ${formatNumber(number)}`);
     // 払い出したら、また元金から積み直す
-    await db.run('UPDATE lottery SET carryover = ?2 WHERE guild_id = ?1', lottery.guild_id, seedPoolOf(lottery));
+    await db.run('UPDATE lottery SET carryover = ?2 WHERE guild_id = ?1', lottery.guild_id, seedPoolOf(fresh));
   } else {
     await db.run('UPDATE lottery SET carryover = ?2 WHERE guild_id = ?1', lottery.guild_id, carryover + pool);
   }
 
   await db.run(
-    `INSERT OR REPLACE INTO lottery_draws (guild_id, draw_key, number, winner_id, prize, pool, carryover, tickets, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+    `UPDATE lottery_draws SET winner_id = ?3, prize = ?4, pool = ?5, carryover = ?6, tickets = ?7
+      WHERE guild_id = ?1 AND draw_key = ?2`,
     lottery.guild_id,
     drawKey,
-    number,
     hit?.user_id ?? null,
     prize,
     pool,
     carryover,
     tickets,
-    Date.now(),
   );
 
   return { number, winnerId: hit?.user_id ?? null, prize, pool, carryover, tickets };
+}
+
+/**
+ * 引きそびれた回。抽選の時刻が過ぎたのに、券が売れたまま引かれていない回を古い順に。
+ * 日曜19時台に Bot が止まっていた・発表チャンネルを後から決めた、などで起きる。
+ */
+export async function missedDraws(db, guildId, calendar, now = new Date()) {
+  const rows = await db.all(
+    `SELECT DISTINCT t.draw_key FROM lottery_tickets t
+      WHERE t.guild_id = ?1 AND t.draw_key < ?2
+        AND NOT EXISTS (SELECT 1 FROM lottery_draws d WHERE d.guild_id = t.guild_id AND d.draw_key = t.draw_key)
+      ORDER BY t.draw_key ASC LIMIT 5`,
+    guildId,
+    drawKeyFor(calendar, now),
+  );
+  return rows.map((row) => row.draw_key);
 }
 
 /** 直近の抽選結果。 */

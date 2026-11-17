@@ -2060,10 +2060,19 @@ await test('あいこが続いた末の返金も一度だけ', async () => {
 
 section('[自分のデータ]');
 
+/** ほかのテストで座ったままの卓を片付ける（本番なら時間切れで閉じる）。 */
+async function closeLeftoverTables() {
+  for (const table of ['blackjack_tables', 'poker_tables', 'pig_tables', 'chohan_tables', 'yacht_tables']) {
+    await db.run(`UPDATE ${table} SET status = 'cancelled' WHERE status IN ('joining', 'playing')`);
+  }
+}
+
 await test('保存されている内容を本人が確認できる', async () => {
   const payload = await press('m:privacy:open');
   const fields = firstEmbed(payload).fields.map((field) => field.name);
-  assert.deepEqual(fields, ['所持金', 'コインの増減記録', '報告の記録', '出品', '購入履歴']);
+  for (const name of ['所持金', 'コインの増減記録', '報告の記録', '出品', '購入履歴', '連続記録', '称号', 'おみくじ', '宝くじの券']) {
+    assert.ok(fields.includes(name), `${name} が出ていない`);
+  }
   assertAllButtonsWork(payload, '自分のデータ');
 });
 
@@ -2079,6 +2088,7 @@ await test('削除すると自分の記録が消え、他人の記録は残る',
   await eco.setBalance(db, GUILD, OTHER, 100, 'test');
   await shop.purchase(db, GUILD, sellItem.id, OTHER);
 
+  await closeLeftoverTables();
   await press('m:privacy:purge');
 
   assert.equal(await db.get('SELECT * FROM balances WHERE guild_id = ?1 AND user_id = ?2', GUILD, ME), null);
@@ -2103,10 +2113,57 @@ await test('進行中のじゃんけんがあれば相手に返金してから�
   await pressRps(`rps:accept:${match.id}`, { userId: OTHER });
   assert.equal(await eco.getBalance(db, GUILD, OTHER), 300, '賭け金を預けた状態');
 
+  await closeLeftoverTables();
   await press('m:privacy:purge');
 
   assert.equal(await eco.getBalance(db, GUILD, OTHER), 500, '相手には返金される');
   assert.equal(await db.get('SELECT * FROM rps_matches WHERE id = ?1', match.id), null);
+});
+
+await test('連続記録・称号・おみくじ・宝くじ・予想大会の賭けも消える', async () => {
+  const streakLib2 = await import(src('lib/streak.js'));
+  const omikujiLib = await import(src('lib/omikuji.js'));
+  const lotteryLib2 = await import(src('lib/lottery.js'));
+  await eco.setBalance(db, GUILD, ME, 5000, 'test');
+  await streakLib2.touchStreak(db, GUILD, ME, '筋トレ', ctx.calendar);
+  await omikujiLib.drawToday(db, GUILD, ME, ctx.calendar);
+  await lotteryLib2.buyTicket(db, GUILD, '2099-01-04', ME, 321);
+  const ach = await achLib.createAchievement(db, GUILD, { name: '消える称号', condition_type: 'balance', threshold: 1 });
+  await achLib.evaluate(db, { guildId: GUILD, userId: ME, calendar: ctx.calendar });
+  await achLib.equipTitle(db, GUILD, ME, ach.id);
+
+  await closeLeftoverTables();
+  await press('m:privacy:purge');
+  for (const table of ['streaks', 'omikuji_draws', 'lottery_tickets', 'user_achievements', 'profiles']) {
+    const left = await db.get(`SELECT COUNT(*) AS n FROM ${table} WHERE guild_id = ?1 AND user_id = ?2`, GUILD, ME);
+    assert.equal(left.n, 0, `${table} に残っている`);
+  }
+});
+
+await test('参加中の卓があると消さずに、終わってからと案内する', async () => {
+  await eco.setBalance(db, GUILD, ME, 5000, 'test');
+  await press('m:pk:go:100', { userId: ME });
+  const before = await eco.getBalance(db, GUILD, ME);
+  const payload = await press('m:privacy:purge');
+  assert.match(screenText(payload), /終わってから/);
+  assert.equal(await eco.getBalance(db, GUILD, ME), before, '何も消えていない');
+  // 卓が終わったあとなら消せる
+  await db.run("UPDATE poker_tables SET status = 'cancelled' WHERE host_id = ?1", ME);
+  await press('m:privacy:purge');
+  assert.equal(await db.get('SELECT * FROM balances WHERE guild_id = ?1 AND user_id = ?2', GUILD, ME), null);
+});
+
+await test('ユーザーIDを持つ列は、どれも削除の対象になっている', async () => {
+  // テーブルや列を足したときに、削除の漏れが出ないように機械的に見張る
+  const fs = await import('node:fs');
+  const privacySource = fs.readFileSync(new URL('../src/lib/privacy.js', import.meta.url), 'utf8');
+  const tables = await db.all("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'");
+  const ID_COLUMNS = /^(user_id|seller_id|buyer_id|owner_id|host_id|challenger_id|opponent_id|winner_id)$/;
+  for (const { name } of tables) {
+    const columns = (await db.all(`PRAGMA table_info(${name})`)).map((column) => column.name);
+    if (!columns.some((column) => ID_COLUMNS.test(column))) continue;
+    assert.match(privacySource, new RegExp(`\\b${name}\\b`), `${name} はユーザーIDを持つのに、削除で触っていない`);
+  }
 });
 
 await test('削除後にまた遊ぶと初期残高から始まる', async () => {
