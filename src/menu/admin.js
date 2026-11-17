@@ -387,6 +387,18 @@ export async function streakdel(ix, args, ctx) {
   if (!ix.isAdmin) return denied(ix, ctx);
   const activity = args.join(':');
   const fromDays = Number(ix.values[0]);
+  return confirmScreen(ix, {
+    title: `🔥 ${truncate(activity, 40)} の「${fromDays}日目から」の設定を削除しますか？`,
+    description: 'その日数に届いた人に、この段階のボーナスが出なくなります。',
+    ok: id('admin', 'streakdelok', String(fromDays), activity),
+    back: id('admin', 'streakview', activity),
+  });
+}
+
+export async function streakdelok(ix, [rawFrom, ...rest], ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const activity = rest.join(':');
+  const fromDays = Number(rawFrom);
   await removeStreakReward(ctx.db, ix.guildId, activity, fromDays);
   return streakview(ix, [activity], ctx, `${fromDays}日目からの設定を削除しました`);
 }
@@ -630,10 +642,45 @@ export async function achout(ix, _args, ctx) {
   });
 }
 
+/** 削除の前に確かめる。持っている人の記録ごと消えるため。 */
 export async function achdel(ix, _args, ctx) {
   if (!ix.isAdmin) return denied(ix, ctx);
-  await removeAchievement(ctx.db, ix.guildId, Number(ix.values[0]));
+  const target = (await listAchievements(ctx.db, ix.guildId)).find((item) => item.id === Number(ix.values[0]));
+  if (!target) return ach(ix, [], ctx, 'その称号は見つかりませんでした。');
+  const holders = (
+    await ctx.db.get(
+      'SELECT COUNT(*) AS n FROM user_achievements WHERE guild_id = ?1 AND achievement_id = ?2',
+      ix.guildId,
+      target.id,
+    )
+  ).n;
+  return confirmScreen(ix, {
+    title: `🏅 称号「${truncate(target.name, 60)}」を削除しますか？`,
+    description:
+      (holders > 0 ? `**${holders}人**が持っています。削除すると、その人たちの獲得記録も消え、名前の横の表示も外れます。\n` : '') +
+      '元に戻すことはできません。',
+    ok: id('admin', 'achdelok', String(target.id)),
+    back: id('admin', 'ach'),
+  });
+}
+
+export async function achdelok(ix, [rawId], ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  await removeAchievement(ctx.db, ix.guildId, Number(rawId));
   return ach(ix, [], ctx, '称号を削除しました');
+}
+
+/** 消す前の確認画面（管理メニュー共通）。 */
+function confirmScreen(ix, { title, description, ok, back }) {
+  return show(ix, {
+    embeds: [embed({ color: COLORS.stop, title, description })],
+    components: [
+      row(
+        button(ok, '削除する', { emoji: '🗑️', style: ButtonStyle.DANGER }),
+        button(back, 'やめる', { emoji: '↩️' }),
+      ),
+    ],
+  });
 }
 
 /* ------------------------------------------------------------------ アクション管理 */
@@ -815,6 +862,20 @@ async function saveActivity(ix, ctx, previousName) {
 }
 
 export async function actdel(ix, args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const name = args.join(':');
+  if (!(await getActivity(ctx.db, ix.guildId, name))) return acts(ix, [], ctx, 'そのアクションは見つかりませんでした。');
+  return confirmScreen(ix, {
+    title: `📋 「${truncate(name, 60)}」を削除しますか？`,
+    description:
+      'メニューと報告パネルから消え、もう報告できなくなります。このアクションの連日ボーナスの設定も消えます。\n' +
+      'これまでの報告の記録とコインはそのまま残ります。',
+    ok: id('admin', 'actdelok', name),
+    back: id('admin', 'actview', name),
+  });
+}
+
+export async function actdelok(ix, args, ctx) {
   if (!ix.isAdmin) return denied(ix, ctx);
   const name = args.join(':');
   await removeActivity(ctx.db, ix.guildId, name);
@@ -1770,6 +1831,7 @@ export const actions = {
   streaknew,
   streaksave,
   streakdel,
+  streakdelok,
   ach,
   achnew,
   achtype,
@@ -1778,6 +1840,7 @@ export const actions = {
   achbulksave,
   achout,
   achdel,
+  achdelok,
   acts,
   actpick,
   actview,
@@ -1786,6 +1849,7 @@ export const actions = {
   actsave,
   actsave2,
   actdel,
+  actdelok,
   preset,
   bal,
   baluser,

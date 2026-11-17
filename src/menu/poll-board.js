@@ -1,6 +1,7 @@
 import {
   addBonus,
   betOf,
+  betsOf,
   cancelPoll,
   closePoll,
   getPollById,
@@ -23,13 +24,14 @@ const LETTERS = ['🇦', '🇧', '🇨', '🇩', '🇪', '🇫', '🇬', '🇭',
 
 /** お題の掲示板。参加状況が一目で分かるようにする。 */
 export async function boardPayload(db, poll, settings) {
-  const [options, counts] = await Promise.all([optionsOf(db, poll.id), tally(db, poll.id)]);
+  const [options, counts, bets] = await Promise.all([optionsOf(db, poll.id), tally(db, poll.id), betsOf(db, poll.id)]);
 
+  // 誰が何に賭けたかも出す（出題者が正解を決めるので、身内の信頼のために見えるようにしておく）
   const lines = options.map((option) => {
     const stat = counts.byOption.get(option.idx);
     const detail = stat ? `${stat.count}人 / ${settings.currency_emoji}${stat.total}` : 'まだ誰もいません';
     const mark = poll.answer === option.idx ? '　✅ **正解**' : '';
-    return `${LETTERS[option.idx]} **${option.label}** — ${detail}${mark}`;
+    return `${LETTERS[option.idx]} **${option.label}** — ${detail}${mark}${whoBet(bets, option.idx)}`;
   });
 
   const open = poll.status === 'open';
@@ -71,6 +73,16 @@ export async function boardPayload(db, poll, settings) {
     ],
     components: open ? openButtons(poll, options) : closedButtons(poll),
   };
+}
+
+/** その選択肢に賭けた人の一覧（多いときは先頭だけ）。 */
+function whoBet(bets, optionIdx) {
+  const mine = bets.filter((bet) => bet.option_idx === optionIdx).sort((a, b) => b.amount - a.amount);
+  if (mine.length === 0) return '';
+  const SHOWN = 6;
+  const names = mine.slice(0, SHOWN).map((bet) => `<@${bet.user_id}> ${bet.amount.toLocaleString('ja-JP')}`);
+  const rest = mine.length > SHOWN ? `　ほか${mine.length - SHOWN}人` : '';
+  return `\n　${names.join('・')}${rest}`;
 }
 
 /** 選択肢のボタンは1行5つまで。10個まで置けるので2行に折り返す。 */
@@ -142,7 +154,8 @@ export async function handleComponent(ix, ctx) {
   if (action === 'cancel') return handleCancel(ix, ctx, poll);
   if (action === 'cancelok') return handleCancelOk(ix, ctx, poll);
   if (action === 'answer') return handleAnswer(ix, ctx, poll);
-  if (action === 'settle') return handleSettle(ix, ctx, poll);
+  if (action === 'pick') return handlePick(ix, ctx, poll);
+  if (action === 'settle') return handleSettle(ix, ctx, poll, rawOption);
   if (action === 'again') return handleNotifyPick(ix, poll);
   if (action === 'notify') return handleNotify(ix, ctx, poll, rawOption);
   if (action === 'more') return handleAgain(ix);
@@ -413,42 +426,78 @@ function readAmount(ix) {
   return Number(normalized);
 }
 
+/**
+ * 正解を決める。
+ *
+ * みんなの掲示板を選択画面に書き換えると、ほかの人からは掲示板が消えたように見え、
+ * 出題者が選ぶのをやめると元に戻せない。なので出題者にだけ見えるメッセージで選ばせる。
+ * 選んだあと「この選択肢で確定」を押すまでは山分けしない（押し間違いで確定しないように）。
+ */
 async function handleAnswer(ix, ctx, poll) {
   if (ix.userId !== poll.owner_id) return reply({ content: '正解を決められるのは出題者だけです。' });
-  if (poll.status === 'settled') return reply({ content: 'この予想大会はもう終わっています。' });
+  if (poll.status === 'settled' || poll.status === 'cancelled') return reply({ content: 'この予想大会はもう終わっています。' });
+  return reply(await answerPayload(ctx, poll));
+}
 
+async function answerPayload(ctx, poll, chosen = null) {
   const options = await optionsOf(ctx.db, poll.id);
-  return update({
+  const picked = chosen === null ? null : options[chosen];
+  return {
     embeds: [
       embed({
         color: 0x9b59b6,
         title: `🗳️ ${truncate(poll.question, 100)}`,
-        description: '**正解はどれですか？** 選ぶとすぐに山分けされます。',
+        description: picked
+          ? `正解は **${LETTERS[picked.idx]} ${picked.label}** でよいですか？\n` +
+            '**確定するとすぐに山分けされ、取り消せません。**'
+          : '**正解はどれですか？** 選んだあと、もう一度確かめてから確定します。',
       }),
     ],
     components: [
       stringSelect(
-        `pl:settle:${poll.id}`,
-        '正解の選択肢を選ぶ',
+        `pl:pick:${poll.id}`,
+        picked ? '選び直す' : '正解の選択肢を選ぶ',
         options.map((option) => ({
           label: truncate(option.label, 100),
           value: String(option.idx),
           emoji: LETTERS[option.idx],
         })),
       ),
-    ],
-  });
+      picked
+        ? row(
+            button(`pl:settle:${poll.id}:${picked.idx}`, 'この選択肢で確定', { emoji: '✅', style: ButtonStyle.SUCCESS }),
+          )
+        : null,
+    ].filter(Boolean),
+  };
 }
 
-async function handleSettle(ix, ctx, poll) {
+async function handlePick(ix, ctx, poll) {
   if (ix.userId !== poll.owner_id) return reply({ content: '正解を決められるのは出題者だけです。' });
-  const answerIdx = Number(ix.values[0]);
+  if (poll.status === 'settled' || poll.status === 'cancelled') return reply({ content: 'この予想大会はもう終わっています。' });
+  return update(await answerPayload(ctx, poll, Number(ix.values[0])));
+}
+
+async function handleSettle(ix, ctx, poll, rawOption) {
+  if (ix.userId !== poll.owner_id) return reply({ content: '正解を決められるのは出題者だけです。' });
+  const answerIdx = Number(rawOption ?? ix.values[0]);
   const settings = await getSettings(ctx.db, poll.guild_id);
   const options = await optionsOf(ctx.db, poll.id);
+  if (!options[answerIdx]) return reply({ content: 'その選択肢はありません。' });
+
   const result = await settlePoll(ctx.db, poll, answerIdx);
   if (!result.settled) return reply({ content: 'この予想大会はもう終わっています。' });
 
-  return update(resultPayload(poll, options, answerIdx, result, settings));
+  // 押されたのは出題者だけのメッセージ。みんなの掲示板は別に結果へ書き換える
+  const payload = resultPayload(poll, options, answerIdx, result, settings);
+  if (poll.message_id) {
+    ctx.waitUntil(
+      ctx.rest
+        .editMessage(poll.channel_id, poll.message_id, { ...payload, allowed_mentions: { parse: [] } })
+        .catch((error) => console.error('予想大会の結果表示に失敗:', error)),
+    );
+  }
+  return update(payload);
 }
 
 /** 結果発表。 */

@@ -225,8 +225,11 @@ export async function buy(ix, [rawId], ctx) {
   }
 
   const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
+  // 出品者にだけ通知を鳴らす（名前を本文に書かないと、allowed_mentions に入れても鳴らない）
   ctx.announce(ix.channelId, {
-    content: `🧾 <@${ix.userId}> が **${truncate(item.name, 60)}** を ${coins(item.price, settings)} で購入しました。`,
+    content:
+      `🧾 <@${ix.userId}> が **${truncate(item.name, 60)}** を ${coins(item.price, settings)} で購入しました。` +
+      `\n出品者: <@${item.seller_id}>`,
     allowed_mentions: { users: [item.seller_id] },
   });
 
@@ -636,7 +639,34 @@ export async function owned(ix, args, ctx, notice = null) {
   });
 }
 
+/** 使う前に確かめる。使うとチャンネルに流れて、取り消せないため。 */
 export async function use(ix, [rawId], ctx) {
+  const itemId = Number(rawId);
+  const entry = await ownedItem(ctx.db, ix.guildId, ix.userId, itemId);
+  if (!entry || !isConsumable(entry.kind) || entry.usable <= 0) {
+    return owned(ix, [String(itemId)], ctx, '使えるものがありませんでした。');
+  }
+  return show(ix, {
+    embeds: [
+      embed({
+        color: 0x9b59b6,
+        title: `✨ ${truncate(entry.name, 80)} を使いますか？`,
+        description:
+          `使うと1つ減り（あと ${entry.usable - 1} 個）、**チャンネルに「使いました」と流れます**。\n` +
+          '出品者にも通知が届きます。使ったあとで取り消すことはできません。',
+        thumbnail: entry.image_url ?? undefined,
+      }),
+    ],
+    components: [
+      row(
+        button(id('shop', 'useok', String(itemId)), '使う', { emoji: '✨', style: ButtonStyle.SUCCESS }),
+        button(id('shop', 'owned', String(itemId)), 'やめる', { emoji: '↩️' }),
+      ),
+    ],
+  });
+}
+
+export async function useok(ix, [rawId], ctx) {
   const itemId = Number(rawId);
   const used = await useItem(ctx.db, ix.guildId, ix.userId, itemId);
   if (!used) return owned(ix, [String(itemId)], ctx, '使えるものがありませんでした。');
@@ -646,7 +676,9 @@ export async function use(ix, [rawId], ctx) {
   if (item?.seller_id) fields.push({ name: '出品者', value: `<@${item.seller_id}>`, inline: true });
   if (item?.description) fields.push({ name: '説明', value: truncate(item.description, 400) });
 
+  // embed の中のメンションは通知が鳴らないので、出品者は本文に書く
   ctx.announce(ix.channelId, {
+    content: item?.seller_id && item.seller_id !== 'deleted' ? `<@${item.seller_id}> さん、出番です` : '',
     embeds: [
       embed({
         color: 0x9b59b6,
@@ -676,6 +708,7 @@ export const actions = {
   kind,
   owned,
   use,
+  useok,
   mine,
   manage,
   manage2,

@@ -639,6 +639,25 @@ await test('正解を決められるのも出題者だけ', async () => {
   const picker = await pressPoll(`pl:answer:${globalThis.__pollId}`, { userId: ME });
   const options = picker.data.components[0].components[0].options;
   assert.equal(options.length, 3);
+  assert.equal(picker.type, 4, 'みんなの掲示板は書き換えず、出題者にだけ出す');
+  assert.equal(picker.data.flags, 64);
+});
+
+await test('正解を選んだだけでは確定せず、確定ボタンを押してはじめて山分けされる', async () => {
+  const pollId = globalThis.__pollId;
+  const confirm = await pressPoll(`pl:pick:${pollId}`, { userId: ME, values: ['1'] });
+  assert.match(screenText(confirm), /取り消せません/);
+  assert.ok(customIds(confirm).includes(`pl:settle:${pollId}:1`), '確定ボタンが出る');
+  assert.equal((await pollLib.getPollById(db, pollId)).status, 'closed', 'まだ確定していない');
+
+  const denied = await pressPoll(`pl:pick:${pollId}`, { userId: OTHER, values: ['0'] });
+  assert.match(screenText(denied), /出題者だけ/);
+});
+
+await test('掲示板に、誰がどれにいくら賭けたかが出る', async () => {
+  const poll = await pollLib.getPollById(db, globalThis.__pollId);
+  const board = await (await import(src('menu/poll-board.js'))).boardPayload(db, poll, await ctx.settings(GUILD));
+  assert.match(board.embeds[0].description, new RegExp(`<@${OTHER}> 500`));
 });
 
 await test('正解を選ぶと山分けされ、コインの総量は変わらない', async () => {
@@ -1648,7 +1667,10 @@ await test('使い切りは買うと持ち物から使えて、みんなに知�
   assert.ok(customIds(detail).includes(`m:shop:use:${listed.id}`));
 
   const sentBefore = ctx.sent.length;
-  const afterUse = await press(`m:shop:use:${listed.id}`, { userId: OTHER });
+  const asking = await press(`m:shop:use:${listed.id}`, { userId: OTHER });
+  assert.match(screenText(asking), /取り消す/, '使う前に確かめる');
+  assert.equal(ctx.sent.length, sentBefore, '確かめる段階ではまだ流さない');
+  const afterUse = await press(`m:shop:useok:${listed.id}`, { userId: OTHER });
   assert.equal(ctx.sent.length, sentBefore + 1, '使用のお知らせが1件');
   const announced = ctx.sent.at(-1).payload.embeds[0];
   assert.match(announced.title, /肩たたき券/);
@@ -1667,13 +1689,13 @@ await test('使い切りは買うと持ち物から使えて、みんなに知�
 
 await test('使い切ると使うボタンが押せなくなる', async () => {
   const itemId = globalThis.__consumableId;
-  await press(`m:shop:use:${itemId}`, { userId: OTHER });
+  await press(`m:shop:useok:${itemId}`, { userId: OTHER });
   const payload = await press('m:shop:owned', { userId: OTHER, values: [String(itemId)] });
   const useButton = payload.data.components[0].components.find((c) => c.custom_id === `m:shop:use:${itemId}`);
   assert.equal(useButton.disabled, true);
 
   const sentBefore = ctx.sent.length;
-  const again = await press(`m:shop:use:${itemId}`, { userId: OTHER });
+  const again = await press(`m:shop:useok:${itemId}`, { userId: OTHER });
   assert.equal(ctx.sent.length, sentBefore, '無いものは使えないので知らせない');
   assert.match(firstEmbed(again).description, /使えるものがありません/);
 });
@@ -1882,8 +1904,11 @@ await test('フォームからアクションを追加・改名できる', async
   assert.equal((await act.getActivity(db, GUILD, '大掃除')).reward, 99);
 });
 
-await test('アクションを削除できる', async () => {
-  await press('m:admin:actdel:大掃除', { admin: true });
+await test('アクションを削除できる（確かめてから）', async () => {
+  const asking = await press('m:admin:actdel:大掃除', { admin: true });
+  assert.ok(customIds(asking).includes('m:admin:actdelok:大掃除'));
+  assert.ok(await act.getActivity(db, GUILD, '大掃除'), '確かめる段階ではまだ消えない');
+  await press('m:admin:actdelok:大掃除', { admin: true });
   assert.equal(await act.getActivity(db, GUILD, '大掃除'), null);
 });
 
@@ -2200,10 +2225,13 @@ await test('権限が無ければボーナスを作れない', async () => {
   assert.equal((await streakLib.listStreakRewards(db, GUILD, '筋トレ')).some((r) => r.from_days === 99), false);
 });
 
-await test('選ぶと削除できる', async () => {
-  await press('m:admin:streakdel:筋トレ', { admin: true, values: ['3'] });
+await test('選んで、確かめてから削除できる', async () => {
+  const asking = await press('m:admin:streakdel:筋トレ', { admin: true, values: ['3'] });
+  assert.ok(customIds(asking).includes('m:admin:streakdelok:3:筋トレ'));
+  assert.equal((await streakLib.listStreakRewards(db, GUILD, '筋トレ')).some((r) => r.from_days === 3), true, 'まだ消えない');
+  await press('m:admin:streakdelok:3:筋トレ', { admin: true });
   assert.equal((await streakLib.listStreakRewards(db, GUILD, '筋トレ')).some((r) => r.from_days === 3), false);
-  await press('m:admin:streakdel:筋トレ', { admin: true, values: ['14'] });
+  await press('m:admin:streakdelok:14:筋トレ', { admin: true });
   assert.equal((await streakLib.listStreakRewards(db, GUILD, '筋トレ')).length, 0);
 });
 
