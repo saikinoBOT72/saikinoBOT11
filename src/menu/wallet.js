@@ -55,6 +55,7 @@ export async function open(ix, _args, ctx, notice = null) {
       ),
       row(
         button(id('wallet', 'stats'), '戦績', { emoji: '📊' }),
+        button(id('profile', 'open'), 'プロフィール', { emoji: '👤' }),
         button(id('titles', 'open'), '称号・連続記録', { emoji: '🏅' }),
         button(id('privacy', 'open'), '自分のデータ', { emoji: '🔐' }),
       ),

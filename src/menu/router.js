@@ -11,6 +11,7 @@ import * as doors from './doors.js';
 import * as lottery from './lottery.js';
 import * as poll from './poll.js';
 import * as omikuji from './omikuji.js';
+import * as profile from './profile.js';
 import { MENU_PREFIX } from './common.js';
 import { deferUpdate } from '../discord/respond.js';
 import { gated, gatedAll } from './games.js';
@@ -36,6 +37,7 @@ export const screens = {
   admin: withCrumb('🏠 › ⚙️ 管理', admin.actions),
   privacy: privacy.actions,
   titles: titles.actions,
+  profile: profile.actions,
   hl: gated('hl', foldRules('hl', highlow.actions)),
   poll: gated('poll', poll.actions),
   doors: doors.actions,

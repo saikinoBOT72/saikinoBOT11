@@ -2414,6 +2414,27 @@ await test('1対1の勝ち負けが記録され、お財布の「戦績」に相
   assertAllButtonsWork(stats, '戦績');
 });
 
+await test('プロフィールはほかの人も見られ、本人が「見せない」にすると中身が隠れる', async () => {
+  const mine = await press('m:profile:open');
+  assert.match(firstEmbed(mine).title, /プロフィール/);
+  assert.ok(firstEmbed(mine).fields.some((field) => field.name === '所持金'));
+  assertAllButtonsWork(mine, 'プロフィール');
+
+  const seen = await press('m:profile:pick', { userId: OTHER, values: [ME] });
+  assert.ok(firstEmbed(seen).fields.some((field) => field.name === '所持金'), 'ほかの人から見える');
+  assert.ok(!customIds(seen).includes('m:profile:hide'), 'ほかの人の画面に切り替えボタンは出さない');
+
+  const hidden = await press('m:profile:hide');
+  assert.match(screenText(hidden), /見せない/);
+  const blocked = await press('m:profile:pick', { userId: OTHER, values: [ME] });
+  assert.match(firstEmbed(blocked).description, /見せない設定/);
+  assert.equal(firstEmbed(blocked).fields, undefined, '中身は出さない');
+  assert.ok(firstEmbed(await press('m:profile:open')).fields, '本人には見える');
+
+  await press('m:profile:hide');
+  assert.ok(firstEmbed(await press('m:profile:pick', { userId: OTHER, values: [ME] })).fields, '戻すとまた見える');
+});
+
 section('[自分のデータ]');
 
 /** ほかのテストで座ったままの卓を片付ける（本番なら時間切れで閉じる）。 */
