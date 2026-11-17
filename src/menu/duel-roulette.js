@@ -12,6 +12,7 @@ import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
 import { rematchButton } from './rematch.js';
 import { EMOJI as em } from '../lib/emoji.js';
+import { foldLater } from '../lib/guild-prefs.js';
 
 export const key = 'rr';
 export const title = 'ロシアンルーレット';
@@ -63,10 +64,12 @@ export async function handle(ix, ctx, { duel, role, state, action }) {
     if (!(await finishDuel(ctx.db, duel, next))) return reply({ content: 'この勝負はもう終わっています。' });
     const winner = otherRole(role);
     const { pot } = await settleDuel(ctx.db, duel, winner);
+    const final = resultPayload(duel, next, settings, winner, pot);
     ctx.animate(ix, [
       { after: 900, payload: pullFrame(duel, state, ix.userId, '…') },
-      { after: 1100, payload: resultPayload(duel, next, settings, winner, pot) },
+      { after: 1100, payload: final },
     ]);
+    ctx.waitUntil(foldLater(ctx, duel, final, `${em[emojiSlot]} ${title}`));
     return update(pullFrame(duel, state, ix.userId, ''));
   }
 

@@ -24,6 +24,7 @@ import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
 import { rematchButton } from './rematch.js';
 import { EMOJI as em } from '../lib/emoji.js';
+import { foldLater } from '../lib/guild-prefs.js';
 
 export const key = 'doors';
 export const title = '運命の扉';
@@ -116,7 +117,9 @@ async function handleDoor(ix, ctx, duel, choice, settings) {
 
   if (!hit) {
     // 掛け金は預かったまま没収（誰にも返さない）
-    frames.push({ after: 1000, payload: lostPayload(duel, opened.state, settings) });
+    const final = lostPayload(duel, opened.state, settings);
+    frames.push({ after: 1000, payload: final });
+    ctx.waitUntil(foldLater(ctx, duel, final, `${em[emojiSlot]} ${title}`));
     ctx.animate(ix, frames);
     return update(openingFrame(duel, ix.userId, choice));
   }
@@ -186,7 +189,9 @@ async function handleShare(ix, ctx, duel, role, choice, settings) {
   if (!(await finishDuel(ctx.db, chosen.duel, state))) return reply({ content: 'この勝負はもう終わっています。' });
   await payDuel(ctx.db, duel, { challenger: share.challenger, opponent: share.opponent }, 'doors:win');
 
-  return update(resultPayload(duel, state, share, prize, settings));
+  const final = resultPayload(duel, state, share, prize, settings);
+  ctx.waitUntil(foldLater(ctx, duel, final, `${em[emojiSlot]} ${title}`));
+  return update(final);
 }
 
 async function refreshBoard(ctx, duel, state, settings) {

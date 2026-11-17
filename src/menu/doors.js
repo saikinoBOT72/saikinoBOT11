@@ -15,6 +15,7 @@ import {
   payout,
 } from '../lib/doors.js';
 import { createSoloStore } from '../lib/solo-session.js';
+import { goLive } from '../lib/guild-prefs.js';
 import { modal, textInput } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import {
@@ -180,6 +181,14 @@ export async function pick(ix, [choice], ctx) {
 
   if (!hit) {
     if (!(await store.lose(ctx.db, game))) return stale(ix, ctx);
+    goLive(ctx, ix, settings, {
+      net: -game.bet,
+      embed: embed({
+        color: 0x95a5a6,
+        title: `${em.doors} 運命の扉で大負け`,
+        description: `<@${ix.userId}> が ${game.steps}枚目の先で外して **-${game.bet.toLocaleString('ja-JP')}**`,
+      }),
+    });
     const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
     ctx.animate(ix, [
       {
@@ -230,14 +239,14 @@ export async function pick(ix, [choice], ctx) {
         },
       },
     ]);
-    ctx.announce(ix.channelId, {
-      embeds: [
-        embed({
-          color: 0xf1c40f,
-          title: `${em.doors} 運命の扉を踏破！`,
-          description: `<@${ix.userId}> が **${steps}枚（×${multiplier}）** を突破！ ${coins(won, settings)} を持ち帰りました。`,
-        }),
-      ],
+    goLive(ctx, ix, settings, {
+      net: won - game.bet,
+      force: true,
+      embed: embed({
+        color: 0xf1c40f,
+        title: `${em.doors} 運命の扉を踏破！`,
+        description: `<@${ix.userId}> が **${steps}枚（×${multiplier}）** を突破！ ${coins(won, settings)} を持ち帰りました。`,
+      }),
     });
     return show(ix, { ...opening, components: [] });
   }
@@ -287,6 +296,14 @@ export async function stop(ix, _args, ctx) {
   // 払い戻しと片付けは1つの処理。別の端末で先に持ち帰っていたら、ここでは何も払わない
   if (!(await store.cashOut(ctx.db, game, won, 'doors:win', `×${game.multiplier}`))) return stale(ix, ctx);
   const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
+  goLive(ctx, ix, settings, {
+    net: won - game.bet,
+    embed: embed({
+      color: 0xf1c40f,
+      title: `${em.doors} 運命の扉で大勝ち`,
+      description: `<@${ix.userId}> が **${game.steps}枚（×${game.multiplier}）** で持ち帰って **+${(won - game.bet).toLocaleString('ja-JP')}**`,
+    }),
+  });
 
   return show(ix, {
     content: `${em.hit}${em.doors}`,

@@ -19,6 +19,7 @@ import { reply, update } from '../discord/respond.js';
 import { handleRematch, rematchButton } from './rematch.js';
 import { diceFaces } from '../lib/emoji.js';
 import { rollDie } from '../lib/random.js';
+import { foldLater } from '../lib/guild-prefs.js';
 
 /** 公開メッセージのボタンは `cc:` 始まり。 */
 export const namespace = 'cc';
@@ -175,7 +176,9 @@ async function handleRoll(ix, ctx, match) {
 
   // 両者が振り終えていれば決着、まだなら手番を渡す
   if (updated.challenger_dice && updated.opponent_dice) {
-    frames.push({ after: 900, payload: await resolveMatch(ctx, updated, settings, faces) });
+    const final = await resolveMatch(ctx, updated, settings, faces);
+    frames.push({ after: 900, payload: final });
+    ctx.waitUntil(foldLater(ctx, updated, final, '🎲 チンチロ'));
   } else {
     const nextId = updated.turn === 'challenger' ? updated.challenger_id : updated.opponent_id;
     frames.push({

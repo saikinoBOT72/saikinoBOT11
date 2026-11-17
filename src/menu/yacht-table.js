@@ -47,6 +47,7 @@ import { button, embed, row, stringSelect } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
 import { diceFaces } from '../lib/emoji.js';
+import { foldLater } from '../lib/guild-prefs.js';
 
 /** 公開メッセージのボタンは `yt:` 始まり。 */
 export const namespace = 'yt';
@@ -96,7 +97,18 @@ export async function openTable(ctx, { guildId, channelId, hostId, bet, settings
  * 人を待つ必要がないので、掲示は最初から「記入中」の形で出す
  * （募集中の画面が一瞬ちらつかないように、立てて・座って・始めてから出す）。
  */
-export async function startSolo(ctx, { guildId, channelId, userId, settings }) {
+/** 本人が進めている途中のひとり練習（自分の画面だけで遊んでいるときの「続きから」用）。 */
+export async function activeSolo(db, guildId, userId) {
+  return db.get(
+    `SELECT id FROM yacht_tables
+      WHERE guild_id = ?1 AND host_id = ?2 AND bet = 0 AND status = 'playing'
+      ORDER BY created_at DESC LIMIT 1`,
+    guildId,
+    userId,
+  );
+}
+
+export async function startSolo(ctx, { guildId, channelId, userId, settings, privately = false }) {
   const id = crypto.randomUUID();
   await createTable(ctx.db, { id, guildId, channelId, hostId: userId, bet: 0 });
 
@@ -114,12 +126,15 @@ export async function startSolo(ctx, { guildId, channelId, userId, settings }) {
     return { ok: false, reason: 'start' };
   }
 
-  try {
-    await postBoard(ctx, id, boardPayload(started.table, started.state, settings));
-  } catch (error) {
-    console.error('ヨットのひとり練習の投稿に失敗:', error);
-    await setStatus(ctx.db, id, 'cancelled');
-    return { ok: false, reason: 'post' };
+  // 自分の画面だけで進める設定なら、掲示は出さない（続きは 🎲 ヨット の「続きから」で開ける）
+  if (!privately) {
+    try {
+      await postBoard(ctx, id, boardPayload(started.table, started.state, settings));
+    } catch (error) {
+      console.error('ヨットのひとり練習の投稿に失敗:', error);
+      await setStatus(ctx.db, id, 'cancelled');
+      return { ok: false, reason: 'post' };
+    }
   }
 
   const table = await getTable(ctx.db, id);
@@ -290,6 +305,7 @@ async function finish(ctx, table, state, settings) {
         .editMessage(table.channel_id, table.message_id, payload)
         .catch((error) => console.error('ヨットの結果表示に失敗:', error)),
     );
+    ctx.waitUntil(foldLater(ctx, table, payload, '🎲 ヨット'));
   }
   // ひとり練習は自分しかいないので、結果をそのまま手元にも出す
   return update(table.bet > 0 ? finishedPayload(result) : payload);

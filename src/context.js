@@ -34,6 +34,17 @@ export function createContext(env, executionCtx) {
       return settingsCache.get(guildId);
     },
 
+    /**
+     * そのサーバーの「1日」の数え方。管理メニューで区切りを決めていればそれ、
+     * 決めていなければ wrangler.jsonc の DAY_START_HOUR。
+     */
+    async calendarFor(guildId) {
+      if (!guildId) return this.calendar;
+      const settings = await this.settings(guildId);
+      if (settings?.day_start_hour == null) return this.calendar;
+      return { ...this.calendar, dayStartHour: clampHour(settings.day_start_hour) };
+    },
+
     forgetSettings(guildId) {
       settingsCache.delete(guildId);
     },

@@ -87,19 +87,27 @@ export async function cyclePeriodMode(db, guildId, id) {
  * いま発表すべきものを探す。
  * 1分ごとに呼ばれるので、時が一致していてその日まだ出していないものを対象にする。
  */
-export async function dueAnnouncements(db, calendar, now = new Date()) {
-  // 「何時に出すか」は時計どおり。「その日もう出したか」は区切りに合わせた日付で見る
-  const today = dateKey(calendar, now);
-  const hour = currentHour(calendar, now);
-  const weekday = new Date(`${today}T00:00:00Z`).getUTCDay();
+/**
+ * いま発表すべきものを探す。
+ * 「何時に出すか」は時計どおり。「その日もう出したか」は、そのサーバーの区切りに合わせた日付で見る。
+ * calendarOf はサーバーごとの数え方を返す（区切りはサーバーごとに変えられるため）。
+ * @returns {Promise<Array<object & {today: string, calendar: object}>>}
+ */
+export async function dueAnnouncements(db, calendarOf, now = new Date()) {
+  const lookup = typeof calendarOf === 'function' ? calendarOf : async () => calendarOf;
+  const anyCalendar = await lookup(null);
+  const hour = currentHour(anyCalendar, now);
 
-  const rows = await db.all(
-    `SELECT * FROM announcements
-      WHERE enabled = 1 AND hour = ?1 AND (last_run_date IS NULL OR last_run_date != ?2)`,
-    hour,
-    today,
-  );
-  return rows.filter((row) => row.frequency === 'daily' || row.weekday === weekday);
+  const rows = await db.all('SELECT * FROM announcements WHERE enabled = 1 AND hour = ?1', hour);
+  const due = [];
+  for (const row of rows) {
+    const calendar = await lookup(row.guild_id);
+    const today = dateKey(calendar, now);
+    if (row.last_run_date === today) continue;
+    const weekday = new Date(`${today}T00:00:00Z`).getUTCDay();
+    if (row.frequency === 'daily' || row.weekday === weekday) due.push({ ...row, today, calendar });
+  }
+  return due;
 }
 
 export async function markAnnounced(db, id, dateString) {

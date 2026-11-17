@@ -32,6 +32,7 @@ import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
 import { diceFaces } from '../lib/emoji.js';
+import { foldLater } from '../lib/guild-prefs.js';
 
 /** 公開メッセージのボタンは `ch:` 始まり。 */
 export const namespace = 'ch';
@@ -108,7 +109,9 @@ async function handleOpen(ix, ctx, table, settings, em) {
   if (opened.kind === 'late') return reply({ content: 'もう開いています。' });
 
   if (opened.kind === 'unmatched') return update(unmatchedPayload(table));
-  return update(resultPayload(opened.table, opened.state, opened, settings, em));
+  const final = resultPayload(opened.table, opened.state, opened, settings, em);
+  ctx.waitUntil(foldLater(ctx, opened.table, final, '🏺 丁半'));
+  return update(final);
 }
 
 /** 掲示を、いまの張り具合で描き直す。 */

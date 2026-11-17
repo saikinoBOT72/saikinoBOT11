@@ -75,6 +75,7 @@ import {
 } from './common.js';
 import { open as openHome } from './home.js';
 import { reasonLabel } from '../lib/ledger-reasons.js';
+import { clampHour } from '../lib/calendar.js';
 import { clearErrors, recentErrors } from '../lib/error-report.js';
 
 /** 管理操作は毎回権限を確かめる。権限が無ければホームに戻す。 */
@@ -115,7 +116,7 @@ export async function open(ix, _args, ctx, notice = null) {
       row(
         button(id('admin', 'ann'), '定期発表', { emoji: '📢', style: ButtonStyle.PRIMARY }),
         button(id('admin', 'bal'), '残高を調整', { emoji: '💰' }),
-        button(id('admin', 'cfg'), '通貨の設定', { emoji: '⚙️' }),
+        button(id('admin', 'prefs'), 'Botの設定', { emoji: '🛠️' }),
       ),
       row(
         button(id('admin', 'lot'), '宝くじ', { emoji: '🎫' }),
@@ -1029,10 +1030,10 @@ export async function cfgsave(ix, _args, ctx) {
   const minBet = readInt(ix, 'min_bet', { min: 1 });
   const maxBet = readInt(ix, 'max_bet', { min: 0 });
   for (const value of [starting, minBet, maxBet]) {
-    if (isError(value)) return open(ix, [], ctx, value.error);
+    if (isError(value)) return prefs(ix, [], ctx, value.error);
   }
   if (maxBet !== null && minBet !== null && maxBet > 0 && maxBet < minBet) {
-    return open(ix, [], ctx, '最高賭け金は最低賭け金以上にしてください。');
+    return prefs(ix, [], ctx, '最高賭け金は最低賭け金以上にしてください。');
   }
 
   await updateSettings(ctx.db, ix.guildId, {
@@ -1043,7 +1044,7 @@ export async function cfgsave(ix, _args, ctx) {
     max_bet: maxBet,
   });
   ctx.forgetSettings(ix.guildId);
-  return open(ix, [], ctx, '設定を保存しました');
+  return prefs(ix, [], ctx, '設定を保存しました');
 }
 
 
@@ -1691,6 +1692,190 @@ export async function emoji(ix, [rawPage], ctx) {
   });
 }
 
+/* ------------------------------------------------------------------ Botの設定 */
+
+const onOff = (value) => (value ? '🟢 オン' : '⚪ オフ');
+
+/**
+ * これまで設定ファイルの書き換えとデプロイが必要だったものを、ここで変えられるようにする。
+ * 通貨の名前や賭け金の上限（入力フォーム）も、ここから開ける。
+ */
+export async function prefs(ix, _args, ctx, notice = null) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const settings = await ctx.settings(ix.guildId);
+  const fileHour = clampHour(ctx.env?.DAY_START_HOUR ?? 0);
+  const hour = settings.day_start_hour ?? null;
+
+  return show(ix, {
+    embeds: [
+      withNotice(
+        embed({
+          color: COLORS.admin,
+          title: '🛠️ Botの設定',
+          description: '下のリストとボタンで、その場で変えられます（デプロイは要りません）。',
+          fields: [
+            {
+              name: '🕓 1日の区切り',
+              value: hour === null ? `${fileHour}:00（設定ファイルどおり）` : `${hour}:00`,
+              inline: true,
+            },
+            {
+              name: '🎲 卓や挑戦状を出す場所',
+              value: settings.game_channel_id ? `<#${settings.game_channel_id}>` : '押した場所',
+              inline: true,
+            },
+            {
+              name: '📣 実況を出す場所',
+              value: settings.live_channel_id ? `<#${settings.live_channel_id}>` : '遊んだ場所',
+              inline: true,
+            },
+            {
+              name: '🎙️ 実況の基準',
+              value:
+                settings.live_threshold > 0
+                  ? `${settings.currency_emoji}${settings.live_threshold.toLocaleString('ja-JP')} 以上の勝ち負け`
+                  : '実況しない（大当たりだけ）',
+              inline: true,
+            },
+            { name: '👤 1人用は自分の画面だけ', value: onOff(settings.solo_private), inline: true },
+            { name: '🧺 終わった卓を畳む', value: onOff(settings.fold_finished), inline: true },
+            {
+              name: 'それぞれの意味',
+              value:
+                '**1人用は自分の画面だけ** … 1人で遊ぶブラックジャックとヨットの練習を、チャンネルに出さずに進めます\n' +
+                '**終わった卓を畳む** … 決着から5分たった卓や勝負の掲示を、結果の1行に縮めます（チャンネルが流れにくくなります）\n' +
+                '**実況** … 1人で遊ぶゲーム（スロット・ハイ&ローなど）の大きな勝ち負けを、みんなに知らせます',
+            },
+          ],
+        }),
+        notice,
+      ),
+    ],
+    components: [
+      stringSelect(id('admin', 'prefhour'), '1日の区切りを選ぶ', [
+        { label: `設定ファイルどおり（${fileHour}:00）`, value: 'file', description: 'wrangler.jsonc の DAY_START_HOUR' },
+        ...Array.from({ length: 24 }, (_, value) => ({
+          label: `${value}:00 で日付が変わる`,
+          value: String(value),
+          description: value === 0 ? 'ふつうの日付どおり' : `${value}:00〜翌${(value + 23) % 24}:59 が同じ日`,
+        })),
+      ]),
+      channelSelect(id('admin', 'prefgame'), '卓や挑戦状を出すチャンネルを選ぶ'),
+      channelSelect(id('admin', 'preflive'), '実況を出すチャンネルを選ぶ'),
+      row(
+        button(id('admin', 'prefsolo'), `1人用を自分だけに：${settings.solo_private ? 'オン' : 'オフ'}`, { emoji: '👤' }),
+        button(id('admin', 'preffold'), `終わった卓を畳む：${settings.fold_finished ? 'オン' : 'オフ'}`, { emoji: '🧺' }),
+        button(id('admin', 'preflivemin'), '実況の基準', { emoji: '🎙️' }),
+      ),
+      row(
+        button(id('admin', 'cfg'), '通貨と賭け金', { emoji: '🪙' }),
+        settings.game_channel_id || settings.live_channel_id
+          ? button(id('admin', 'prefreset'), '場所の指定を外す', { emoji: '↩️' })
+          : null,
+        backButton('admin'),
+      ),
+    ],
+  });
+}
+
+export async function prefhour(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const value = ix.values[0];
+  const hour = value === 'file' ? null : clampHour(value);
+  await ctx.db.run('UPDATE guild_settings SET day_start_hour = ?2 WHERE guild_id = ?1', ix.guildId, hour);
+  ctx.forgetSettings(ix.guildId);
+  return prefs(
+    ix,
+    [],
+    ctx,
+    hour === null
+      ? '1日の区切りを設定ファイルどおりに戻しました'
+      : `1日の区切りを ${hour}:00 にしました。連続記録は途切れません（深夜0時〜区切りの間の変更は避けてください）`,
+  );
+}
+
+/** 選んだチャンネルに書けるかを、案内を1つ投稿して確かめる。 */
+async function tryPost(ctx, channelId, title, description) {
+  try {
+    await ctx.rest.createMessage(channelId, {
+      embeds: [embed({ color: COLORS.admin, title, description })],
+      allowed_mentions: { parse: [] },
+    });
+    return true;
+  } catch (error) {
+    console.error('チャンネルに投稿できませんでした:', error);
+    return false;
+  }
+}
+
+export async function prefgame(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const channelId = ix.values[0];
+  if (!(await tryPost(ctx, channelId, '🎲 ゲームの場所になりました', '卓や挑戦状は、これからここに出ます。'))) {
+    return prefs(ix, [], ctx, `<#${channelId}> に投稿できませんでした。Bot が書き込めるか確認してください。`);
+  }
+  await updateSettings(ctx.db, ix.guildId, { game_channel_id: channelId });
+  ctx.forgetSettings(ix.guildId);
+  return prefs(ix, [], ctx, `卓や挑戦状を <#${channelId}> に出すようにしました`);
+}
+
+export async function preflive(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const channelId = ix.values[0];
+  if (!(await tryPost(ctx, channelId, '📣 実況の場所になりました', '大きな勝ち負けは、これからここに出ます。'))) {
+    return prefs(ix, [], ctx, `<#${channelId}> に投稿できませんでした。Bot が書き込めるか確認してください。`);
+  }
+  await updateSettings(ctx.db, ix.guildId, { live_channel_id: channelId });
+  ctx.forgetSettings(ix.guildId);
+  return prefs(ix, [], ctx, `実況を <#${channelId}> に出すようにしました`);
+}
+
+export async function prefreset(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  await ctx.db.run('UPDATE guild_settings SET game_channel_id = NULL, live_channel_id = NULL WHERE guild_id = ?1', ix.guildId);
+  ctx.forgetSettings(ix.guildId);
+  return prefs(ix, [], ctx, '場所の指定を外しました（押した場所・遊んだ場所に出します）');
+}
+
+export async function prefsolo(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  await ctx.db.run('UPDATE guild_settings SET solo_private = 1 - solo_private WHERE guild_id = ?1', ix.guildId);
+  ctx.forgetSettings(ix.guildId);
+  const settings = await ctx.settings(ix.guildId);
+  return prefs(ix, [], ctx, settings.solo_private ? '1人用は自分の画面だけで進めるようにしました' : '1人用もチャンネルに出すようにしました');
+}
+
+export async function preffold(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  await ctx.db.run('UPDATE guild_settings SET fold_finished = 1 - fold_finished WHERE guild_id = ?1', ix.guildId);
+  ctx.forgetSettings(ix.guildId);
+  const settings = await ctx.settings(ix.guildId);
+  return prefs(ix, [], ctx, settings.fold_finished ? '終わった卓を5分後に畳むようにしました' : '終わった卓を畳むのをやめました');
+}
+
+export async function preflivemin(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const settings = await ctx.settings(ix.guildId);
+  return openModal(
+    modal(id('admin', 'preflivesave'), '実況の基準', [
+      textInput('threshold', 'この額以上の勝ち負けを実況（0で実況しない）', {
+        value: String(settings.live_threshold ?? 0),
+        placeholder: '例: 1000',
+        max: 12,
+      }),
+    ]),
+  );
+}
+
+export async function preflivesave(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const threshold = readInt(ix, 'threshold', { min: 0, fallback: 0 });
+  if (isError(threshold)) return prefs(ix, [], ctx, threshold.error);
+  await updateSettings(ctx.db, ix.guildId, { live_threshold: threshold });
+  ctx.forgetSettings(ix.guildId);
+  return prefs(ix, [], ctx, threshold > 0 ? `${threshold.toLocaleString('ja-JP')} 以上の勝ち負けを実況するようにしました` : '実況をやめました（大当たりは出します）');
+}
+
 /* ------------------------------------------------------------------ 管理用チャンネル */
 
 /**
@@ -1885,6 +2070,15 @@ export async function lottoggle(ix, _args, ctx) {
 
 export const actions = {
   open,
+  prefs,
+  prefhour,
+  prefgame,
+  preflive,
+  prefreset,
+  prefsolo,
+  preffold,
+  preflivemin,
+  preflivesave,
   log,
   logch,
   logoff,

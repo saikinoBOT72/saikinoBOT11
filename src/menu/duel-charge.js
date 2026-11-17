@@ -10,6 +10,7 @@ import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
 import { rematchButton } from './rematch.js';
 import { EMOJI as em } from '../lib/emoji.js';
+import { foldLater } from '../lib/guild-prefs.js';
 
 export const key = 'cs';
 export const title = 'チャージ＆シュート';
@@ -100,7 +101,9 @@ async function resolveRound(ix, ctx, duel, state, settings) {
     const next = { ...state, hp: round.hp, energy: round.energy, choice: { challenger: null, opponent: null }, log };
     if (!(await finishDuel(ctx.db, duel, next))) return reply({ content: 'この勝負はもう終わっています。' });
     const { pot } = await settleDuel(ctx.db, duel, winner);
-    ctx.animate(ix, [{ after: 1000, payload: resultPayload(duel, entry, next, settings, winner, pot) }]);
+    const final = resultPayload(duel, entry, next, settings, winner, pot);
+    ctx.animate(ix, [{ after: 1000, payload: final }]);
+    ctx.waitUntil(foldLater(ctx, duel, final, `${em[emojiSlot]} ${title}`));
     return update(revealFrame(duel, entry));
   }
 

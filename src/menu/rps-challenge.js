@@ -18,6 +18,7 @@ import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
 import { handleRematch, rematchButton } from './rematch.js';
+import { foldLater } from '../lib/guild-prefs.js';
 
 /** 公開メッセージのボタンは `rps:` 始まり（メニューの `m:` とは別系統）。 */
 export const namespace = 'rps';
@@ -166,7 +167,7 @@ export async function resolveMatch(ctx, match) {
     if (match.round >= MAX_DRAWS) {
       if (!(await finishMatch(ctx.db, match.id))) return alreadyResolved();
       await refund(ctx.db, match);
-      return update({
+      return finalUpdate(ctx, match, {
         content: handsArt,
         embeds: [
           embed({
@@ -198,7 +199,7 @@ export async function resolveMatch(ctx, match) {
   const loserId = result === 'challenger' ? match.opponent_id : match.challenger_id;
   if (match.bet > 0) await deposit(ctx.db, match.guild_id, winnerId, match.bet * 2, 'rps:win', match.id);
 
-  return update({
+  return finalUpdate(ctx, match, {
     content: handsArt,
     embeds: [
       embed({
@@ -216,6 +217,12 @@ export async function resolveMatch(ctx, match) {
     ],
     components: [row(rematchButton(namespace, match.id, match.bet))],
   });
+}
+
+/** 決着の表示。設定がオンなら、あとで1行に畳む予約もする。 */
+function finalUpdate(ctx, match, payload) {
+  ctx.waitUntil(foldLater(ctx, match, payload, '✊ じゃんけん'));
+  return update(payload);
 }
 
 function playEmbed(match, settings, round) {

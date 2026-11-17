@@ -74,6 +74,12 @@ export function createTestContext() {
     forgetSettings(guildId) {
       settingsCache.delete(guildId);
     },
+    async calendarFor(guildId) {
+      if (!guildId) return this.calendar;
+      const settings = await this.settings(guildId);
+      if (settings?.day_start_hour == null) return this.calendar;
+      return { ...this.calendar, dayStartHour: settings.day_start_hour };
+    },
     waitUntil(promise) {
       pending.push(promise);
     },

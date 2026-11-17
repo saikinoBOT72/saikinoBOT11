@@ -41,6 +41,7 @@ import { coins } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
+import { foldLater } from '../lib/guild-prefs.js';
 
 /** 公開メッセージのボタンは `pg:` 始まり。 */
 export const namespace = 'pg';
@@ -190,7 +191,9 @@ async function handleHold(ix, ctx, table, settings, em) {
 /** 全員が終わった。場を配って結果を出す。 */
 async function finish(ctx, table, state, settings, em) {
   const result = await payWinners(ctx.db, table, state);
-  return update(resultPayload(table, state, result, settings, em));
+  const final = resultPayload(table, state, result, settings, em);
+  ctx.waitUntil(foldLater(ctx, table, final, '🐷 ピッグ'));
+  return update(final);
 }
 
 /* ------------------------------------------------------------------ 表示 */

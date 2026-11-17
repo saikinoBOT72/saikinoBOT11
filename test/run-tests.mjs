@@ -2024,6 +2024,10 @@ function cronContext() {
     async settings(guildId) {
       return eco.getSettings(db, guildId);
     },
+    async calendarFor() {
+      return this.calendar;
+    },
+    async reportError() {},
     rest: {
       async createMessage(channelId, payload) {
         sent.push({ channelId, payload });

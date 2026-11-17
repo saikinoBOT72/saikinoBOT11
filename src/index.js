@@ -43,6 +43,8 @@ export default {
     ctx.ix = ix;
 
     try {
+      // 「1日」の区切りはサーバーごとに変えられるので、ここで合わせておく
+      if (ix.guildId) ctx.calendar = await ctx.calendarFor(ix.guildId);
       return await dispatch(ix, ctx);
     } catch (error) {
       ctx.waitUntil(ctx.reportError(ix.guildId, placeOf(ix), error));

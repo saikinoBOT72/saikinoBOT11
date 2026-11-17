@@ -31,6 +31,7 @@ import {
 import { buildAnnouncement, describeSchedule, dueAnnouncements, markAnnounced } from './lib/announcements.js';
 import { rankingTitle } from './lib/ranking.js';
 import { dateKey } from './lib/calendar.js';
+import { foldLater, takeDueFolds } from './lib/guild-prefs.js';
 import {
   DRAW_HOUR,
   activeLotteries,
@@ -54,7 +55,22 @@ export const STEPS = [
   sweepPolls,
   postDueAnnouncements,
   drawLotteries,
+  foldFinished,
 ];
+
+/** 決着から時間が経った掲示を、結果の1行に畳む（管理メニューで「終わった卓を畳む」をオンにしたとき）。 */
+export async function foldFinished(ctx) {
+  for (const row of await takeDueFolds(ctx.db)) {
+    await ctx.rest
+      .editMessage(row.channel_id, row.message_id, {
+        content: '',
+        embeds: [embed({ color: 0x95a5a6, description: `🧺 ${row.summary}` })],
+        components: [],
+        allowed_mentions: { parse: [] },
+      })
+      .catch((error) => console.error('掲示を畳めませんでした:', error));
+  }
+}
 
 export async function runScheduled(ctx) {
   for (const step of STEPS) {
@@ -215,6 +231,7 @@ async function sweepTables(ctx, findExpired, handle, label) {
       await ctx.rest
         .editMessage(table.channel_id, table.message_id, handled.payload)
         .catch((error) => console.error(`${label}の表示更新に失敗:`, error));
+      await foldLater(ctx, table, handled.payload, label);
     } catch (error) {
       console.error(`${label}の片付けに失敗 (${table.id}):`, error);
     }
@@ -272,15 +289,14 @@ export async function sweepPolls(ctx) {
 }
 
 export async function postDueAnnouncements(ctx) {
-  const due = await dueAnnouncements(ctx.db, ctx.calendar);
-  const today = dateKey(ctx.calendar);
+  const due = await dueAnnouncements(ctx.db, (guildId) => (guildId ? ctx.calendarFor(guildId) : ctx.calendar));
 
   for (const announcement of due) {
     // 先に「発表済み」にしてから作る（失敗しても同じ日に二重投稿しない）
-    await markAnnounced(ctx.db, announcement.id, today);
+    await markAnnounced(ctx.db, announcement.id, announcement.today);
     try {
       const settings = await ctx.settings(announcement.guild_id);
-      const built = await buildAnnouncement(ctx.db, announcement, { settings, calendar: ctx.calendar });
+      const built = await buildAnnouncement(ctx.db, announcement, { settings, calendar: announcement.calendar });
       // 対象が誰もいなくても黙って消えないように、一言だけ出す。
       // 同じ時刻に複数の発表を置いたとき「片方だけ出ない」ように見えるのを防ぐ
       await ctx.rest.createMessage(announcement.channel_id, {

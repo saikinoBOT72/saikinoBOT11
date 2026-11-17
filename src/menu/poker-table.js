@@ -59,6 +59,7 @@ import { button, embed, modal, row, textInput } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { deferUpdate, modalResponse, reply, update } from '../discord/respond.js';
 import { readText } from './common.js';
+import { foldLater } from '../lib/guild-prefs.js';
 
 /** 公開メッセージのボタンは `pk:` 始まり。 */
 export const namespace = 'pk';
@@ -633,9 +634,11 @@ async function advanceIfReady(ctx, id, settings, em) {
     (async () => {
       const table = await getTable(ctx.db, id);
       if (!table?.message_id) return;
+      const final = resultPayload(table, toDone.state, result, settings, em);
       await ctx.rest
-        .editMessage(table.channel_id, table.message_id, resultPayload(table, toDone.state, result, settings, em))
+        .editMessage(table.channel_id, table.message_id, final)
         .catch((error) => console.error('簡ポーカーの結果表示に失敗:', error));
+      await foldLater(ctx, table, final, '♠️ 簡ポーカー');
     })(),
   );
 }

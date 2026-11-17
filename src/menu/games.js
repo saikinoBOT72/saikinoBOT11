@@ -8,7 +8,7 @@ import { openTable as openBlackjack } from './blackjack-table.js';
 import { openTable as openPoker } from './poker-table.js';
 import { openTable as openPig } from './pig-table.js';
 import { openBoard as openChohan } from './chohan-table.js';
-import { openTable as openYacht, startSolo as startYachtSolo } from './yacht-table.js';
+import { activeSolo as activeYachtSolo, openTable as openYacht, startSolo as startYachtSolo } from './yacht-table.js';
 import {
   MAX_DRAWS as PK_MAX_DRAWS,
   MAX_PLAYERS as PK_MAX_PLAYERS,
@@ -50,6 +50,8 @@ import {
 } from './common.js';
 import { EMOJI as em } from '../lib/emoji.js';
 import { chance } from '../lib/random.js';
+import { gameChannelOf, goLive } from '../lib/guild-prefs.js';
+import { linkButton } from '../discord/builders.js';
 
 /* ------------------------------------------------------------------ ゲーム選択 */
 
@@ -210,7 +212,7 @@ async function pkGo(ix, [rawBet], ctx) {
 
   const opened = await openPoker(ctx, {
     guildId: ix.guildId,
-    channelId: ix.channelId,
+    channelId: gameChannelOf(settings, ix.channelId),
     hostId: ix.userId,
     bet,
     settings,
@@ -234,7 +236,7 @@ async function pkGo(ix, [rawBet], ctx) {
           `**${PK_MIN_PLAYERS}人**集まったら「▶️ 始める」で配れます。`,
       }),
     ],
-    components: [row(button(id('pk', 'open'), 'もう一度立てる', { emoji: '♠️' }), homeButton())],
+    components: [row(jumpButton(ix.guildId, opened.message?.channel_id ?? gameChannelOf(settings, ix.channelId), opened.message?.id), button(id('pk', 'open'), 'もう一度立てる', { emoji: '♠️' }), homeButton())],
   });
 }
 
@@ -297,7 +299,7 @@ async function pigGo(ix, [rawBet], ctx) {
 
   const opened = await openPig(ctx, {
     guildId: ix.guildId,
-    channelId: ix.channelId,
+    channelId: gameChannelOf(settings, ix.channelId),
     hostId: ix.userId,
     bet,
     settings,
@@ -320,7 +322,7 @@ async function pigGo(ix, [rawBet], ctx) {
           `**${PG_MIN_PLAYERS}人**集まったら「▶️ 始める」で開始できます。順番はそのときランダムで決まります。`,
       }),
     ],
-    components: [row(button(id('pig', 'open'), 'もう一度立てる', { emoji: '🐷' }), homeButton())],
+    components: [row(jumpButton(ix.guildId, opened.message?.channel_id ?? gameChannelOf(settings, ix.channelId), opened.message?.id), button(id('pig', 'open'), 'もう一度立てる', { emoji: '🐷' }), homeButton())],
   });
 }
 
@@ -385,7 +387,7 @@ async function chGo(ix, [rawBet], ctx) {
 
   const opened = await openChohan(ctx, {
     guildId: ix.guildId,
-    channelId: ix.channelId,
+    channelId: gameChannelOf(settings, ix.channelId),
     hostId: ix.userId,
     bet,
     settings,
@@ -402,7 +404,7 @@ async function chGo(ix, [rawBet], ctx) {
           '丁と半の両方にコマが入ったら「🏺 壺を開ける」を押してください。',
       }),
     ],
-    components: [row(button(id('ch', 'open'), 'もう一度開く', { emoji: '🏺' }), homeButton())],
+    components: [row(jumpButton(ix.guildId, opened.message?.channel_id ?? gameChannelOf(settings, ix.channelId), opened.message?.id), button(id('ch', 'open'), 'もう一度開く', { emoji: '🏺' }), homeButton())],
   });
 }
 
@@ -414,6 +416,7 @@ async function ytOpen(ix, _args, ctx, notice = null) {
   const settings = await ctx.settings(ix.guildId);
   const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
   const record = await getYachtRecord(ctx.db, ix.guildId, ix.userId);
+  const ongoing = await activeYachtSolo(ctx.db, ix.guildId, ix.userId);
 
   return show(ix, {
     embeds: [
@@ -448,7 +451,9 @@ async function ytOpen(ix, _args, ctx, notice = null) {
         customId: id('yt', 'custom'),
       }),
       row(
-        button(id('yt', 'solo'), 'ひとりで練習（賭けなし）', { emoji: '🎲', style: ButtonStyle.SECONDARY }),
+        ongoing
+          ? button(`yt:card:${ongoing.id}`, '練習の続きから', { emoji: '▶️', style: ButtonStyle.SUCCESS })
+          : button(id('yt', 'solo'), 'ひとりで練習（賭けなし）', { emoji: '🎲', style: ButtonStyle.SECONDARY }),
         backButton('games'),
       ),
     ],
@@ -475,7 +480,7 @@ async function ytGo(ix, [rawBet], ctx) {
 
   const opened = await openYacht(ctx, {
     guildId: ix.guildId,
-    channelId: ix.channelId,
+    channelId: gameChannelOf(settings, ix.channelId),
     hostId: ix.userId,
     bet,
     settings,
@@ -498,17 +503,19 @@ async function ytGo(ix, [rawBet], ctx) {
           `**${YT_MIN_PLAYERS}人**集まったら「▶️ 始める」で開始できます。`,
       }),
     ],
-    components: [row(button(id('yt', 'open'), 'もう一度立てる', { emoji: '🎲' }), homeButton())],
+    components: [row(jumpButton(ix.guildId, opened.message?.channel_id ?? gameChannelOf(settings, ix.channelId), opened.message?.id), button(id('yt', 'open'), 'もう一度立てる', { emoji: '🎲' }), homeButton())],
   });
 }
 
-/** 賭けずに1枚書く。チャンネルには何も出さず、この画面だけで進む。 */
+/** 賭けずに1枚書く。設定によっては、チャンネルに掲示を出さずにこの画面だけで進む。 */
 async function ytSolo(ix, _args, ctx) {
+  const settings = await ctx.settings(ix.guildId);
   const started = await startYachtSolo(ctx, {
     guildId: ix.guildId,
-    channelId: ix.channelId,
+    channelId: gameChannelOf(settings, ix.channelId),
     userId: ix.userId,
-    settings: await ctx.settings(ix.guildId),
+    settings,
+    privately: Boolean(settings.solo_private),
   });
   if (!started.ok) return ytOpen(ix, [], ctx, '始められませんでした。');
   return show(ix, started.payload);
@@ -519,6 +526,12 @@ export const yt = { open: ytOpen, custom: ytCustom, amount: ytAmount, go: ytGo, 
 export const games = { open };
 
 /* ------------------------------------------------------------------ 共通 */
+
+/** 立てた卓や挑戦状へ飛ぶボタン。投稿の場所が分からなければ出さない。 */
+function jumpButton(guildId, channelId, messageId) {
+  if (!channelId || !messageId) return null;
+  return linkButton(`https://discord.com/channels/${guildId}/${channelId}/${messageId}`, '投稿へ移動', { emoji: '↗️' });
+}
 
 function amountModal(customId, title, label = '賭け金') {
   return modal(customId, title, [
@@ -622,17 +635,19 @@ async function slotSpin(ix, ctx, bet) {
     { after: 800, payload: { ...final, components: finalComponents } },
   ]);
 
-  if (result.kind === 'triple') {
-    ctx.announce(ix.channelId, {
-      embeds: [
-        embed({
-          color: 0xf1c40f,
-          title: '🎉 大当たり！',
-          description: `<@${ix.userId}> がスロットで **${result.symbol} 3つ揃い（x${result.multiplier}）**！\n${coins(payout, settings)} を獲得しました。`,
-        }),
-      ],
-    });
-  }
+  // 3つそろいは必ず、それ以外は設定した額を超えたら実況する
+  goLive(ctx, ix, settings, {
+    net,
+    force: result.kind === 'triple',
+    embed: embed({
+      color: net > 0 ? 0xf1c40f : 0x95a5a6,
+      title: result.kind === 'triple' ? '🎉 大当たり！' : net > 0 ? '🎰 スロットで大勝ち' : '🎰 スロットで大負け',
+      description:
+        result.kind === 'triple'
+          ? `<@${ix.userId}> がスロットで **${result.symbol} 3つ揃い（x${result.multiplier}）**！\n${coins(payout, settings)} を獲得しました。`
+          : `<@${ix.userId}> が ${result.reels.join('')} で **${net > 0 ? '+' : ''}${net.toLocaleString('ja-JP')}**`,
+    }),
+  });
 
   return show(ix, { ...spinning([em.slot_spin, em.slot_spin, em.slot_spin], '🎰 回転中…'), components: [] });
 }
@@ -732,6 +747,14 @@ async function cfGo(ix, [rawBet, side], ctx) {
   });
   if (!settled.ok) return cfOpen(ix, [], ctx, '残高が足りません。');
   const after = settled.balance;
+  goLive(ctx, ix, settings, {
+    net: won ? bet : -bet,
+    embed: embed({
+      color: won ? 0xf1c40f : 0x95a5a6,
+      title: won ? '🪙 コイントスで大勝ち' : '🪙 コイントスで大負け',
+      description: `<@${ix.userId}> が ${SIDES[side].label} に ${bet.toLocaleString('ja-JP')} 賭けて **${won ? '的中' : 'はずれ'}**`,
+    }),
+  });
 
   // コインは content に絵文字だけで置く。ここがいちばん大きく出る。
   const tossing = (note) => ({
@@ -852,7 +875,7 @@ async function rpsGo(ix, [opponentId, rawBet], ctx) {
 
   const sent = await startChallenge(ctx, {
     guildId: ix.guildId,
-    channelId: ix.channelId,
+    channelId: gameChannelOf(settings, ix.channelId),
     challengerId: ix.userId,
     opponentId,
     bet,
@@ -871,7 +894,7 @@ async function rpsGo(ix, [opponentId, rawBet], ctx) {
           'チャンネルのメッセージで、相手が「受けて立つ」を押すと勝負開始です。',
       }),
     ],
-    components: [row(button(id('rps', 'open'), 'もう一度挑戦', { emoji: '🔁' }), homeButton())],
+    components: [row(jumpButton(ix.guildId, sent.channel_id ?? gameChannelOf(settings, ix.channelId), sent.id), button(id('rps', 'open'), 'もう一度挑戦', { emoji: '🔁' }), homeButton())],
   });
 }
 
@@ -978,7 +1001,7 @@ async function ccGo(ix, [opponentId, rawBet], ctx) {
 
   const sent = await startChinchiro(ctx, {
     guildId: ix.guildId,
-    channelId: ix.channelId,
+    channelId: gameChannelOf(settings, ix.channelId),
     challengerId: ix.userId,
     opponentId,
     bet,
@@ -997,7 +1020,7 @@ async function ccGo(ix, [opponentId, rawBet], ctx) {
           '相手が「受けて立つ」を押すと勝負開始です。',
       }),
     ],
-    components: [row(button(id('cc', 'open'), 'もう一度挑戦', { emoji: '🔁' }), homeButton())],
+    components: [row(jumpButton(ix.guildId, sent.channel_id ?? gameChannelOf(settings, ix.channelId), sent.id), button(id('cc', 'open'), 'もう一度挑戦', { emoji: '🔁' }), homeButton())],
   });
 }
 
@@ -1088,7 +1111,7 @@ function duelScreens(gameKey, { screen, lead, extra = null }) {
     const sent = await startDuel(ctx, {
       game: gameKey,
       guildId: ix.guildId,
-      channelId: ix.channelId,
+      channelId: gameChannelOf(settings, ix.channelId),
       challengerId: ix.userId,
       opponentId,
       bet,
@@ -1104,7 +1127,7 @@ function duelScreens(gameKey, { screen, lead, extra = null }) {
           description: `<@${opponentId}> に ${rules.title} を申し込みました。チャンネルの投稿から応答してもらってください。`,
         }),
       ],
-      components: [row(backButton('games'), homeButton())],
+      components: [row(jumpButton(ix.guildId, sent.channel_id ?? gameChannelOf(settings, ix.channelId), sent.id), backButton('games'), homeButton())],
     });
   }
 
@@ -1226,7 +1249,7 @@ async function bjStart(ix, [rawBet], ctx, solo) {
 
   const opened = await openBlackjack(ctx, {
     guildId: ix.guildId,
-    channelId: ix.channelId,
+    channelId: gameChannelOf(settings, ix.channelId),
     hostId: ix.userId,
     bet,
     settings,
@@ -1240,6 +1263,11 @@ async function bjStart(ix, [rawBet], ctx, solo) {
     return bjOpen(ix, [], ctx, messages[opened.reason] ?? '卓を立てられませんでした。');
   }
 
+  if (opened.privately) {
+    if (opened.after) ctx.animate(ix, [{ after: 1200, payload: opened.after }]);
+    return show(ix, opened.payload);
+  }
+
   return show(ix, {
     embeds: [
       embed({
@@ -1251,7 +1279,7 @@ async function bjStart(ix, [rawBet], ctx, solo) {
             `ほかの人が座るのを待って、**▶️ 始める** を押してください（${BJ_MAX_PLAYERS}人そろえば自動で始まります）。`,
       }),
     ],
-    components: [row(backButton('games'), homeButton())],
+    components: [row(jumpButton(ix.guildId, opened.message?.channel_id ?? gameChannelOf(settings, ix.channelId), opened.message?.id), backButton('games'), homeButton())],
   });
 }
 

@@ -21,6 +21,7 @@ import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
 import { rematchButton } from './rematch.js';
 import { EMOJI as em } from '../lib/emoji.js';
+import { foldLater } from '../lib/guild-prefs.js';
 
 export const key = 'mine';
 export const title = '地雷＆陣取り';
@@ -191,7 +192,9 @@ async function handleClaim(ix, ctx, duel, role, cell, settings) {
     return reply({ content: 'この勝負はもう終わっています。' });
   }
   const { pot } = await settleDuel(ctx.db, taken.duel, winner);
-  return update(resultPayload(duel, taken.state, settings, winner, pot, headline));
+  const final = resultPayload(duel, taken.state, settings, winner, pot, headline);
+  ctx.waitUntil(foldLater(ctx, duel, final, `${em[emojiSlot]} ${title}`));
+  return update(final);
 }
 
 /* ------------------------------------------------------------------ 表示 */

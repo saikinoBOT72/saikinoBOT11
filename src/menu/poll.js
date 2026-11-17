@@ -10,8 +10,9 @@ import {
 } from '../lib/polls.js';
 import { boardPayload } from './poll-board.js';
 import { cleanLine } from '../lib/text.js';
+import { gameChannelOf } from '../lib/guild-prefs.js';
 import { coins, truncate } from '../lib/format.js';
-import { modal, textInput } from '../discord/builders.js';
+import { linkButton, modal, textInput } from '../discord/builders.js';
 import { ButtonStyle, TextInputStyle } from '../discord/constants.js';
 import {
   backButton,
@@ -118,9 +119,10 @@ export async function create(ix, _args, ctx) {
     return open(ix, [], ctx, `選択肢は改行で区切って ${MIN_OPTIONS} 個以上入れてください。`);
   }
 
+  const settings = await ctx.settings(ix.guildId);
   const poll = await createPoll(ctx.db, {
     guildId: ix.guildId,
-    channelId: ix.channelId,
+    channelId: gameChannelOf(settings, ix.channelId),
     ownerId: ix.userId,
     question,
     options,
@@ -129,11 +131,10 @@ export async function create(ix, _args, ctx) {
     minutes,
   });
 
-  const settings = await ctx.settings(ix.guildId);
   const board = await boardPayload(ctx.db, poll, settings);
   let posted = null;
   try {
-    posted = await ctx.rest.createMessage(ix.channelId, board);
+    posted = await ctx.rest.createMessage(poll.channel_id, board);
     await ctx.db.run('UPDATE polls SET message_id = ?2 WHERE id = ?1', poll.id, posted.id);
   } catch (error) {
     console.error('予想大会の投稿に失敗:', error);
@@ -156,7 +157,13 @@ export async function create(ix, _args, ctx) {
           '**💰 賞金を上乗せ** で自腹を切って盛り上げたり、**🚫 中止** で取りやめたりもできます。',
       }),
     ],
-    components: [row(button(id('poll', 'open'), '予想大会へ', { emoji: '🗳️' }), homeButton())],
+    components: [
+      row(
+        linkButton(`https://discord.com/channels/${ix.guildId}/${poll.channel_id}/${posted.id}`, '掲示板へ移動', { emoji: '↗️' }),
+        button(id('poll', 'open'), '予想大会へ', { emoji: '🗳️' }),
+        homeButton(),
+      ),
+    ],
   });
 }
 

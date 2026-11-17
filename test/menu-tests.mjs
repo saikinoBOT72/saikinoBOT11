@@ -3385,6 +3385,97 @@ await test('全部オフにしても画面は壊れない', async () => {
   assert.equal(customIds(await press('m:games:open')).length, catalog.GAMES.length + 1, '全部戻る（＋戻るボタン）');
 });
 
+section('[Botの設定]');
+
+await test('Botの設定は管理者だけが開け、ボタンはどれも生きている', async () => {
+  const denied = await press('m:admin:prefs', { admin: false });
+  assert.match(screenText(denied), /権限/);
+  const payload = await press('m:admin:prefs', { admin: true });
+  assert.match(firstEmbed(payload).title, /Botの設定/);
+  assertAllButtonsWork(payload, 'Botの設定');
+});
+
+await test('1日の区切りを Bot の中で変えられ、ファイルどおりにも戻せる', async () => {
+  await press('m:admin:prefhour', { admin: true, values: ['5'] });
+  assert.equal((await eco.getSettings(db, GUILD)).day_start_hour, 5);
+  assert.equal((await ctx.calendarFor(GUILD)).dayStartHour, 5);
+  await press('m:admin:prefhour', { admin: true, values: ['file'] });
+  assert.equal((await eco.getSettings(db, GUILD)).day_start_hour, null);
+  ctx.forgetSettings(GUILD);
+});
+
+await test('卓や挑戦状を出す場所を決めると、そこに出る', async () => {
+  await press('m:admin:prefgame', { admin: true, values: ['game-room'] });
+  ctx.forgetSettings(GUILD);
+  await eco.setBalance(db, GUILD, ME, 5000, 'test');
+  const before = ctx.sent.length;
+  const confirm = await press('m:pig:go:100', { userId: ME, channelId: 'somewhere' });
+  assert.equal(ctx.sent.at(-1).channelId, 'game-room', '設定した場所に出る');
+  assert.ok(ctx.sent.length > before);
+  const link = confirm.data.components.flatMap((r) => r.components).find((c) => c.style === 5);
+  assert.ok(link?.url?.includes('/game-room/'), '投稿へ移動するボタンがある');
+
+  await press('m:admin:prefreset', { admin: true });
+  ctx.forgetSettings(GUILD);
+  assert.equal((await eco.getSettings(db, GUILD)).game_channel_id, null);
+  await db.run("UPDATE pig_tables SET status = 'cancelled' WHERE status = 'joining'");
+});
+
+await test('1人用を自分の画面だけにすると、ブラックジャックはチャンネルに出ない', async () => {
+  await press('m:admin:prefsolo', { admin: true });
+  ctx.forgetSettings(GUILD);
+  assert.equal((await eco.getSettings(db, GUILD)).solo_private, 1);
+  await eco.setBalance(db, GUILD, ME, 5000, 'test');
+  const before = ctx.sent.length;
+  const payload = await press('m:bj:solo:100', { userId: ME });
+  assert.equal(ctx.sent.length, before, 'チャンネルには何も出ない');
+  assert.ok(customIds(payload).some((cid) => cid.startsWith('bj:')) || /ブラックジャック|ディーラー/.test(screenText(payload)), '自分の画面に卓が出る');
+
+  await press('m:admin:prefsolo', { admin: true });
+  ctx.forgetSettings(GUILD);
+  await db.run("UPDATE blackjack_tables SET status = 'cancelled' WHERE status IN ('joining', 'playing')");
+});
+
+await test('実況の基準を決めると、それ以上の勝ち負けだけが実況される', async () => {
+  await press('m:admin:preflivesave', { type: 5, admin: true, fields: { threshold: '50' } });
+  ctx.forgetSettings(GUILD);
+  assert.equal((await eco.getSettings(db, GUILD)).live_threshold, 50);
+  await eco.setBalance(db, GUILD, ME, 5000, 'test');
+  const before = ctx.sent.length;
+  await press('m:cf:go:100:heads', { userId: ME });
+  assert.equal(ctx.sent.length, before + 1, '100の勝ち負けは50以上なので出る');
+  const small = ctx.sent.length;
+  await press('m:cf:go:10:heads', { userId: ME });
+  assert.equal(ctx.sent.length, small, '10の勝ち負けは出ない');
+
+  await press('m:admin:preflivesave', { type: 5, admin: true, fields: { threshold: '0' } });
+  ctx.forgetSettings(GUILD);
+});
+
+await test('終わった卓を畳む設定なら、決着から5分後に1行へ縮める', async () => {
+  const prefs = await import(src('lib/guild-prefs.js'));
+  const cronLib = await import(src('cron.js'));
+  await press('m:admin:preffold', { admin: true });
+  ctx.forgetSettings(GUILD);
+  const settings = await eco.getSettings(db, GUILD);
+  assert.equal(settings.fold_finished, 1);
+
+  const payload = { embeds: [{ title: '🏆 勝負あり', description: '**<@u1> の勝ち！**\n細かい説明' }] };
+  assert.equal(prefs.summaryOf(payload, '✊ じゃんけん'), '✊ じゃんけん　🏆 勝負あり　**<@u1> の勝ち！**');
+  await prefs.queueFold(db, settings, { guildId: GUILD, channelId: 'c1', messageId: 'fold-me', summary: 'まとめ' }, Date.now() - prefs.FOLD_AFTER_MS);
+
+  const before = ctx.edited.length;
+  await cronLib.foldFinished(ctx);
+  const folded = ctx.edited.slice(before).find((entry) => entry.messageId === 'fold-me');
+  assert.ok(folded, '畳む');
+  assert.deepEqual(folded.payload.components, [], 'ボタンは外す');
+  await cronLib.foldFinished(ctx);
+  assert.equal(ctx.edited.slice(before).filter((entry) => entry.messageId === 'fold-me').length, 1, '二度は畳まない');
+
+  await press('m:admin:preffold', { admin: true });
+  ctx.forgetSettings(GUILD);
+});
+
 section('[デトックス]');
 
 // 使われなくなったコードは、読む人の時間も Worker の大きさも無駄にする。

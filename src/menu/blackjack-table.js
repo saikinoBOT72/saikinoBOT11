@@ -34,6 +34,7 @@ import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
 import { rematchButton } from './rematch.js';
+import { foldLater } from '../lib/guild-prefs.js';
 
 /** 公開メッセージのボタンは `bj:` 始まり。 */
 export const namespace = 'bj';
@@ -60,6 +61,10 @@ export async function openTable(ctx, { guildId, channelId, hostId, bet, settings
   const first = solo
     ? await dealSolo(ctx, id, settings, em)
     : { payload: lobbyPayload(await getTable(ctx.db, id), joined.state, settings, em) };
+
+  // 1人で遊ぶときは、設定によってはチャンネルに出さず、押した人の画面だけで進める。
+  // 卓は保存してあるので、画面のボタンからそのまま続けられる
+  if (solo && settings?.solo_private) return { ok: true, privately: true, ...first };
 
   try {
     const message = await ctx.rest.createMessage(channelId, first.payload);
@@ -153,6 +158,10 @@ async function handleAgain(ix, ctx, table) {
     settings,
     solo: seated.length === 1,
   });
+  if (opened.ok && opened.privately) {
+    if (opened.after) ctx.animate(ix, [{ after: 1200, payload: opened.after }]);
+    return update(opened.payload);
+  }
   if (!opened.ok) {
     const messages = {
       insufficient: `参加費 ${coins(table.bet, settings)} が払えません。`,
@@ -292,10 +301,12 @@ async function finish(ix, ctx, table, state, settings, em) {
   const results = await settleTable(ctx.db, table, played);
   if (!results) return reply({ content: 'この卓はもう精算済みです。' });
 
+  const final = resultPayload(table, played, results, settings, em);
   ctx.animate(ix, [
     { after: 900, payload: revealPayload(table, played, settings, em) },
-    { after: 1100, payload: resultPayload(table, played, results, settings, em) },
+    { after: 1100, payload: final },
   ]);
+  ctx.waitUntil(foldLater(ctx, table, final, '🃏 ブラックジャック'));
   return update(tablePayload(table, played, settings, em, { hideDealer: true, frozen: true }));
 }
 
