@@ -1,7 +1,7 @@
-import { getBalance, ledgerFor, rankOf, topBalances, totals, transfer } from '../lib/economy.js';
+import { getBalance, rankOf, topBalances, totals, transfer } from '../lib/economy.js';
 import { equippedTitles, titleTag } from '../lib/achievements.js';
 import { coins } from '../lib/format.js';
-import { reasonLabel } from '../lib/ledger-reasons.js';
+import { HISTORY_FILTERS, byDay, groupEntries, groupLine, historyPage } from '../lib/history.js';
 import { MATCH_GAMES, statsOf } from '../lib/match-results.js';
 import { modal, textInput, userSelect } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
@@ -116,25 +116,52 @@ export async function paydo(ix, [targetId], ctx) {
   });
 }
 
-export async function history(ix, _args, ctx) {
-  const entries = await ledgerFor(ctx.db, ix.guildId, ix.userId, 15);
+/**
+ * 📜 コインの履歴。絞り込み・ページ送り・日ごとの合計つき。
+ * 同じ勝負の「賭け→払い戻し」は1行にまとめて、収支だけ大きく見せる。
+ */
+export async function history(ix, [rawFilter = 'all', rawPage = '0'] = [], ctx) {
+  const filter = HISTORY_FILTERS[rawFilter] ? rawFilter : 'all';
+  const page = Math.max(0, Number(rawPage) || 0);
+  const { rows, hasMore } = await historyPage(ctx.db, ix.guildId, ix.userId, filter, page);
+  const days = byDay(groupEntries(rows), ctx.calendar);
+  const signed = (n) => `${n >= 0 ? '+' : ''}${n.toLocaleString('ja-JP')}`;
+
+  const fields = days.slice(0, 10).map((day) => {
+    const [, month, date] = day.key.split('-');
+    return {
+      name: `📅 ${Number(month)}/${Number(date)}　その日の合計 ${signed(day.net)}`,
+      value: day.groups.map(groupLine).join('\n').slice(0, 1024),
+    };
+  });
+
   return show(ix, {
     embeds: [
       embed({
         color: 0xf1c40f,
-        title: '📜 コインの履歴',
-        description:
-          entries.length === 0
-            ? 'まだ履歴がありません。'
-            : entries
-                .map((entry) => {
-                  const sign = entry.amount >= 0 ? '+' : '';
-                  return `<t:${Math.floor(entry.created_at / 1000)}:R>　\`${sign}${entry.amount}\`　${reasonLabel(entry)}`;
-                })
-                .join('\n'),
+        title: `📜 コインの履歴（${HISTORY_FILTERS[filter].label}）`,
+        description: rows.length === 0 ? (page === 0 ? 'まだ履歴がありません。' : 'これより前の履歴はありません。') : undefined,
+        fields,
+        footer: { text: `${page + 1} ページ目　同じ勝負の賭けと払い戻しは1行にまとめています` },
       }),
     ],
-    components: [row(backButton('wallet'), homeButton())],
+    components: [
+      row(
+        ...Object.entries(HISTORY_FILTERS).map(([key, meta]) =>
+          button(id('wallet', 'history', key, '0'), meta.label, {
+            emoji: meta.emoji,
+            style: key === filter ? ButtonStyle.PRIMARY : ButtonStyle.SECONDARY,
+            disabled: key === filter,
+          }),
+        ),
+      ),
+      row(
+        button(id('wallet', 'history', filter, String(page - 1)), '新しいほうへ', { emoji: '⬅️', disabled: page === 0 }),
+        button(id('wallet', 'history', filter, String(page + 1)), '前の履歴へ', { emoji: '➡️', disabled: !hasMore }),
+        backButton('wallet'),
+        homeButton(),
+      ),
+    ],
   });
 }
 

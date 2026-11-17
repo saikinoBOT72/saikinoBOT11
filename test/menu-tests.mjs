@@ -1998,7 +1998,35 @@ await test('残高を超える送金は失敗する', async () => {
 
 await test('履歴が日本語のラベルで出る', async () => {
   const payload = await press('m:wallet:history');
-  assert.match(firstEmbed(payload).description, /送金|報告|スロット/);
+  assert.match(screenText(payload), /送金|報告|スロット/);
+  assertAllButtonsWork(payload, '履歴');
+});
+
+await test('履歴は日ごとに合計が出て、同じ勝負の賭けと払い戻しは1行にまとまる', async () => {
+  const G = 'g-history';
+  const U = 'history-user';
+  await eco.setBalance(db, G, U, 1000, 'test');
+  await eco.settleWager(db, G, U, { bet: 100, payout: 300, betReason: 'slot:bet', winReason: 'slot:win', detail: 'x3' });
+  await eco.deposit(db, G, U, 50, 'report', '筋トレ');
+  const payload = await press('m:wallet:history', { guildId: G, userId: U });
+  const fields = firstEmbed(payload).fields;
+  assert.match(fields[0].name, /その日の合計 \+1,250/, "初期の1000＋スロット200＋報告50");
+  assert.match(fields[0].value, /`\+200`　スロット（-100 → \+300）/, '賭けと払い戻しが1行');
+  assert.match(fields[0].value, /`\+50`　報告（筋トレ）/);
+
+  const games = await press('m:wallet:history:game:0', { guildId: G, userId: U });
+  assert.doesNotMatch(screenText(games), /報告/, 'ゲームだけに絞れる');
+  assert.match(screenText(games), /スロット/);
+  const earn = await press('m:wallet:history:earn:0', { guildId: G, userId: U });
+  assert.doesNotMatch(screenText(earn), /スロット/);
+
+  const reasons = await import(src('lib/history.js'));
+  for (let i = 0; i < reasons.HISTORY_PAGE + 3; i++) await eco.deposit(db, G, U, 1, 'report', '連打');
+  const first = await press('m:wallet:history', { guildId: G, userId: U });
+  const next = first.data.components[1].components.find((c) => c.custom_id === 'm:wallet:history:all:1');
+  assert.ok(next && !next.disabled, '次のページへ進める');
+  const second = await press('m:wallet:history:all:1', { guildId: G, userId: U });
+  assert.match(screenText(second), /2 ページ目/);
 });
 
 section('[管理メニュー]');
