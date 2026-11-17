@@ -32,6 +32,7 @@ import { buildAnnouncement, describeSchedule, dueAnnouncements, markAnnounced } 
 import { rankingTitle } from './lib/ranking.js';
 import { dateKey } from './lib/calendar.js';
 import { foldLater, takeDueFolds } from './lib/guild-prefs.js';
+import { claimNewVersion, describeVersion, versionOf } from './lib/version.js';
 import {
   DRAW_HOUR,
   activeLotteries,
@@ -56,7 +57,30 @@ export const STEPS = [
   postDueAnnouncements,
   drawLotteries,
   foldFinished,
+  announceNewVersion,
 ];
+
+/** 新しい版が反映されたら、管理用チャンネルを決めているサーバーに一度だけ知らせる。 */
+export async function announceNewVersion(ctx) {
+  if (!(await claimNewVersion(ctx.db, ctx.env))) return;
+  const { sha, note } = versionOf(ctx.env);
+  const guilds = await ctx.db.all('SELECT log_channel_id FROM guild_settings WHERE log_channel_id IS NOT NULL LIMIT 25');
+  for (const { log_channel_id: channelId } of guilds) {
+    await ctx.rest
+      .createMessage(channelId, {
+        embeds: [
+          embed({
+            color: 0x2ecc71,
+            title: '🚀 新しい版が反映されました',
+            description: `${describeVersion(ctx.env)}${note ? `\n> ${note}` : ''}`,
+            footer: { text: sha ? `GitHub のコミット ${sha}` : '' },
+          }),
+        ],
+        allowed_mentions: { parse: [] },
+      })
+      .catch((error) => console.error('反映のお知らせに失敗:', error));
+  }
+}
 
 /** 決着から時間が経った掲示を、結果の1行に畳む（管理メニューで「終わった卓を畳む」をオンにしたとき）。 */
 export async function foldFinished(ctx) {

@@ -287,6 +287,36 @@ await test('管理用チャンネルへのお知らせは、同じエラーな�
   assert.equal(await recordError(ctx.db, GUILD, '場所', new Error('こわれた'), 1_000_000 + 31 * 60_000), 'log1', '30分たてばまた知らせる');
 });
 
+section('[版の表示]');
+
+await test('新しい版になったら、管理用チャンネルに一度だけ知らせる', async () => {
+  const ctx = fresh();
+  const cron = await import(src('cron.js'));
+  await eco.getSettings(ctx.db, GUILD);
+  await ctx.db.run("UPDATE guild_settings SET log_channel_id = 'log1' WHERE guild_id = ?1", GUILD);
+  ctx.env = { BUILD_SHA: 'abc1234', BUILD_TIME: '2026-11-17T00:00:00Z', BUILD_NOTE: 'テストの変更' };
+
+  await cron.announceNewVersion(ctx);
+  const posted = ctx.sent.filter((entry) => entry.channelId === 'log1');
+  assert.equal(posted.length, 1);
+  assert.match(JSON.stringify(posted[0].payload), /abc1234/);
+  assert.match(JSON.stringify(posted[0].payload), /テストの変更/);
+
+  await cron.announceNewVersion(ctx);
+  assert.equal(ctx.sent.filter((entry) => entry.channelId === 'log1').length, 1, '同じ版では二度知らせない');
+
+  ctx.env = { BUILD_SHA: 'def5678' };
+  await cron.announceNewVersion(ctx);
+  assert.equal(ctx.sent.filter((entry) => entry.channelId === 'log1').length, 2, '次の版でまた知らせる');
+});
+
+await test('版が分からないとき（手元で動かしたとき）は何もしない', async () => {
+  const { claimNewVersion, describeVersion } = await import(src('lib/version.js'));
+  const ctx = fresh();
+  assert.equal(await claimNewVersion(ctx.db, {}), false);
+  assert.match(describeVersion({}), /不明/);
+});
+
 section('[履歴の表示]');
 
 await test('お金を動かすときの理由は、すべて日本語で表示できる', async () => {

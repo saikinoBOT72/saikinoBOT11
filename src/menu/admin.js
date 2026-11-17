@@ -76,6 +76,7 @@ import {
 import { open as openHome } from './home.js';
 import { reasonLabel } from '../lib/ledger-reasons.js';
 import { clampHour } from '../lib/calendar.js';
+import { describeVersion } from '../lib/version.js';
 import { clearErrors, recentErrors } from '../lib/error-report.js';
 
 /** 管理操作は毎回権限を確かめる。権限が無ければホームに戻す。 */
@@ -93,7 +94,7 @@ export async function open(ix, _args, ctx, notice = null) {
         embed({
           color: COLORS.admin,
           title: '⚙️ 管理メニュー',
-          description: 'サーバー管理権限を持つ人だけが使えます。',
+          description: `サーバー管理権限を持つ人だけが使えます。\n${describeVersion(ctx.env)}`,
           fields: [
             { name: '通貨', value: `${settings.currency_emoji} ${settings.currency_name}`, inline: true },
             { name: '初期残高', value: `${settings.starting_balance}`, inline: true },
