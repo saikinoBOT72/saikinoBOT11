@@ -12,7 +12,7 @@ import {
 } from '../lib/chinchiro.js';
 import { MAX_MULTIPLIER, compare, diceLine, evaluate, handLabel, rollHand } from '../lib/dice.js';
 import { deposit, getSettings, withdraw } from '../lib/economy.js';
-import { coins } from '../lib/format.js';
+import { coins, relative } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
@@ -29,7 +29,7 @@ export { cancelExpired };
 /** 挑戦状をチャンネルに投稿する。 */
 export async function startChallenge(ctx, { guildId, channelId, challengerId, opponentId, bet, settings }) {
   const id = crypto.randomUUID();
-  await createMatch(ctx.db, { id, guildId, channelId, challengerId, opponentId, bet });
+  const created = await createMatch(ctx.db, { id, guildId, channelId, challengerId, opponentId, bet });
 
   try {
     const message = await ctx.rest.createMessage(channelId, {
@@ -45,8 +45,8 @@ export async function startChallenge(ctx, { guildId, channelId, challengerId, op
             { name: '預かる額', value: `${coins(escrowFor(bet), settings)}（最大×${MAX_MULTIPLIER}）`, inline: true },
             { name: '精算', value: '勝負が終わったら余りは返します', inline: true },
             { name: '役と倍率', value: PAYOUT_TABLE },
+            { name: '⏰ 返事の締め切り', value: `${relative(created.expires_at)}　受けなければ流れます（お金は動きません）` },
           ],
-          footer: { text: '2分以内に応答がなければ自動でキャンセルされます' },
         }),
       ],
       components: [
@@ -137,9 +137,10 @@ async function handleInvite(ix, ctx, match, action) {
   }
 
   const firstId = first === 'challenger' ? match.challenger_id : match.opponent_id;
+  const started = (await getMatch(ctx.db, match.id)) ?? { ...match, turn: first };
   return update({
     content: `<@${firstId}>`,
-    embeds: [tableEmbed({ ...match, turn: first }, settings, `先攻は <@${firstId}> に決まりました！`, faces)],
+    embeds: [tableEmbed(started, settings, `先攻は <@${firstId}> に決まりました！`, faces)],
     components: [rollRow(match.id)],
   });
 }
@@ -281,7 +282,10 @@ function tableEmbed(match, settings, headline = null, faces = undefined) {
       (done.length > 0 ? `${done.join('\n')}\n\n` : '') +
       `<@${waiting}> の番です。サイコロを振ってください。\n` +
       `賭け金 ${coins(match.bet, settings)}（預かり ${match.escrow}）`,
-    fields: [{ name: '役と倍率', value: PAYOUT_TABLE }],
+    fields: [
+      { name: '役と倍率', value: PAYOUT_TABLE },
+      ...(match.expires_at ? [{ name: '⏰ 時間切れ', value: `${relative(match.expires_at)}　振らなかった人の負け（×1）` }] : []),
+    ],
     footer: { text: '役が出るまで最大3回振ります' },
   });
 }

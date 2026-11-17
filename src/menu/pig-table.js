@@ -41,6 +41,7 @@ import { coins } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
+import { noteFor, stampDeadline } from './deadline.js';
 import { foldLater } from '../lib/guild-prefs.js';
 
 /** 公開メッセージのボタンは `pg:` 始まり。 */
@@ -198,7 +199,13 @@ async function finish(ctx, table, state, settings, em) {
 
 /* ------------------------------------------------------------------ 表示 */
 
-function lobbyPayload(table, state, settings) {
+/** 掲示に残り時間を添える（中身は lobbyPayloadBody が作る）。 */
+function lobbyPayload(...args) {
+  const payload = lobbyPayloadBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, noteFor(args[0]));
+}
+
+function lobbyPayloadBody(table, state, settings) {
   const seats = state.players.map((player) => `　<@${player.userId}>`).join('\n') || '　（まだ誰もいません）';
   return {
     content: '',
@@ -237,8 +244,14 @@ function playerLine(state, player, index) {
   return `${mark}<@${player.userId}>　${turns}　**${player.score}点**`;
 }
 
+/** 掲示に残り時間を添える（中身は boardPayloadBody が作る）。 */
+function boardPayload(...args) {
+  const payload = boardPayloadBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, noteFor(args[0]));
+}
+
 /** いまの状態にあった掲示。 */
-function boardPayload(table, state, settings, em) {
+function boardPayloadBody(table, state, settings, em) {
   if (table.status === 'joining') return lobbyPayload(table, state, settings);
 
   const faces = diceFaces(em);

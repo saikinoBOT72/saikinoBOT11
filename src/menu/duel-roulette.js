@@ -12,6 +12,7 @@ import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
 import { rematchButton } from './rematch.js';
 import { EMOJI as em } from '../lib/emoji.js';
+import { noteFor, stampDeadline } from './deadline.js';
 import { foldLater } from '../lib/guild-prefs.js';
 
 export const key = 'rr';
@@ -101,8 +102,14 @@ function pullFrame(duel, state, userId, tail) {
   };
 }
 
+/** 掲示に残り時間を添える（中身は boardBody が作る）。 */
+export function board(...args) {
+  const payload = boardBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, noteFor(args[0]));
+}
+
 /** 場の状態。次に引く人のボタンを出す。 */
-export function board(duel, state, settings, headline = null) {
+function boardBody(duel, state, settings, headline = null) {
   const waiting = userIdOf(duel, duel.turn);
   const left = chambersLeft(state.pulled);
   const lines = [

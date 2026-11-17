@@ -21,6 +21,7 @@ import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
 import { rematchButton } from './rematch.js';
 import { EMOJI as em } from '../lib/emoji.js';
+import { noteFor, stampDeadline } from './deadline.js';
 import { foldLater } from '../lib/guild-prefs.js';
 
 export const key = 'mine';
@@ -220,7 +221,13 @@ function grid(state, { reveal = false } = {}) {
   return rows.join('\n');
 }
 
-export function board(duel, state, settings, headline = null) {
+/** 掲示に残り時間を添える（中身は boardBody が作る）。 */
+export function board(...args) {
+  const payload = boardBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, noteFor(args[0]));
+}
+
+function boardBody(duel, state, settings, headline = null) {
   const placing = state.phase === 'place';
   const waiting = placing
     ? [duel.challenger_id, duel.opponent_id].filter((_, index) => {

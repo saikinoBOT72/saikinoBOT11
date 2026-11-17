@@ -24,6 +24,7 @@ import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
 import { rematchButton } from './rematch.js';
 import { EMOJI as em } from '../lib/emoji.js';
+import { noteFor, stampDeadline } from './deadline.js';
 import { foldLater } from '../lib/guild-prefs.js';
 
 export const key = 'doors';
@@ -217,7 +218,13 @@ function openingFrame(duel, userId, choice) {
   };
 }
 
-export function board(duel, state, settings, headline = null) {
+/** 掲示に残り時間を添える（中身は boardBody が作る）。 */
+export function board(...args) {
+  const payload = boardBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, noteFor(args[0]));
+}
+
+function boardBody(duel, state, settings, headline = null) {
   const current = payout(duel.escrow * 2, state.multiplier);
   const history = state.log.map((entry) => DOORS[entry.choice].emoji).join('');
 
@@ -255,7 +262,13 @@ export function board(duel, state, settings, headline = null) {
   };
 }
 
-function sharePayload(duel, state, settings, headline = null) {
+/** 掲示に残り時間を添える（中身は sharePayloadBody が作る）。 */
+function sharePayload(...args) {
+  const payload = sharePayloadBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, '選ばなかった人は「山分け」として数えます');
+}
+
+function sharePayloadBody(duel, state, settings, headline = null) {
   const prize = payout(duel.escrow * 2, state.multiplier);
   const waiting = [];
   if (!state.choice.challenger) waiting.push(duel.challenger_id);

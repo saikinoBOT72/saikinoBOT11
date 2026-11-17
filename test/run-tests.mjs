@@ -2110,6 +2110,28 @@ await test('日曜19時台に止まっていた週の宝くじは、あとから
   assert.equal(cronCtx.sent.filter((entry) => entry.channelId === 'chan-late').length, 0, '二度は引かない');
 });
 
+await test('時間切れの1分前に、待たせている人にだけ一度知らせる', async () => {
+  const cronCtx = cronContext();
+  await eco.setBalance(db, G, 'n1', 0, 'test');
+  await eco.setBalance(db, G, 'n2', 0, 'test');
+  await duel.createDuel(db, { id: 'nudgeD', guildId: G, channelId: 'cN', game: 'rr', challengerId: 'n1', opponentId: 'n2', bet: 10, escrow: 10, state: {} });
+  await duel.startDuel(db, 'nudgeD', { first: 'opponent', state: { bulletAt: 3, pulled: 1, log: [] } });
+  await duel.setMessageId(db, 'nudgeD', 'boardN');
+  const now = Date.now();
+  await db.run('UPDATE duels SET expires_at = ?2 WHERE id = ?1', 'nudgeD', now + 60 * 1000);
+
+  await cron.nudgeIdlePlayers(cronCtx, now);
+  const sent = cronCtx.sent.filter((entry) => entry.channelId === 'cN');
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].payload.content, /<@n2>/, '引く番の人に');
+  assert.doesNotMatch(sent[0].payload.content, /<@n1>/, '待たされている人には送らない');
+  assert.equal(sent[0].payload.message_reference.message_id, 'boardN', '掲示への返信になる');
+
+  await cron.nudgeIdlePlayers(cronCtx, now + 10 * 1000);
+  assert.equal(cronCtx.sent.filter((entry) => entry.channelId === 'cN').length, 1, '同じ締切には一度だけ');
+  await db.run("UPDATE duels SET status = 'cancelled' WHERE id = 'nudgeD'");
+});
+
 await test('1つの定期処理がこけても、残りは動く', async () => {
   const cronCtx = cronContext();
   cronCtx.db = {

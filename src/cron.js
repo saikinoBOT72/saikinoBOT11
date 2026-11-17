@@ -33,6 +33,9 @@ import { rankingTitle } from './lib/ranking.js';
 import { dateKey } from './lib/calendar.js';
 import { foldLater, takeDueFolds } from './lib/guild-prefs.js';
 import { claimNewVersion, describeVersion, versionOf } from './lib/version.js';
+import { claimNudge, nearDeadline, nudgePayload, sweepNudges } from './lib/nudge.js';
+import { stateOf as duelStateOf } from './lib/duel.js';
+import { idlePlayers as pokerIdle } from './lib/poker-table.js';
 import {
   DRAW_HOUR,
   activeLotteries,
@@ -58,7 +61,57 @@ export const STEPS = [
   drawLotteries,
   foldFinished,
   announceNewVersion,
+  nudgeIdlePlayers,
 ];
+
+/** その勝負で、いま待たせている人。 */
+function waitingIn(kind, row) {
+  const ids = (roles) => roles.map((role) => (role === 'challenger' ? row.challenger_id : row.opponent_id));
+  if (kind === 'duels') {
+    const outcome = findGame(row.game)?.timeoutOutcome?.(row, duelStateOf(row));
+    if (outcome?.kind === 'forfeit') return ids([outcome.loser]);
+    const state = duelStateOf(row);
+    if (state?.choice) return ids(['challenger', 'opponent'].filter((role) => !state.choice[role]));
+    return ids(['challenger', 'opponent']);
+  }
+  if (kind === 'rps_matches') {
+    return [!row.challenger_hand && row.challenger_id, !row.opponent_hand && row.opponent_id];
+  }
+  if (kind === 'chinchiro_matches') return row.turn ? ids([row.turn]) : [];
+
+  const state = (() => {
+    try {
+      return JSON.parse(row.state);
+    } catch {
+      return {};
+    }
+  })();
+  if (kind === 'blackjack_tables') return [state.players?.[state.turn]?.userId];
+  if (kind === 'poker_tables') return pokerIdle(state).map((player) => player.userId);
+  if (kind === 'pig_tables') return [state.players?.[state.turn]?.userId];
+  if (kind === 'yacht_tables') return row.bet > 0 ? (state.players ?? []).filter((player) => !player.done).map((player) => player.userId) : [];
+  return [];
+}
+
+/**
+ * 時間切れの1分ほど前に、待たせている人に知らせる。
+ * 時間切れは「動かなかった人の負け」なので、気づかないまま負けないように。
+ */
+export async function nudgeIdlePlayers(ctx, now = Date.now()) {
+  const kinds = ['duels', 'rps_matches', 'chinchiro_matches', 'blackjack_tables', 'poker_tables', 'pig_tables', 'yacht_tables'];
+  for (const kind of kinds) {
+    for (const row of await nearDeadline(ctx.db, kind, now)) {
+      if (!row.message_id) continue;
+      const waiting = waitingIn(kind, row).filter(Boolean);
+      if (waiting.length === 0) continue;
+      if (!(await claimNudge(ctx.db, kind, row.id, row.expires_at, now))) continue;
+      await ctx.rest
+        .createMessage(row.channel_id, nudgePayload(waiting, row.message_id))
+        .catch((error) => console.error('時間切れの催促に失敗:', error));
+    }
+  }
+  await sweepNudges(ctx.db, now);
+}
 
 /** 新しい版が反映されたら、管理用チャンネルを決めているサーバーに一度だけ知らせる。 */
 export async function announceNewVersion(ctx) {

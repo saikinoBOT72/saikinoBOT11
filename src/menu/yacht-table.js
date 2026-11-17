@@ -47,6 +47,7 @@ import { button, embed, row, stringSelect } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
 import { diceFaces } from '../lib/emoji.js';
+import { noteFor, stampDeadline } from './deadline.js';
 import { foldLater } from '../lib/guild-prefs.js';
 
 /** 公開メッセージのボタンは `yt:` 始まり。 */
@@ -495,7 +496,13 @@ function finishedPayload(result) {
   };
 }
 
-function lobbyPayload(table, state, settings) {
+/** 掲示に残り時間を添える（中身は lobbyPayloadBody が作る）。 */
+function lobbyPayload(...args) {
+  const payload = lobbyPayloadBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, noteFor(args[0]));
+}
+
+function lobbyPayloadBody(table, state, settings) {
   const seats = state.players.map((player) => `　<@${player.userId}>`).join('\n') || '　（まだ誰もいません）';
   return {
     content: '',
@@ -509,7 +516,6 @@ function lobbyPayload(table, state, settings) {
           '**13個の欄**を1つずつ埋めます。\n' +
           '全員が同時に進めるので、順番待ちはありません。合計点が一番高い人が総取り。\n\n' +
           `**席（${state.players.length}/${MAX_PLAYERS}）**\n${seats}`,
-        footer: { text: '2分以内に始まらなければ流れます' },
       }),
     ],
     components: [
@@ -525,8 +531,14 @@ function lobbyPayload(table, state, settings) {
   };
 }
 
+/** 掲示に残り時間を添える（中身は boardPayloadBody が作る）。 */
+function boardPayload(...args) {
+  const payload = boardPayloadBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, '書いていない欄は0点で決着します');
+}
+
 /** 進み具合だけを出す掲示。中身は出さない。 */
-function boardPayload(table, state, settings) {
+function boardPayloadBody(table, state, settings) {
   if (table.status === 'joining') return lobbyPayload(table, state, settings);
 
   const lines = state.players.map((player) => {

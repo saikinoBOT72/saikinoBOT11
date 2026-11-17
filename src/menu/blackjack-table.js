@@ -34,6 +34,7 @@ import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
 import { rematchButton } from './rematch.js';
+import { noteFor, stampDeadline } from './deadline.js';
 import { foldLater } from '../lib/guild-prefs.js';
 
 /** 公開メッセージのボタンは `bj:` 始まり。 */
@@ -349,7 +350,13 @@ export async function timeOut(ctx, table) {
 
 /* ------------------------------------------------------------------ 表示 */
 
-function lobbyPayload(table, state, settings, em) {
+/** 掲示に残り時間を添える（中身は lobbyPayloadBody が作る）。 */
+function lobbyPayload(...args) {
+  const payload = lobbyPayloadBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, noteFor(args[0]));
+}
+
+function lobbyPayloadBody(table, state, settings, em) {
   const seats = state.players.map((player, index) => `${index + 1}. <@${player.userId}>`).join('\n');
   return {
     content: '',
@@ -362,7 +369,6 @@ function lobbyPayload(table, state, settings, em) {
           `**${MAX_PLAYERS}人まで**座れます。全員がディーラー（Bot）と勝負します。\n\n` +
           `**座っている人（${state.players.length}/${MAX_PLAYERS}）**\n${seats}`,
         fields: [{ name: 'ルール', value: RULES }],
-        footer: { text: '2分たつと自動で閉じます（参加費は返ります）' },
       }),
     ],
     components: [
@@ -394,7 +400,13 @@ function dealingPayload(em) {
   };
 }
 
-function tablePayload(table, state, settings, em, { hideDealer = true, frozen = false } = {}) {
+/** 掲示に残り時間を添える（中身は tablePayloadBody が作る）。 */
+function tablePayload(...args) {
+  const payload = tablePayloadBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, noteFor(args[0]));
+}
+
+function tablePayloadBody(table, state, settings, em, { hideDealer = true, frozen = false } = {}) {
   const turnPlayer = state.turn >= 0 ? state.players[state.turn] : null;
   const lines = state.players.map((player, index) => {
     const mark = index === state.turn ? '▶️' : statusMark(player.status);

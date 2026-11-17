@@ -19,7 +19,7 @@ import {
   userIdOf,
 } from '../lib/duel.js';
 import { deposit, getSettings, withdraw } from '../lib/economy.js';
-import { coins } from '../lib/format.js';
+import { coins, relative } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
@@ -60,7 +60,7 @@ export async function startChallenge(ctx, { game, guildId, channelId, challenger
 
   const id = crypto.randomUUID();
   const escrow = rules.escrowFor ? rules.escrowFor(bet) : bet;
-  await createDuel(ctx.db, {
+  const created = await createDuel(ctx.db, {
     id,
     guildId,
     channelId,
@@ -82,8 +82,10 @@ export async function startChallenge(ctx, { game, guildId, channelId, challenger
           description:
             `<@${challengerId}> が <@${opponentId}> に勝負を挑みました。\n` +
             `賭け金は ${coins(bet, settings)}（**勝った方が総取り**）`,
-          fields: rules.inviteFields ? rules.inviteFields({ bet, escrow, settings }) : [],
-          footer: { text: '2分以内に応答がなければ自動でキャンセルされます' },
+          fields: [
+            ...(rules.inviteFields ? rules.inviteFields({ bet, escrow, settings }) : []),
+            { name: '⏰ 返事の締め切り', value: `${relative(created.expires_at)}　受けなければ流れます（お金は動きません）` },
+          ],
         }),
       ],
       components: [

@@ -13,7 +13,7 @@ import {
   setStatus,
 } from '../lib/rps.js';
 import { deposit, getSettings, withdraw } from '../lib/economy.js';
-import { coins } from '../lib/format.js';
+import { coins, relative } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
@@ -29,7 +29,7 @@ export const namespace = 'rps';
  */
 export async function startChallenge(ctx, { guildId, channelId, challengerId, opponentId, bet, settings }) {
   const id = crypto.randomUUID();
-  await createMatch(ctx.db, { id, guildId, channelId, challengerId, opponentId, bet });
+  const created = await createMatch(ctx.db, { id, guildId, channelId, challengerId, opponentId, bet });
 
   try {
     const message = await ctx.rest.createMessage(channelId, {
@@ -41,7 +41,7 @@ export async function startChallenge(ctx, { guildId, channelId, challengerId, op
           description:
             `<@${challengerId}> が <@${opponentId}> に勝負を挑みました。\n` +
             (bet > 0 ? `賭け金は ${coins(bet, settings)}（勝者が総取り）` : '賭けなしの真剣勝負'),
-          footer: { text: '2分以内に応答がなければ自動でキャンセルされます' },
+          fields: [{ name: '⏰ 返事の締め切り', value: `${relative(created.expires_at)}　受けなければ流れます` }],
         }),
       ],
       components: [
@@ -125,9 +125,10 @@ async function handleInvite(ix, ctx, match, action) {
     }
   }
 
+  const started = (await getMatch(ctx.db, match.id)) ?? match;
   return update({
     content: `<@${match.challenger_id}> <@${match.opponent_id}>`,
-    embeds: [playEmbed(match, settings, 1)],
+    embeds: [playEmbed(started, settings, 1)],
     components: [handRow(match.id)],
   });
 }
@@ -233,7 +234,13 @@ function playEmbed(match, settings, round) {
       `<@${match.challenger_id}> vs <@${match.opponent_id}>\n` +
       (match.bet > 0 ? `賭け金 ${coins(match.bet, settings)}（勝者が総取り）\n` : '') +
       '\n二人ともボタンで手を選んでください。選んだ手は相手には見えません。',
-    footer: { text: round > 1 ? `第${round}ラウンド` : '3分たっても選ばない人は負けになります（二人とも選ばなければ返金）' },
+    fields: [
+      {
+        name: '⏰ 時間切れ',
+        value: `${relative(match.expires_at)}　選ばない人は負け（二人とも選ばなければ返金）`,
+      },
+    ],
+    footer: round > 1 ? { text: `第${round}ラウンド` } : undefined,
   });
 }
 

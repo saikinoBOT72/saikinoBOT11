@@ -59,6 +59,7 @@ import { button, embed, modal, row, textInput } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { deferUpdate, modalResponse, reply, update } from '../discord/respond.js';
 import { readText } from './common.js';
+import { noteFor, stampDeadline } from './deadline.js';
 import { foldLater } from '../lib/guild-prefs.js';
 
 /** 公開メッセージのボタンは `pk:` 始まり。 */
@@ -656,7 +657,13 @@ async function refreshBoard(ctx, table, settings, em) {
 
 /* ------------------------------------------------------------------ 表示 */
 
-function lobbyPayload(table, state, settings) {
+/** 掲示に残り時間を添える（中身は lobbyPayloadBody が作る）。 */
+function lobbyPayload(...args) {
+  const payload = lobbyPayloadBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, noteFor(args[0]));
+}
+
+function lobbyPayloadBody(table, state, settings) {
   const seats = state.players.map((player) => `　<@${player.userId}>`).join('\n') || '　（まだ誰もいません）';
   return {
     content: '',
@@ -669,7 +676,6 @@ function lobbyPayload(table, state, settings) {
           `5枚配って、いらない札を**${MAX_DRAWS}回まで**引き直し。\n` +
           'そのあと「乗る」「レイズを提案」「降りる」。誰も提案しなくなったら役比べです。\n\n' +
           `**席（${state.players.length}/${MAX_PLAYERS}）**\n${seats}`,
-        footer: { text: '2分以内に始まらなければ流れます' },
       }),
     ],
     components: [
@@ -685,7 +691,13 @@ function lobbyPayload(table, state, settings) {
   };
 }
 
-function drawPayload(table, state, settings) {
+/** 掲示に残り時間を添える（中身は drawPayloadBody が作る）。 */
+function drawPayload(...args) {
+  const payload = drawPayloadBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, noteFor(args[0]));
+}
+
+function drawPayloadBody(table, state, settings) {
   const lines = state.players.map((player) => {
     const draws = player.draws ?? 0;
     const mark = player.exchanged ? '✅ 交換ずみ' : draws > 0 ? `🔁 ${draws}回替えた` : '⏳ 考え中…';
@@ -748,7 +760,13 @@ function betRows(table, state, { owed = null, mine = false } = {}) {
   ];
 }
 
-function betPayload(table, state, settings) {
+/** 掲示に残り時間を添える（中身は betPayloadBody が作る）。 */
+function betPayload(...args) {
+  const payload = betPayloadBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, noteFor(args[0]));
+}
+
+function betPayloadBody(table, state, settings) {
   const accepting = state.step === ACCEPT;
   const lines = state.players.map((player) => {
     if (player.folded) return `　<@${player.userId}>　🏳️ 降りた`;
