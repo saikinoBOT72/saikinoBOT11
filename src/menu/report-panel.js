@@ -35,7 +35,7 @@ export async function panelPayload(ctx, guildId) {
   const activities = (await listActivities(ctx.db, guildId)).slice(0, MAX_BUTTONS);
 
   if (activities.length === 0) {
-    return { error: 'まだアクションが登録されていません。先に 📋 アクション管理 で登録してください。' };
+    return { error: 'まだアクションが登録されていません。先に ⚙️ 管理 → 📋 アクション で登録してください。' };
   }
 
   const lines = activities.map(

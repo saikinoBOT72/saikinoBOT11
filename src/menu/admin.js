@@ -80,15 +80,42 @@ import { clampHour } from '../lib/calendar.js';
 import { describeVersion } from '../lib/version.js';
 import { clearErrors, recentErrors } from '../lib/error-report.js';
 import { itemActions } from './admin-items.js';
+import { setupChecklist, toolActions } from './admin-tools.js';
 
 /** 管理操作は毎回権限を確かめる。権限が無ければホームに戻す。 */
 function denied(ix, ctx) {
   return openHome(ix, [], ctx, 'この操作には「サーバー管理」権限が必要です。');
 }
 
+/**
+ * 管理メニュー。ボタンを4つのまとまりに分け、1段に1つのまとまりを置く。
+ *   1段目 💪 かせぐ：アクション・連日ボーナス・称号・報告パネル
+ *   2段目 🎮 あそぶ：ゲームのオンオフ・全ゲーム・宝くじ・絵文字
+ *   3段目 📢 場所とお知らせ：Botの設定・定期発表・管理用チャンネル
+ *   4段目 💰 お金と見守り：残高の調整・出品の取り下げ・経済の様子・設定の保存
+ * はじめの準備が終わっていなければ、残っているものを上に出す。
+ */
 export async function open(ix, _args, ctx, notice = null) {
   if (!ix.isAdmin) return denied(ix, ctx);
   const settings = await ctx.settings(ix.guildId);
+  const checklist = await setupChecklist(ctx.db, ix.guildId, settings);
+  const left = checklist.filter((item) => !item.done);
+
+  const fields = [
+    { name: '通貨', value: `${settings.currency_emoji} ${settings.currency_name}`, inline: true },
+    { name: '初期残高', value: `${settings.starting_balance}`, inline: true },
+    { name: '賭け金', value: `${settings.min_bet} 〜 ${settings.max_bet === 0 ? '無制限' : settings.max_bet}`, inline: true },
+  ];
+  if (left.length > 0) {
+    fields.unshift({
+      name: `🧭 はじめの準備（${checklist.length - left.length}/${checklist.length}）`,
+      value: checklist.map((item) => `${item.done ? '✅' : '⬜'} ${item.text}`).join('\n'),
+    });
+  }
+  fields.push({
+    name: 'ボタンの並び',
+    value: '1段目 **💪 かせぐ**　2段目 **🎮 あそぶ**　3段目 **📢 場所とお知らせ**　4段目 **💰 お金と見守り**',
+  });
 
   return show(ix, {
     embeds: [
@@ -97,42 +124,36 @@ export async function open(ix, _args, ctx, notice = null) {
           color: COLORS.admin,
           title: '⚙️ 管理メニュー',
           description: `サーバー管理権限を持つ人だけが使えます。\n${describeVersion(ctx.env)}`,
-          fields: [
-            { name: '通貨', value: `${settings.currency_emoji} ${settings.currency_name}`, inline: true },
-            { name: '初期残高', value: `${settings.starting_balance}`, inline: true },
-            {
-              name: '賭け金',
-              value: `${settings.min_bet} 〜 ${settings.max_bet === 0 ? '無制限' : settings.max_bet}`,
-              inline: true,
-            },
-          ],
+          fields,
         }),
         notice,
       ),
     ],
     components: [
       row(
-        button(id('admin', 'acts'), 'アクション管理', { emoji: '📋', style: ButtonStyle.PRIMARY }),
+        button(id('admin', 'acts'), 'アクション', { emoji: '📋', style: ButtonStyle.PRIMARY }),
         button(id('admin', 'streak'), '連日ボーナス', { emoji: '🔥', style: ButtonStyle.PRIMARY }),
         button(id('admin', 'ach'), '称号', { emoji: '🏅', style: ButtonStyle.PRIMARY }),
+        button(id('admin', 'panel'), '報告パネル', { emoji: '📌', style: ButtonStyle.PRIMARY }),
       ),
       row(
-        button(id('admin', 'ann'), '定期発表', { emoji: '📢', style: ButtonStyle.PRIMARY }),
-        button(id('admin', 'bal'), '残高を調整', { emoji: '💰' }),
+        button(id('admin', 'gm'), 'ゲームのオンオフ', { emoji: '🎮', style: ButtonStyle.SUCCESS }),
+        button(id('admin', 'allgames'), '全ゲーム', { emoji: '🕹️', style: ButtonStyle.SUCCESS }),
+        button(id('admin', 'lot'), '宝くじ', { emoji: '🎫', style: ButtonStyle.SUCCESS }),
+        button(id('admin', 'emoji'), '絵文字', { emoji: '😀', style: ButtonStyle.SUCCESS }),
+      ),
+      row(
         button(id('admin', 'prefs'), 'Botの設定', { emoji: '🛠️' }),
-      ),
-      row(
-        button(id('admin', 'lot'), '宝くじ', { emoji: '🎫' }),
-        button(id('admin', 'emoji'), '絵文字を確認', { emoji: '😀' }),
-        button(id('admin', 'gm'), 'ゲームのオンオフ', { emoji: '🎮' }),
-        button(id('admin', 'allgames'), '全ゲーム', { emoji: '🕹️' }),
-      ),
-      row(
-        button(id('admin', 'panel'), '報告パネルを置く', { emoji: '📌', style: ButtonStyle.PRIMARY }),
+        button(id('admin', 'ann'), '定期発表', { emoji: '📢' }),
         button(id('admin', 'log'), '管理用チャンネル', { emoji: '🧰' }),
-        button(id('admin', 'items'), '出品の取り下げ', { emoji: '🚫' }),
-        backButton(),
       ),
+      row(
+        button(id('admin', 'bal'), '残高の調整', { emoji: '💰' }),
+        button(id('admin', 'items'), '出品の取り下げ', { emoji: '🚫' }),
+        button(id('admin', 'eco'), '経済の様子', { emoji: '📈' }),
+        button(id('admin', 'backup'), '設定の保存', { emoji: '💾' }),
+      ),
+      row(backButton()),
     ],
   });
 }
@@ -154,7 +175,7 @@ export async function streak(ix, _args, ctx, notice = null) {
           embed({
             color: COLORS.admin,
             title: '🔥 連日ボーナス',
-            description: '先に **📋 アクション管理** でアクションを作ってください。連日ボーナスはアクションごとに設定します。',
+            description: '先に **📋 アクション** でアクションを作ってください。連日ボーナスはアクションごとに設定します。',
           }),
           notice,
         ),
@@ -2096,6 +2117,7 @@ export async function lottoggle(ix, _args, ctx) {
 export const actions = {
   open,
   ...itemActions,
+  ...toolActions,
   prefs,
   prefhour,
   prefgame,

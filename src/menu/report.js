@@ -18,7 +18,7 @@ export async function open(ix, _args, ctx, notice = null) {
             color: COLORS.earn,
             title: '💪 報告してかせぐ',
             description:
-              'まだアクションが登録されていません。\nサーバー管理者が **⚙️ 管理 → 📋 アクション管理 → 📦 おすすめを一括登録** すればすぐ始められます。',
+              'まだアクションが登録されていません。\nサーバー管理者が **⚙️ 管理 → 📋 アクション → 📦 おすすめを一括登録** すればすぐ始められます。',
           }),
           notice,
         ),

@@ -2435,6 +2435,67 @@ await test('プロフィールはほかの人も見られ、本人が「見せ�
   assert.ok(firstEmbed(await press('m:profile:pick', { userId: OTHER, values: [ME] })).fields, '戻すとまた見える');
 });
 
+await test('管理メニューは4つのまとまりに分かれ、はじめの準備が残っていれば一覧で出る', async () => {
+  const G = 'g-setup';
+  const fresh = await press('m:admin:open', { admin: true, guildId: G });
+  const setup = firstEmbed(fresh).fields.find((field) => /はじめの準備/.test(field.name));
+  assert.ok(setup, '準備リストが出る');
+  assert.match(setup.value, /⬜ 報告のアクションを登録する/);
+  assertAllButtonsWork(fresh, '管理メニュー');
+  assert.equal(fresh.data.components.length, 5);
+
+  // 全部済んでいるサーバーでは出さない
+  const ready = await press('m:admin:open', { admin: true });
+  const settings = await eco.getSettings(db, GUILD);
+  const allDone = settings.game_channel_id && settings.log_channel_id;
+  if (allDone) assert.ok(!firstEmbed(ready).fields.some((field) => /はじめの準備/.test(field.name)));
+});
+
+await test('経済の様子が見られる（管理者だけ）', async () => {
+  assert.match(screenText(await press('m:admin:eco')), /権限が必要/);
+  const payload = await press('m:admin:eco', { admin: true });
+  assert.match(firstEmbed(payload).title, /経済の様子/);
+  const names = firstEmbed(payload).fields.map((field) => field.name);
+  for (const name of ['出回っている合計', '上位1割の持ち分', '7日で生まれた量']) assert.ok(names.includes(name), name);
+  assertAllButtonsWork(payload, '経済の様子');
+});
+
+await test('設定を書き出して、別のサーバーにそのまま読み込める（チャンネルは写さない）', async () => {
+  const before = await eco.getSettings(db, GUILD);
+  await eco.updateSettings(db, GUILD, { currency_name: 'テスト円', min_bet: 7, game_channel_id: 'chan-1' });
+  ctx.forgetSettings(GUILD);
+  const out = await press('m:admin:backup', { admin: true });
+  const json = /```json\n([\s\S]+?)\n```/.exec(firstEmbed(out).description)[1];
+  assert.doesNotMatch(json, /chan-1/, 'チャンネルは入れない');
+  assert.doesNotMatch(json, /"balance"/, '個人のデータは入れない');
+
+  const G = 'g-copy';
+  const opened = await press('m:admin:backupin', { admin: true, guildId: G });
+  assert.equal(opened.type, 9);
+  const done = await press('m:admin:backupsave', { type: 5, admin: true, guildId: G, fields: { backup: json } });
+  assert.match(screenText(done), /読み込みました/);
+  ctx.forgetSettings(G);
+  const copied = await eco.getSettings(db, G);
+  assert.equal(copied.currency_name, 'テスト円');
+  assert.equal(copied.min_bet, 7);
+  assert.equal(copied.game_channel_id, null);
+  const original = await act.listActivities(db, GUILD);
+  assert.equal((await act.listActivities(db, G)).length, original.length, 'アクションも写る');
+
+  const broken = await press('m:admin:backupsave', { type: 5, admin: true, guildId: G, fields: { backup: 'こわれた文字' } });
+  assert.match(screenText(broken), /読み取れませんでした/);
+  const denied = await press('m:admin:backupsave', { type: 5, guildId: G, fields: { backup: json } });
+  assert.match(screenText(denied), /権限が必要/);
+  await db.run(
+    'UPDATE guild_settings SET currency_name = ?2, min_bet = ?3, game_channel_id = ?4 WHERE guild_id = ?1',
+    GUILD,
+    before.currency_name,
+    before.min_bet,
+    before.game_channel_id,
+  );
+  ctx.forgetSettings(GUILD);
+});
+
 section('[自分のデータ]');
 
 /** ほかのテストで座ったままの卓を片付ける（本番なら時間切れで閉じる）。 */
