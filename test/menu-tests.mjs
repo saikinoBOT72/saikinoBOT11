@@ -2372,6 +2372,20 @@ await test('1対1の勝負とチンチロにも「だれでも」がある', asy
   assert.equal((await db.get('SELECT * FROM chinchiro_matches WHERE id = ?1', match.id)).opponent_id, OTHER);
 });
 
+await test('1対1の勝ち負けが記録され、お財布の「戦績」に相手ごとに出る', async () => {
+  const recorded = await db.all("SELECT * FROM match_results WHERE game = 'rps' AND (winner_id = ?1 OR loser_id = ?1)", ME);
+  assert.ok(recorded.length > 0, 'じゃんけんの勝ち負けが残っている');
+  const wallet = await press('m:wallet:open');
+  assert.ok(customIds(wallet).includes('m:wallet:stats'));
+  const stats = await press('m:wallet:stats');
+  const text = screenText(stats);
+  assert.match(text, /1対1の勝ち負け/);
+  assert.match(text, /じゃんけん \d+勝\d+敗/);
+  assert.match(text, /ゲームごとの収支/);
+  assert.match(text, /スロット/);
+  assertAllButtonsWork(stats, '戦績');
+});
+
 section('[自分のデータ]');
 
 /** ほかのテストで座ったままの卓を片付ける（本番なら時間切れで閉じる）。 */
@@ -2628,7 +2642,8 @@ section('[称号（管理者が作る）]');
 await test('条件の種類を選ぶ画面が出る', async () => {
   const payload = await press('m:admin:achnew', { admin: true });
   const options = payload.data.components[0].components[0].options.map((option) => option.value);
-  assert.deepEqual(options.sort(), ['activity_count', 'activity_streak', 'balance', 'total_reports']);
+  assert.deepEqual(options.sort(), Object.keys(achLib.CONDITION_TYPES).sort());
+  for (const type of ['match_wins', 'games_played', 'shop_sales', 'omikuji_count', 'total_earned']) assert.ok(options.includes(type), type);
 });
 
 await test('フォームから称号を作れる', async () => {
@@ -3203,10 +3218,61 @@ await test('貼り付け形式を読める', () => {
   assert.equal(errors.length, 0);
   assert.deepEqual(entries[0], {
     line: 3, name: '日記魔', emoji: '📔', condition_type: 'activity_count',
-    threshold: 100, activity_name: '日記', reward: 500,
+    threshold: 100, activity_name: '日記', reward: 500, hidden: 0,
   });
   assert.equal(entries[1].threshold, 10000, '全角と桁区切りも読む');
   assert.equal(entries[1].activity_name, null, 'balance に対象は不要');
+  const hidden = achLib.parseAchievementLines('秘密 | 🤫 | match_wins | 3 | | 0 | 隠す').entries[0];
+  assert.equal(hidden.hidden, 1, '7列目に「隠す」で隠し称号');
+  assert.match(achLib.formatAchievementLines([{ ...hidden, reward: 0 }]), /\| 隠す$/, '書き出しても隠すが残る');
+});
+
+await test('新しい条件の称号：1対1の勝利数・ゲーム回数・売れた数・おみくじ・受け取った合計', async () => {
+  const G = 'g-ach';
+  const U = 'ach-user';
+  await eco.setBalance(db, G, U, 0, 'test');
+  for (const [name, type, threshold] of [
+    ['勝負師', 'match_wins', 2], ['常連', 'games_played', 1], ['名店主', 'shop_sales', 1],
+    ['信心深い', 'omikuji_count', 1], ['稼ぎ頭', 'total_earned', 500],
+  ]) {
+    await achLib.createAchievement(db, G, { name, condition_type: type, threshold, hidden: name === '勝負師' ? 1 : 0 });
+  }
+  const { recordMatch } = await import(src('lib/match-results.js'));
+  await recordMatch(db, { guildId: G, game: 'rps', winnerId: U, loserId: 'x', amount: 100 });
+  let unlocked = await achLib.evaluate(db, { guildId: G, userId: U, calendar: ctx.calendar });
+  assert.deepEqual(unlocked.map((a) => a.name), [], 'まだ届かない');
+
+  await recordMatch(db, { guildId: G, game: 'cc', winnerId: U, loserId: 'x', amount: 100 });
+  await eco.deposit(db, G, U, 600, 'slot:win', 'x6');
+  await eco.withdraw(db, G, U, 10, 'slot:bet', 'x0');
+  const item = await shop.createItem(db, { guildId: G, sellerId: U, name: '確認用', price: 1, stock: -1 });
+  await eco.setBalance(db, G, 'buyer', 100, 'test');
+  await shop.purchase(db, G, item.id, 'buyer');
+  await db.run("INSERT INTO omikuji_draws (guild_id, user_id, draw_date, rank, picks, number, item_index, color_index, created_at) VALUES (?1, ?2, '2026-01-01', '大吉', '[]', 1, 0, 0, 0)", G, U);
+
+  unlocked = await achLib.evaluate(db, { guildId: G, userId: U, calendar: ctx.calendar });
+  assert.deepEqual(unlocked.map((a) => a.name).sort(), ['信心深い', '勝負師', '名店主', '常連', '稼ぎ頭'].sort());
+});
+
+await test('報告以外で条件を満たした称号も、ホームを開いたときに拾って知らせる', async () => {
+  await achLib.createAchievement(db, GUILD, { name: 'ホームで拾う', emoji: '🎯', condition_type: 'balance', threshold: 1 });
+  const home = await press('m:home:open');
+  assert.match(screenText(home), /新しい称号を獲得しました：🎯ホームで拾う/);
+  const target = await db.get("SELECT id FROM achievements WHERE guild_id = ?1 AND name = 'ホームで拾う'", GUILD);
+  await achLib.removeAchievement(db, GUILD, target.id);
+});
+
+await test('隠し称号は、まだの人には「？？？」と出る', async () => {
+  await achLib.createAchievement(db, GUILD, { name: 'ひみつの称号', emoji: '🤫', condition_type: 'match_wins', threshold: 999, hidden: 1 });
+  const text = screenText(await press('m:titles:open'));
+  assert.match(text, /？？？/);
+  assert.doesNotMatch(text, /ひみつの称号/);
+  const admin = screenText(await press('m:admin:ach', { admin: true }));
+  assert.match(admin, /🙈🤫 \*\*ひみつの称号/, '管理者には見える');
+  const target = await db.get("SELECT id FROM achievements WHERE guild_id = ?1 AND name = 'ひみつの称号'", GUILD);
+  await press('m:admin:achhide', { admin: true, values: [String(target.id)] });
+  assert.match(screenText(await press('m:titles:open')), /ひみつの称号/, '戻すと見える');
+  await achLib.removeAchievement(db, GUILD, target.id);
 });
 
 await test('おかしな行は理由つきで飛ばす', () => {

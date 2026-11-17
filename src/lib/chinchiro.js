@@ -1,6 +1,7 @@
 import { deposit } from './economy.js';
 import { MAX_MULTIPLIER } from './dice.js';
 import { chance } from './random.js';
+import { recordMatch } from './match-results.js';
 
 export const INVITE_TIMEOUT_MS = 120_000;
 export const PLAY_TIMEOUT_MS = 300_000;
@@ -110,6 +111,7 @@ export async function settle(db, match, winner, multiplier) {
   if (match.escrow - prize > 0) {
     await deposit(db, match.guild_id, loserId, match.escrow - prize, 'chinchiro:refund', `cc:${match.id}`);
   }
+  await recordMatch(db, { guildId: match.guild_id, game: 'cc', winnerId, loserId, amount: match.escrow + prize });
   return { prize, winnerId, loserId };
 }
 

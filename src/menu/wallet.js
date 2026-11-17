@@ -2,6 +2,7 @@ import { getBalance, ledgerFor, rankOf, topBalances, totals, transfer } from '..
 import { equippedTitles, titleTag } from '../lib/achievements.js';
 import { coins } from '../lib/format.js';
 import { reasonLabel } from '../lib/ledger-reasons.js';
+import { MATCH_GAMES, statsOf } from '../lib/match-results.js';
 import { modal, textInput, userSelect } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import {
@@ -53,6 +54,7 @@ export async function open(ix, _args, ctx, notice = null) {
         button(id('wallet', 'rank'), 'ランキング', { emoji: '🏆' }),
       ),
       row(
+        button(id('wallet', 'stats'), '戦績', { emoji: '📊' }),
         button(id('titles', 'open'), '称号・連続記録', { emoji: '🏅' }),
         button(id('privacy', 'open'), '自分のデータ', { emoji: '🔐' }),
       ),
@@ -164,4 +166,52 @@ export async function rank(ix, _args, ctx) {
   });
 }
 
-export const actions = { open, pay, payto, paydo, history, rank };
+/** 📊 戦績：ゲームごとの収支と、1対1の勝ち負け（相手ごと）。 */
+export async function stats(ix, _args, ctx) {
+  const data = await statsOf(ctx.db, ix.guildId, ix.userId);
+  const signed = (n) => `${n > 0 ? '+' : ''}${n.toLocaleString('ja-JP')}`;
+  const rate = (wins, losses) => (wins + losses > 0 ? `勝率 ${Math.round((wins / (wins + losses)) * 100)}%` : '');
+
+  const fields = [];
+  if (data.games.length > 0) {
+    fields.push({
+      name: '🎮 ゲームごとの収支',
+      value: data.games
+        .slice(0, 12)
+        .map((entry) => `${entry.net >= 0 ? '🟢' : '🔴'} **${entry.name}** ${signed(entry.net)}　*(${entry.plays}回)*`)
+        .join('\n'),
+    });
+  }
+  if (data.wins + data.losses > 0) {
+    fields.push(
+      {
+        name: '⚔️ 1対1の勝ち負け',
+        value:
+          `**${data.wins}勝 ${data.losses}敗**　${rate(data.wins, data.losses)}\n` +
+          data.byGame.map((entry) => `・${MATCH_GAMES[entry.game] ?? entry.game} ${entry.wins}勝${entry.losses}敗`).join('\n'),
+        inline: true,
+      },
+      {
+        name: '🤝 よく戦う相手',
+        value: data.rivals.map((entry) => `<@${entry.rival}> ${entry.wins}勝${entry.losses}敗`).join('\n') || '—',
+        inline: true,
+      },
+    );
+  }
+
+  return show(ix, {
+    embeds: [
+      embed({
+        color: 0xf1c40f,
+        author: { name: ix.displayName, icon_url: ix.avatar },
+        title: '📊 戦績',
+        description: fields.length === 0 ? 'まだ記録がありません。ゲームで遊ぶとここに積み上がります。' : undefined,
+        fields,
+        footer: { text: '1対1の勝ち負けは、この機能が入った版から数えています' },
+      }),
+    ],
+    components: [row(backButton('wallet', 'お財布へ'), homeButton())],
+  });
+}
+
+export const actions = { open, pay, payto, paydo, history, rank, stats };

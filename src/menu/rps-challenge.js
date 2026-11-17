@@ -19,6 +19,7 @@ import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
 import { handleRematch, rematchButton } from './rematch.js';
 import { foldLater } from '../lib/guild-prefs.js';
+import { recordMatch } from '../lib/match-results.js';
 import { inviteParts, resolveInvite } from './open-invite.js';
 
 /** 公開メッセージのボタンは `rps:` 始まり（メニューの `m:` とは別系統）。 */
@@ -201,6 +202,7 @@ export async function resolveMatch(ctx, match) {
   const winnerId = result === 'challenger' ? match.challenger_id : match.opponent_id;
   const loserId = result === 'challenger' ? match.opponent_id : match.challenger_id;
   if (match.bet > 0) await deposit(ctx.db, match.guild_id, winnerId, match.bet * 2, 'rps:win', match.id);
+  await recordMatch(ctx.db, { guildId: match.guild_id, game: 'rps', winnerId, loserId, amount: match.bet * 2 });
 
   return finalUpdate(ctx, match, {
     content: handsArt,

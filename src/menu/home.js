@@ -1,5 +1,6 @@
 import { getBalance, rankOf } from '../lib/economy.js';
 import { allStreaks } from '../lib/streak.js';
+import { evaluate } from '../lib/achievements.js';
 import { listActivities } from '../lib/activities.js';
 import { countItems, pendingDeliveries } from '../lib/shop.js';
 import { coins, truncate } from '../lib/format.js';
@@ -12,6 +13,13 @@ export async function open(ix, _args, ctx, notice = null) {
   const settings = await ctx.settings(ix.guildId);
   // 口座がまだ無ければ、はじめて開いた人。最初の一度だけ案内を添える
   const firstTime = !(await ctx.db.get('SELECT 1 AS ok FROM balances WHERE guild_id = ?1 AND user_id = ?2', ix.guildId, ix.userId));
+  // ゲームの勝ちやショップの売れ行きなど、報告以外で称号の条件を満たしていたら、ここで拾う
+  if (!firstTime) {
+    const unlocked = await evaluate(ctx.db, { guildId: ix.guildId, userId: ix.userId, calendar: ctx.calendar });
+    if (unlocked.length > 0 && !notice) {
+      notice = { kind: 'ok', text: `🏅 新しい称号を獲得しました：${unlocked.map((a) => `${a.emoji ?? ''}${a.name}`).join('、')}` };
+    }
+  }
   const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
   const [rank, activities, items, streaks] = await Promise.all([
     rankOf(ctx.db, ix.guildId, ix.userId),

@@ -1,5 +1,6 @@
 import { deposit } from './economy.js';
 import { EMOJI } from './emoji.js';
+import { recordMatch } from './match-results.js';
 
 export const HANDS = {
   rock: { emoji: EMOJI.hand_rock, label: 'グー' },
@@ -143,6 +144,7 @@ export async function cancelExpired(db, now = Date.now()) {
       const winnerId = challengerOnly ? match.challenger_id : match.opponent_id;
       const loserId = challengerOnly ? match.opponent_id : match.challenger_id;
       await deposit(db, match.guild_id, winnerId, match.bet * 2, 'rps:win', match.id);
+      await recordMatch(db, { guildId: match.guild_id, game: 'rps', winnerId, loserId, amount: match.bet * 2 });
       handled.push({ match, refunded: false, winnerId, loserId });
       continue;
     }

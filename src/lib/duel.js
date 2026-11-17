@@ -11,6 +11,7 @@
  */
 import { deposit } from './economy.js';
 import { chance } from './random.js';
+import { recordMatch } from './match-results.js';
 
 export const INVITE_TIMEOUT_MS = 120_000;
 export const PLAY_TIMEOUT_MS = 600_000;
@@ -153,6 +154,21 @@ export async function payout(db, duel, amounts, reason) {
   for (const [role, amount] of Object.entries(amounts)) {
     if (amount > 0) {
       await deposit(db, duel.guild_id, userIdOf(duel, role), amount, reason, `duel:${duel.id}`);
+    }
+  }
+  // 片方だけが多く受け取ったら、その人の勝ちとして戦績に残す（山分け・返金は残さない）
+  if (reason === 'duel:win') {
+    const mine = amounts.challenger ?? 0;
+    const theirs = amounts.opponent ?? 0;
+    if (mine !== theirs) {
+      const winner = mine > theirs ? 'challenger' : 'opponent';
+      await recordMatch(db, {
+        guildId: duel.guild_id,
+        game: duel.game,
+        winnerId: userIdOf(duel, winner),
+        loserId: userIdOf(duel, otherRole(winner)),
+        amount: Math.max(mine, theirs),
+      });
     }
   }
 }

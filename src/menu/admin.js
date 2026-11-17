@@ -16,6 +16,7 @@ import {
   listAchievements,
   parseAchievementLines,
   removeAchievement,
+  toggleHidden,
 } from '../lib/achievements.js';
 import {
   STREAK_BULK_COLUMNS,
@@ -430,6 +431,15 @@ export async function ach(ix, _args, ctx, notice = null) {
           description: truncate(describeCondition(achievement, settings), 100),
         })),
       ),
+      stringSelect(
+        id('admin', 'achhide'),
+        '隠し称号にする／戻す（条件を満たすまで「？？？」）',
+        achievements.slice(0, 25).map((achievement) => ({
+          label: truncate(`${achievement.hidden ? '🙈 ' : ''}${achievement.name}`, 100),
+          value: String(achievement.id),
+          description: achievement.hidden ? '隠している → 選ぶと見せる' : '見せている → 選ぶと隠す',
+        })),
+      ),
     );
   }
   components.push(
@@ -467,13 +477,25 @@ function achievementList(achievements, settings) {
     .slice(0, LIMIT)
     .map(
       (achievement) =>
-        `${achievement.emoji ?? '🏅'} **${achievement.name}** — ${describeCondition(achievement, settings)}` +
+        `${achievement.hidden ? '🙈' : ''}${achievement.emoji ?? '🏅'} **${achievement.name}** — ${describeCondition(achievement, settings)}` +
         (achievement.reward > 0 ? `（+${achievement.reward}）` : ''),
     );
   if (achievements.length > LIMIT) {
     lines.push(`…ほか ${achievements.length - LIMIT} 件（**📤 書き出す** で全部見られます）`);
   }
   return lines.join('\n');
+}
+
+export async function achhide(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const updated = await toggleHidden(ctx.db, ix.guildId, Number(ix.values[0]));
+  if (!updated) return ach(ix, [], ctx, 'その称号は見つかりませんでした。');
+  return ach(
+    ix,
+    [],
+    ctx,
+    updated.hidden ? `「${updated.name}」を隠し称号にしました（まだの人には「？？？」と出ます）` : `「${updated.name}」を見せるようにしました`,
+  );
 }
 
 export async function achnew(ix, _args, ctx) {
@@ -2125,6 +2147,7 @@ export const actions = {
   streakdelok,
   ach,
   achnew,
+  achhide,
   achtype,
   achsave,
   achbulk,

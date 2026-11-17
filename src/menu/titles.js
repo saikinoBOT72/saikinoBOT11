@@ -1,4 +1,4 @@
-import { describeCondition, earnedBy, equipTitle, equippedTitle, evaluate, listAchievements, titleTag } from '../lib/achievements.js';
+import { describeCondition, earnedBy, equipTitle, equippedTitle, evaluate, listAchievements, lockedLabel, titleTag } from '../lib/achievements.js';
 import { allStreaks, listStreakRewards } from '../lib/streak.js';
 import { coins, truncate } from '../lib/format.js';
 import { stringSelect } from '../discord/builders.js';
@@ -57,7 +57,10 @@ export async function open(ix, _args, ctx, notice = null) {
       name: '🔒 まだの称号',
       value: truncate(
         locked
-          .map((achievement) => `${achievement.emoji ?? '🔒'} **${achievement.name}** — ${describeCondition(achievement, settings)}`)
+          .map((achievement) => {
+            const shown = lockedLabel(achievement, settings);
+            return `${shown.emoji} **${shown.name}** — ${shown.condition}`;
+          })
           .join('\n'),
         1024,
       ),
