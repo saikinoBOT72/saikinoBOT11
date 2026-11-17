@@ -14,6 +14,7 @@ import * as omikuji from './omikuji.js';
 import { MENU_PREFIX } from './common.js';
 import { deferUpdate } from '../discord/respond.js';
 import { gated, gatedAll } from './games.js';
+import { foldRules, withCrumb } from './rules-fold.js';
 
 /**
  * 画面名 → 操作名 → ハンドラ。customId は `m:<画面>:<操作>:<引数...>`。
@@ -24,31 +25,31 @@ import { gated, gatedAll } from './games.js';
  */
 export const screens = {
   home: home.actions,
-  report: report.actions,
+  report: withCrumb('🏠 › 💪 報告してかせぐ', report.actions),
   games: games.games,
-  slot: gated('slot', games.slot),
-  cf: gated('cf', games.cf),
-  rps: gated('rps', games.rps),
-  cc: gated('cc', games.cc),
-  shop: shop.actions,
+  slot: gated('slot', foldRules('slot', games.slot)),
+  cf: gated('cf', foldRules('cf', games.cf)),
+  rps: gated('rps', foldRules('rps', games.rps)),
+  cc: gated('cc', foldRules('cc', games.cc)),
+  shop: withCrumb('🏠 › 🛍️ ショップ', shop.actions),
   wallet: wallet.actions,
-  admin: admin.actions,
+  admin: withCrumb('🏠 › ⚙️ 管理', admin.actions),
   privacy: privacy.actions,
   titles: titles.actions,
-  hl: gated('hl', highlow.actions),
+  hl: gated('hl', foldRules('hl', highlow.actions)),
   poll: gated('poll', poll.actions),
   doors: doors.actions,
   lot: gated('lot', lottery.actions),
   omi: gatedAll('omi', omikuji.actions),
-  bj: gated('bj', games.bj),
-  pk: gated('pk', games.pk),
-  pig: gated('pig', games.pig),
-  ch: gated('ch', games.ch),
-  yt: gated('yt', games.yt),
-  rr: gated('rr', games.rr),
-  cs: gated('cs', games.cs),
-  mine: gated('mine', games.mine),
-  dd: gated('dd', games.dd),
+  bj: gated('bj', foldRules('bj', games.bj)),
+  pk: gated('pk', foldRules('pk', games.pk)),
+  pig: gated('pig', foldRules('pig', games.pig)),
+  ch: gated('ch', foldRules('ch', games.ch)),
+  yt: gated('yt', foldRules('yt', games.yt)),
+  rr: gated('rr', foldRules('rr', games.rr)),
+  cs: gated('cs', foldRules('cs', games.cs)),
+  mine: gated('mine', foldRules('mine', games.mine)),
+  dd: gated('dd', foldRules('dd', games.dd)),
 };
 
 export const namespace = MENU_PREFIX;

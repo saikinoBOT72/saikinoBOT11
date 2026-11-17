@@ -2173,6 +2173,23 @@ await test('削除後にまた遊ぶと初期残高から始まる', async () =>
 
 section('[ホーム画面の整理]');
 
+await test('はじめて開いた人には、最初の一度だけ案内が出る', async () => {
+  const first = await press('m:home:open', { userId: 'newcomer' });
+  assert.match(screenText(first), /ようこそ/);
+  assert.match(screenText(first), /交換できません/, '現金と交換できないことも最初に伝える');
+  assert.ok(customIds(first).includes('m:home:help'));
+  const second = await press('m:home:open', { userId: 'newcomer' });
+  assert.doesNotMatch(screenText(second), /ようこそ/, '2回目からは出ない');
+});
+
+await test('ヘルプは名簿から作るので、どのゲームも載っている', async () => {
+  const help = await runCommand('help');
+  const text = screenText(help);
+  const { GAMES } = await import(src('lib/game-catalog.js'));
+  for (const game of GAMES) assert.ok(text.includes(game.name), `${game.name} がヘルプに無い`);
+  assert.match(text, /自分のデータ/);
+});
+
 await test('ホームは6つのボタンだけ（ランキング・持ち物・使い方は置かない）', async () => {
   const payload = await press('m:home:open', { admin: true });
   const ids = customIds(payload);
@@ -3382,7 +3399,31 @@ await test('全部オフにしても画面は壊れない', async () => {
   const empty = await press('m:games:open');
   assert.match(screenText(empty), /遊べるゲームがありません/);
   for (const game of catalog.GAMES) await press(`m:admin:gmtoggle:${game.key}`, { admin: true });
-  assert.equal(customIds(await press('m:games:open')).length, catalog.GAMES.length + 1, '全部戻る（＋戻るボタン）');
+  const ids = customIds(await press('m:games:open'));
+  for (const game of catalog.GAMES) assert.ok(ids.includes(`m:${game.key}:open`), `${game.name} が戻っていない`);
+});
+
+await test('ルールの説明は、はじめてだけ全文、2回目からは畳んで「遊び方」ボタンに入れる', async () => {
+  const first = await press('m:pk:open', { userId: 'rules-reader' });
+  assert.ok(firstEmbed(first).fields.length >= 3, 'はじめては全文');
+  assert.match(firstEmbed(first).author.name, /簡ポーカー/, '今どこにいるかが分かる');
+  const second = await press('m:pk:open', { userId: 'rules-reader' });
+  assert.equal(firstEmbed(second).fields.length, 0, '2回目は畳む');
+  assert.ok(customIds(second).includes('m:pk:open:rules'), '遊び方ボタンがある');
+  assert.ok(customIds(second).includes('m:pk:custom'), '金額のボタンはそのまま');
+  const rules = await press('m:pk:open:rules', { userId: 'rules-reader' });
+  assert.ok(firstEmbed(rules).fields.length >= 3, '遊び方を押せば全文');
+});
+
+await test('あそぶは「ひとりで／1対1／みんなで」で分けて見られる', async () => {
+  const solo = await press('m:games:open:solo');
+  const soloIds = customIds(solo);
+  assert.ok(soloIds.includes('m:slot:open'));
+  assert.ok(!soloIds.includes('m:rps:open'), '1対1のゲームは出ない');
+  const duel = customIds(await press('m:games:open:duel'));
+  assert.ok(duel.includes('m:rps:open') && !duel.includes('m:slot:open'));
+  for (const game of catalog.GAMES) assert.ok(catalog.CATEGORIES[game.category], `${game.name} に分類が無い`);
+  assert.match(firstEmbed(solo).author.name, /ひとりで/, '今どこにいるかが分かる');
 });
 
 section('[Botの設定]');

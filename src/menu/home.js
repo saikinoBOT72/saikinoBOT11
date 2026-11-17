@@ -2,13 +2,16 @@ import { getBalance, rankOf } from '../lib/economy.js';
 import { allStreaks } from '../lib/streak.js';
 import { listActivities } from '../lib/activities.js';
 import { countItems } from '../lib/shop.js';
-import { coins } from '../lib/format.js';
+import { coins, truncate } from '../lib/format.js';
+import { CATEGORIES, enabledGames, gamesIn } from '../lib/game-catalog.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { button, embed, homeButton, id, row, show, withNotice } from './common.js';
 import { describeDayStart } from '../lib/calendar.js';
 
 export async function open(ix, _args, ctx, notice = null) {
   const settings = await ctx.settings(ix.guildId);
+  // 口座がまだ無ければ、はじめて開いた人。最初の一度だけ案内を添える
+  const firstTime = !(await ctx.db.get('SELECT 1 AS ok FROM balances WHERE guild_id = ?1 AND user_id = ?2', ix.guildId, ix.userId));
   const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
   const [rank, activities, items, streaks] = await Promise.all([
     rankOf(ctx.db, ix.guildId, ix.userId),
@@ -30,8 +33,23 @@ export async function open(ix, _args, ctx, notice = null) {
     footer: { text: 'ボタンで操作できます。このメニューはあなたにだけ見えています' },
   });
 
+  const welcome = firstTime
+    ? embed({
+        color: 0x2ecc71,
+        title: `👋 ようこそ！ ${coins(balance, settings)} を受け取りました`,
+        description: [
+          '**はじめにやること**',
+          '1️⃣ **💪 報告してかせぐ** … 筋トレや勉強など、やったことを選ぶだけでコインがもらえます',
+          '2️⃣ **🎮 あそぶ** … コインでゲーム。ひとりでも、みんなとでも',
+          '3️⃣ **🛍️ ショップ** … みんなの出品を買ったり、自分で出品したり',
+          '',
+          `${settings.currency_name}は遊びのための数字で、現金などとは交換できません。くわしくは下の **📖 使い方** から。`,
+        ].join('\n'),
+      })
+    : null;
+
   return show(ix, {
-    embeds: [withNotice(main, notice)],
+    embeds: [welcome, withNotice(main, notice)].filter(Boolean),
     components: [
       row(
         button(id('report', 'open'), '報告してかせぐ', { emoji: '💪', style: ButtonStyle.SUCCESS }),
@@ -41,6 +59,7 @@ export async function open(ix, _args, ctx, notice = null) {
       row(
         button(id('wallet', 'open'), 'お財布', { emoji: '💰' }),
         button(id('home', 'open'), '更新', { emoji: '🔄' }),
+        firstTime ? button(id('home', 'help'), '使い方', { emoji: '📖' }) : null,
         ix.isAdmin ? button(id('admin', 'open'), '管理', { emoji: '⚙️', style: ButtonStyle.DANGER }) : null,
       ),
     ],
@@ -76,27 +95,45 @@ export async function help(ix, _args, ctx) {
               '連続日数はアクションごとに数えます。決められた日数に届くとボーナスが出て、条件を満たすと称号も自動で贈られます。**お財布 → 🏅 称号・連続記録** から、持っている称号を1つ選んで名前の横に表示できます。' +
               (describeDayStart(ctx.calendar) ? `\n**${describeDayStart(ctx.calendar)}。** 深夜に報告しても前の日の続きとして数えます。` : ''),
           },
-          {
-            name: '🎮 あそぶ（1人）',
-            value:
-              'スロット（最大 x3000）、コイントス（2倍）、ハイ&ロー（連勝で倍率上昇）、運命の扉（赤か青を当て続ける）、宝くじ（毎週日曜19時に抽選・持ち越しあり）。',
-          },
-          {
-            name: '🎮 あそぶ（1対1）',
-            value:
-              'じゃんけん、チンチロ、ロシアンルーレット、チャージ＆シュート、地雷＆陣取り。相手を選んで挑戦状を送り、承諾されたら勝負開始です。**勝った方が賭け金を総取り**します。',
-          },
+          ...gameHelp(settings),
           {
             name: '🛍️ ショップ',
             value:
               '自分で値段を決めて出品できます。売れた代金はそのまま出品者に入ります。画像URLを設定すると一覧で見栄えがよくなります。',
           },
           { name: '💰 お財布', value: '所持金の確認、他のメンバーへの送金、増減の履歴が見られます。' },
+          {
+            name: '🔐 自分のデータ',
+            value: '**お財布 → 🔐 自分のデータ** から、保存されている内容の確認と削除がいつでもできます。メッセージの本文は読んでいません。',
+          },
+          {
+            name: '⚖️ 決まりごと',
+            value:
+              `${currency}は遊びのための数字です。**現金・電子マネー・ギフト券などと交換することはできません**（出品やメモでの交換の持ちかけも禁止です）。`,
+          },
         ],
       }),
     ],
     components: [row(homeButton())],
   });
+}
+
+/**
+ * ヘルプの「あそぶ」の部分。ゲームの名簿（game-catalog.js）から作るので、
+ * ゲームを増やしても載せ忘れが起きない。オフにしたゲームは出さない。
+ */
+function gameHelp(settings) {
+  const playable = enabledGames(settings);
+  return Object.entries(CATEGORIES)
+    .map(([key, meta]) => {
+      const games = gamesIn(playable, key);
+      if (games.length === 0) return null;
+      return {
+        name: `🎮 あそぶ（${meta.emoji} ${meta.label}）`,
+        value: truncate(games.map((game) => `${game.emoji} **${game.name}** — ${game.hint}`).join('\n'), 1024),
+      };
+    })
+    .filter(Boolean);
 }
 
 export const actions = { open, help };

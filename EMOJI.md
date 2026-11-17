@@ -30,6 +30,8 @@
 - トランプが52枚そろうと、ハイ&ローとブラックジャックの表示が「♠️A」から**カード1枚の絵**に変わります
 - `card_back` はブラックジャックのディーラーの伏せ札にも使われます
 
+> 赤と青で分ける絵文字（運命の扉・陣取り）は、**赤は四角・青は丸**のように形も変えてあります。色が見分けにくい人のためなので、差し替えるときも形をそろえないようにしてください。
+
 ## 画像の仕様
 
 - **128×128 px の PNG、背景透過**
@@ -85,8 +87,8 @@ Twemoji の画像を落としてアップロードするだけです。
 | 分類 | 名前 |
 | --- | --- |
 | チンチロの役 | `hand_pinzoro`(🌟 `1f31f`) `hand_zorome`(✨ `2728`) `hand_shigoro`(🔥 `1f525`) `hand_me`(🎲 `1f3b2`) `hand_none`(💧 `1f4a7`) `hand_hifumi`(💀 `1f480`) |
-| 運命の扉 | `door_red`(🟥 `1f7e5`) `door_blue`(🟦 `1f7e6`) `hit`(⭕ `2b55`) `miss`(❌ `274c`) |
-| 地雷＆陣取り | `cell_empty`(⬜ `2b1c`) `cell_challenger`(🟥) `cell_opponent`(🟦) `bomb`(💣 `1f4a3`) `boom`(💥 `1f4a5`) |
+| 運命の扉 | `door_red`(🟥 `1f7e5`) `door_blue`(🔵 `1f535`) `hit`(⭕ `2b55`) `miss`(❌ `274c`) |
+| 地雷＆陣取り | `cell_empty`(⬜ `2b1c`) `cell_challenger`(🟥) `cell_opponent`(🔵 `1f535`) `bomb`(💣 `1f4a3`) `boom`(💥 `1f4a5`) |
 | チャージ＆シュート | `move_charge`(⚡ `26a1`) `move_guard`(🛡️ `1f6e1`) `move_shoot`(🔵 `1f535`) `hp_full`(❤️ `2764`) `hp_lost`(🖤 `1f5a4`) |
 | ロシアンルーレット | `chamber_left`(⚫ `26ab`) `chamber_spent`(⚪ `26aa`) |
 | ゲームのアイコン | `slot`(🎰 `1f3b0`) `coinflip`(🪙) `highlow`(🃏 `1f0cf`) `rps`(✊) `chinchiro`(🎲) `poll`(🗳️ `1f5f3`) `roulette`(🔫 `1f52b`) `doors`(🚪 `1f6aa`) `charge`(⚡) `mines`(💣) `lottery`(🎫 `1f3ab`) |
@@ -105,8 +107,8 @@ Twemoji の画像を落としてアップロードするだけです。
 | じゃんけん | `hand_rock`(✊ `270a`) `hand_scissors`(✌️ `270c`) `hand_paper`(🖐️ `1f590`) |
 | コイントス | `coin_heads`(🪙 `1fa99`) `coin_tails`(🌑 `1f311`) |
 | チンチロの役 | `hand_pinzoro`(🌟) `hand_zorome`(✨) `hand_shigoro`(🔥) `hand_me`(🎲) `hand_none`(💧) `hand_hifumi`(💀) |
-| 運命の扉 | `door_red`(🟥) `door_blue`(🟦) `hit`(⭕) `miss`(❌) |
-| 地雷＆陣取り | `cell_empty`(⬜) `cell_challenger`(🟥) `cell_opponent`(🟦) `bomb`(💣) `boom`(💥) |
+| 運命の扉 | `door_red`(🟥) `door_blue`(🔵) `hit`(⭕) `miss`(❌) |
+| 地雷＆陣取り | `cell_empty`(⬜) `cell_challenger`(🟥) `cell_opponent`(🔵) `bomb`(💣) `boom`(💥) |
 | チャージ＆シュート | `move_charge`(⚡) `move_guard`(🛡️) `move_shoot`(🔵) `hp_full`(❤️) `hp_lost`(🖤) |
 | ロシアンルーレット | `chamber_left`(⚫) `chamber_spent`(⚪) |
 | 演出 | `dice_roll`（振っている最中。**GIF にすると回って見えます**） |

@@ -26,7 +26,7 @@ import {
   getRecord as getYachtRecord,
 } from '../lib/yacht-table.js';
 import { MAX_ROLLS as YT_ROLLS } from '../lib/yacht.js';
-import { enabledGames, GAME_BY_KEY, isGameEnabled } from '../lib/game-catalog.js';
+import { CATEGORIES, enabledGames, GAME_BY_KEY, gamesIn, isGameEnabled } from '../lib/game-catalog.js';
 import { startChallenge as startChinchiro } from './chinchiro-match.js';
 import { escrowFor } from '../lib/chinchiro.js';
 import { MAX_MULTIPLIER as DICE_MAX } from '../lib/dice.js';
@@ -55,10 +55,17 @@ import { linkButton } from '../discord/builders.js';
 
 /* ------------------------------------------------------------------ ゲーム選択 */
 
-export async function open(ix, _args, ctx, notice = null) {
+/**
+ * 「🎮 あそぶ」。上の段で「ひとりで／1対1／みんなで」を切り替える。
+ * 20近いゲームが一面に並ぶと探しにくいので、遊び方で分けて出す。
+ * ボタンは1行5個・1画面5行までなので、切り替えの1行＋ゲーム4行（20個）まで。
+ */
+export async function open(ix, [rawTab] = [], ctx, notice = null) {
   const settings = await ctx.settings(ix.guildId);
   const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
-  const playable = enabledGames(settings);
+  const tab = CATEGORIES[rawTab] ? rawTab : 'all';
+  const everything = enabledGames(settings);
+  const playable = (tab === 'all' ? everything : gamesIn(everything, tab)).slice(0, 20);
 
   if (playable.length === 0) {
     return show(ix, {
@@ -76,8 +83,20 @@ export async function open(ix, _args, ctx, notice = null) {
     });
   }
 
+  // 1行目は切り替え。いま見ている分類は押せなくしておく
+  const tabs = row(
+    button(id('games', 'open', 'all'), 'すべて', { emoji: '🎮', disabled: tab === 'all' }),
+    ...Object.entries(CATEGORIES).map(([key, meta]) =>
+      button(id('games', 'open', key), meta.label, {
+        emoji: meta.emoji,
+        disabled: tab === key || gamesIn(everything, key).length === 0,
+      }),
+    ),
+    backButton(),
+  );
+
   // ボタンは1行5個まで。名簿の順に詰めていく
-  const rows = [];
+  const rows = [tabs];
   for (let index = 0; index < playable.length; index += 5) {
     rows.push(
       row(
@@ -96,8 +115,11 @@ export async function open(ix, _args, ctx, notice = null) {
       withNotice(
         embed({
           color: 0xe67e22,
+          author: { name: tab === 'all' ? '🏠 › 🎮 あそぶ' : `🏠 › 🎮 あそぶ › ${CATEGORIES[tab].emoji} ${CATEGORIES[tab].label}` },
           title: '🎮 あそぶ',
-          description: `所持金 ${coins(balance, settings)}\n\n遊びたいものを選んでください。`,
+          description:
+            `所持金 ${coins(balance, settings)}\n\n遊びたいものを選んでください。` +
+            (tab === 'all' && everything.length > 20 ? '\n多いので、上の段で遊び方ごとに分けて見てください。' : ''),
           fields: playable.map((game) => ({
             name: `${game.emoji} ${game.name}`,
             value: game.hint,
@@ -107,7 +129,7 @@ export async function open(ix, _args, ctx, notice = null) {
         notice,
       ),
     ],
-    components: [...rows, row(backButton())],
+    components: rows,
   });
 }
 

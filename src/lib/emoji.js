@@ -85,16 +85,16 @@ export const EMOJI = {
   hp_full: '❤️',
   hp_lost: '🖤',
 
-  /* --- 地雷＆陣取り --- */
+  /* --- 地雷＆陣取り（赤は四角・青は丸。色が見分けにくい人にも形で分かるように） --- */
   cell_empty: '⬜',
   cell_challenger: '🟥',
-  cell_opponent: '🟦',
+  cell_opponent: '🔵',
   bomb: '💣',
   boom: '💥',
 
-  /* --- 運命の扉 --- */
+  /* --- 運命の扉（赤は四角・青は丸。色だけに頼らない） --- */
   door_red: '🟥',
-  door_blue: '🟦',
+  door_blue: '🔵',
   hit: '⭕',
   miss: '❌',
 };
