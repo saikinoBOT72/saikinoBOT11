@@ -5,6 +5,8 @@ import {
   cancelPoll,
   closePoll,
   getPollById,
+  JUDGES,
+  oddsOf,
   optionsOf,
   placeBet,
   raiseBet,
@@ -26,19 +28,30 @@ const LETTERS = ['🇦', '🇧', '🇨', '🇩', '🇪', '🇫', '🇬', '🇭',
 export async function boardPayload(db, poll, settings) {
   const [options, counts, bets] = await Promise.all([optionsOf(db, poll.id), tally(db, poll.id), betsOf(db, poll.id)]);
 
-  // 誰が何に賭けたかも出す（出題者が正解を決めるので、身内の信頼のために見えるようにしておく）
+  const open = poll.status === 'open';
+  const bonus = poll.bonus ?? 0;
+  const pool = counts.total + bonus;
+  const byAdmin = poll.judge === 'admin';
+
+  // 誰が何に賭けたかも出す（正解を決める人がいるので、身内の信頼のために見えるようにしておく）
+  // 「いま当たったら何倍か」も添える。人気のない選択肢ほど倍率が高い
   const lines = options.map((option) => {
     const stat = counts.byOption.get(option.idx);
     const detail = stat ? `${stat.count}人 / ${settings.currency_emoji}${stat.total}` : 'まだ誰もいません';
+    const odds = poll.status === 'settled' ? null : oddsOf(stat, pool, poll.mode);
+    const oddsText = !odds
+      ? ''
+      : odds.multiplier !== undefined
+        ? `　*当たれば ×${odds.multiplier.toFixed(odds.multiplier >= 10 ? 0 : 1)}*`
+        : `　*当たれば1人 ${odds.share.toLocaleString('ja-JP')}*`;
     const mark = poll.answer === option.idx ? '　✅ **正解**' : '';
-    return `${LETTERS[option.idx]} **${option.label}** — ${detail}${mark}${whoBet(bets, option.idx)}`;
+    return `${LETTERS[option.idx]} **${option.label}** — ${detail}${oddsText}${mark}${whoBet(bets, option.idx)}`;
   });
-
-  const open = poll.status === 'open';
-  const bonus = poll.bonus ?? 0;
+  const ownerBet = !byAdmin && bets.some((bet) => bet.user_id === poll.owner_id);
   const fields = [
-    { name: '賞金プール', value: coins(counts.total + bonus, settings), inline: true },
+    { name: '賞金プール', value: coins(pool, settings), inline: true },
     { name: '参加者', value: `${counts.players} 人`, inline: true },
+    { name: '正解を決める人', value: byAdmin ? '🛡️ サーバー管理者' : `<@${poll.owner_id}>（出題者）`, inline: true },
   ];
   if (bonus > 0) fields.push({ name: '出題者の上乗せ', value: `${bonus.toLocaleString('ja-JP')}`, inline: true });
   if (poll.mode === 'fixed') fields.push({ name: '参加費', value: `${poll.stake}`, inline: true });
@@ -60,14 +73,17 @@ export async function boardPayload(db, poll, settings) {
           (open
             ? '\n\n選択肢のボタンを押して参加してください。**選び直しや取り消しはできません**が、' +
               (poll.mode === 'free' ? '同じ選択肢になら**あとから上乗せ**できます。' : '参加費制なので全員同じ額です。')
-            : '\n\n締め切りました。出題者が正解を決めるのを待っています。'),
+            : `\n\n締め切りました。${byAdmin ? '管理者' : '出題者'}が正解を決めるのを待っています。`) +
+          (ownerBet ? '\n\n⚠️ 出題者もこの大会に賭けています。' : ''),
         fields,
         footer: {
           text: open
             ? poll.mode === 'free'
-              ? '賭けた額に比例して山分けします'
+              ? '賭けた額に比例して山分けします（倍率は締切までに変わります）'
               : '正解者で等分します'
-            : '出題者だけが正解を決められます',
+            : byAdmin
+              ? '賭けていないサーバー管理者が正解を決めます'
+              : '出題者だけが正解を決められます',
         },
       }),
     ],
@@ -110,7 +126,7 @@ function openButtons(poll, options) {
       button(`pl:close:${poll.id}`, '締め切る（出題者）', { emoji: '🔒', style: ButtonStyle.SECONDARY }),
       button(`pl:boost:${poll.id}`, '賞金を上乗せ（出題者）', { emoji: '💰', style: ButtonStyle.SECONDARY }),
       button(`pl:again:${poll.id}`, '再通知（出題者）', { emoji: '📢', style: ButtonStyle.SECONDARY }),
-      button(`pl:cancel:${poll.id}`, '中止（出題者）', { emoji: '🚫', style: ButtonStyle.DANGER }),
+      button(`pl:cancel:${poll.id}`, '中止', { emoji: '🚫', style: ButtonStyle.DANGER }),
     ),
   ];
 }
@@ -118,9 +134,12 @@ function openButtons(poll, options) {
 function closedButtons(poll) {
   return [
     row(
-      button(`pl:answer:${poll.id}`, '正解を決める（出題者）', { emoji: '✅', style: ButtonStyle.SUCCESS }),
+      button(`pl:answer:${poll.id}`, `正解を決める（${JUDGES[poll.judge]?.label ?? '出題者'}）`, {
+        emoji: '✅',
+        style: ButtonStyle.SUCCESS,
+      }),
       button(`pl:boost:${poll.id}`, '賞金を上乗せ（出題者）', { emoji: '💰', style: ButtonStyle.SECONDARY }),
-      button(`pl:cancel:${poll.id}`, '中止（出題者）', { emoji: '🚫', style: ButtonStyle.DANGER }),
+      button(`pl:cancel:${poll.id}`, '中止', { emoji: '🚫', style: ButtonStyle.DANGER }),
     ),
   ];
 }
@@ -366,7 +385,7 @@ async function handleBonus(ix, ctx, poll) {
 
 /** 中止は取り返しがつかないので、本人にだけ確認を出す。 */
 async function handleCancel(ix, ctx, poll) {
-  if (ix.userId !== poll.owner_id) return reply({ content: '中止できるのは出題者だけです。' });
+  if (ix.userId !== poll.owner_id && !ix.isAdmin) return reply({ content: '中止できるのは出題者とサーバー管理者だけです。' });
   if (poll.status !== 'open' && poll.status !== 'closed') {
     return reply({ content: 'この予想大会はもう終わっています。' });
   }
@@ -381,7 +400,7 @@ async function handleCancel(ix, ctx, poll) {
         description:
           `**${truncate(poll.question, 80)}**\n\n` +
           `参加した ${counts.players} 人に ${coins(counts.total, settings)} を返します。` +
-          (poll.bonus > 0 ? `\n上乗せした ${coins(poll.bonus, settings)} もあなたに戻ります。` : ''),
+          (poll.bonus > 0 ? `\n出題者が上乗せした ${coins(poll.bonus, settings)} も出題者に戻ります。` : ''),
       }),
     ],
     components: [
@@ -393,7 +412,8 @@ async function handleCancel(ix, ctx, poll) {
 }
 
 async function handleCancelOk(ix, ctx, poll) {
-  if (ix.userId !== poll.owner_id) return reply({ content: '中止できるのは出題者だけです。' });
+  if (ix.userId !== poll.owner_id && !ix.isAdmin) return reply({ content: '中止できるのは出題者とサーバー管理者だけです。' });
+  const who = ix.userId === poll.owner_id ? '出題者' : '管理者';
   if (!(await cancelPoll(ctx.db, poll))) return reply({ content: 'この予想大会はもう終わっています。' });
 
   // 押されたのは本人にしか見えない確認メッセージなので、掲示板は別途書き換える
@@ -403,7 +423,7 @@ async function handleCancelOk(ix, ctx, poll) {
         .editMessage(
           poll.channel_id,
           poll.message_id,
-          cancelledPayload(poll, '出題者が中止しました。賭けた額は全員に返しました。'),
+          cancelledPayload(poll, `${who}が中止しました。賭けた額は全員に返しました。`),
         )
         .catch((error) => console.error('予想大会の中止表示に失敗:', error)),
     );
@@ -433,8 +453,23 @@ function readAmount(ix) {
  * 出題者が選ぶのをやめると元に戻せない。なので出題者にだけ見えるメッセージで選ばせる。
  * 選んだあと「この選択肢で確定」を押すまでは山分けしない（押し間違いで確定しないように）。
  */
+/**
+ * 正解を決められるか。出題者の大会は出題者だけ。
+ * 管理者に任せた大会は、その大会に賭けていないサーバー管理者だけ（自分に有利な正解を選べないように）。
+ * @returns {Promise<string|null>} 決められない理由
+ */
+async function judgeProblem(ix, ctx, poll) {
+  if (poll.judge === 'admin') {
+    if (!ix.isAdmin) return 'この大会は、サーバー管理者が正解を決めます。';
+    if (await betOf(ctx.db, poll.id, ix.userId)) return '自分が賭けている大会の正解は決められません。ほかの管理者にお願いしてください。';
+    return null;
+  }
+  return ix.userId === poll.owner_id ? null : '正解を決められるのは出題者だけです。';
+}
+
 async function handleAnswer(ix, ctx, poll) {
-  if (ix.userId !== poll.owner_id) return reply({ content: '正解を決められるのは出題者だけです。' });
+  const problem = await judgeProblem(ix, ctx, poll);
+  if (problem) return reply({ content: problem });
   if (poll.status === 'settled' || poll.status === 'cancelled') return reply({ content: 'この予想大会はもう終わっています。' });
   return reply(await answerPayload(ctx, poll));
 }
@@ -473,13 +508,15 @@ async function answerPayload(ctx, poll, chosen = null) {
 }
 
 async function handlePick(ix, ctx, poll) {
-  if (ix.userId !== poll.owner_id) return reply({ content: '正解を決められるのは出題者だけです。' });
+  const problem = await judgeProblem(ix, ctx, poll);
+  if (problem) return reply({ content: problem });
   if (poll.status === 'settled' || poll.status === 'cancelled') return reply({ content: 'この予想大会はもう終わっています。' });
   return update(await answerPayload(ctx, poll, Number(ix.values[0])));
 }
 
 async function handleSettle(ix, ctx, poll, rawOption) {
-  if (ix.userId !== poll.owner_id) return reply({ content: '正解を決められるのは出題者だけです。' });
+  const problem = await judgeProblem(ix, ctx, poll);
+  if (problem) return reply({ content: problem });
   const answerIdx = Number(rawOption ?? ix.values[0]);
   const settings = await getSettings(ctx.db, poll.guild_id);
   const options = await optionsOf(ctx.db, poll.id);

@@ -834,6 +834,54 @@ await test('正解者がいなければ上乗せも出題者に戻る', async ()
   assert.equal(await eco.getBalance(db, GUILD, 'u9'), 1000);
 });
 
+await test('予想大会の掲示板に「当たれば何倍か」が出る', async () => {
+  await press('m:poll:create', { type: 5, fields: { question: '倍率のお題', options: 'A\nB', minutes: '60', stake: '' } });
+  const pollId = (await db.get('SELECT * FROM polls ORDER BY id DESC')).id;
+  await eco.setBalance(db, GUILD, ME, 2000, 'test');
+  await eco.setBalance(db, GUILD, OTHER, 2000, 'test');
+  await pressPoll(`pl:amount:${pollId}:0`, { type: 5, userId: ME, fields: { amount: '300' } });
+  const board = await pressPoll(`pl:amount:${pollId}:1`, { type: 5, userId: OTHER, fields: { amount: '100' } });
+  const text = firstEmbed(board).description;
+  assert.match(text, /🇦 \*\*A\*\*[^\n]*当たれば ×1\.3/, '400 ÷ 300');
+  assert.match(text, /🇧 \*\*B\*\*[^\n]*当たれば ×4\.0/, '400 ÷ 100');
+  assert.match(text, /出題者もこの大会に賭けています/, '出題者が賭けたら見えるようにする');
+});
+
+await test('正解を管理者に任せた大会は、賭けていない管理者だけが決められる', async () => {
+  await press('m:poll:create', {
+    type: 5,
+    fields: { question: '管理者が決めるお題', options: 'はい\nいいえ', minutes: '60', stake: '', judge: '管理者' },
+  });
+  const poll = await db.get('SELECT * FROM polls ORDER BY id DESC');
+  assert.equal(poll.judge, 'admin');
+  await eco.setBalance(db, GUILD, ME, 2000, 'test');
+  await eco.setBalance(db, GUILD, OTHER, 2000, 'test');
+  await eco.setBalance(db, GUILD, 'u3', 2000, 'test');
+  await pressPoll(`pl:amount:${poll.id}:0`, { type: 5, userId: ME, fields: { amount: '200' } });
+  const board = await pressPoll(`pl:amount:${poll.id}:1`, { type: 5, userId: OTHER, fields: { amount: '200' } });
+  assert.doesNotMatch(firstEmbed(board).description, /出題者もこの大会に賭けています/, '管理者に任せていれば警告は要らない');
+  assert.match(JSON.stringify(firstEmbed(board).fields), /サーバー管理者/);
+  await pressPoll(`pl:close:${poll.id}`, { userId: ME });
+
+  assert.match(screenText(await pressPoll(`pl:answer:${poll.id}`, { userId: ME })), /サーバー管理者が正解を決めます/, '出題者でも管理者でなければ決められない');
+  assert.match(screenText(await pressPoll(`pl:answer:${poll.id}`, { userId: OTHER, admin: true })), /自分が賭けている/, '賭けた管理者は決められない');
+  const asking = await pressPoll(`pl:answer:${poll.id}`, { userId: 'u3', admin: true });
+  assert.equal(asking.data.flags, 64, '決める人にだけ見える');
+  await pressPoll(`pl:settle:${poll.id}:0`, { userId: 'u3', admin: true });
+  assert.equal((await db.get('SELECT status FROM polls WHERE id = ?1', poll.id)).status, 'settled');
+  assert.equal(await eco.getBalance(db, GUILD, ME), 2200, '出題者も正解なら受け取れる');
+});
+
+await test('管理者は、ほかの人の予想大会も中止できる', async () => {
+  await press('m:poll:create', { type: 5, userId: OTHER, fields: { question: '止めるお題', options: 'A\nB', minutes: '60', stake: '' } });
+  const pollId = (await db.get('SELECT * FROM polls ORDER BY id DESC')).id;
+  const asking = await pressPoll(`pl:cancel:${pollId}`, { userId: 'u3', admin: true });
+  assert.match(screenText(asking), /中止しますか/);
+  await pressPoll(`pl:cancelok:${pollId}`, { userId: 'u3', admin: true });
+  assert.equal((await db.get('SELECT status FROM polls WHERE id = ?1', pollId)).status, 'cancelled');
+  assert.match(JSON.stringify(ctx.edited.at(-1).payload), /管理者が中止しました/);
+});
+
 await test('出題者は中止でき、賭け金も上乗せも全部戻る', async () => {
   await press('m:poll:create', {
     type: 5,
@@ -847,7 +895,7 @@ await test('出題者は中止でき、賭け金も上乗せも全部戻る', as
   await pressPoll(`pl:amount:${pollId}:0`, { type: 5, userId: OTHER, fields: { amount: '300' } });
 
   const denied = await pressPoll(`pl:cancel:${pollId}`, { userId: OTHER });
-  assert.match(screenText(denied), /出題者だけ/);
+  assert.match(screenText(denied), /出題者とサーバー管理者だけ/);
 
   const confirm = await pressPoll(`pl:cancel:${pollId}`, { userId: ME });
   assert.match(screenText(confirm), /中止しますか/);

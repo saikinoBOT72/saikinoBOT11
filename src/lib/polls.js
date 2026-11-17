@@ -6,6 +6,22 @@ export const MODES = {
   fixed: { label: '参加費を決める', hint: '全員同じ額。正解者で等分する' },
 };
 
+/** 正解を決める人。出題者が自分でも賭けたいときは、管理者に任せられる。 */
+export const JUDGES = {
+  owner: { label: '出題者', hint: '出題者が正解を決める' },
+  admin: { label: '管理者', hint: 'サーバー管理者が正解を決める（その大会に賭けていない人だけ）' },
+};
+
+/**
+ * いま当たったら、賭けた額の何倍になるか（その選択肢に賭けた人がいなければ null）。
+ * 自由な額：集まった全額 ÷ その選択肢の合計。参加費制：集まった全額 ÷ その選択肢の人数（1人ぶん）。
+ */
+export function oddsOf(stat, pool, mode) {
+  if (!stat || stat.total <= 0) return null;
+  if (mode === 'fixed') return { share: Math.floor(pool / stat.count) };
+  return { multiplier: pool / stat.total };
+}
+
 export const MIN_OPTIONS = 2;
 export const MAX_OPTIONS = 10;
 export const MIN_MINUTES = 5;
@@ -23,12 +39,12 @@ export const STALE_OPEN_MS = 30 * 24 * 60 * 60 * 1000;
 /**
  * お題を立てる。minutes を省くと締切なし（出題者が締め切るまで）になる。
  */
-export async function createPoll(db, { guildId, channelId, ownerId, question, options, mode, stake, minutes }) {
+export async function createPoll(db, { guildId, channelId, ownerId, question, options, mode, stake, minutes, judge = 'owner' }) {
   const now = Date.now();
   const openEnded = minutes === null || minutes === undefined;
   const result = await db.run(
-    `INSERT INTO polls (guild_id, channel_id, owner_id, question, mode, stake, status, closes_at, open_ended, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'open', ?7, ?8, ?9)`,
+    `INSERT INTO polls (guild_id, channel_id, owner_id, question, mode, stake, status, closes_at, open_ended, created_at, judge)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'open', ?7, ?8, ?9, ?10)`,
     guildId,
     channelId,
     ownerId,
@@ -38,6 +54,7 @@ export async function createPoll(db, { guildId, channelId, ownerId, question, op
     openEnded ? 0 : now + minutes * 60 * 1000,
     openEnded ? 1 : 0,
     now,
+    JUDGES[judge] ? judge : 'owner',
   );
   const pollId = result.lastRowId;
   await db.batch(

@@ -2,6 +2,7 @@ import {
   MAX_MINUTES,
   MAX_OPTIONS,
   MIN_MINUTES,
+  JUDGES,
   MIN_OPTIONS,
   MODES,
   createPoll,
@@ -58,7 +59,7 @@ export async function open(ix, _args, ctx, notice = null) {
             '**集まった全額を正解者で山分け**するので、人気のない選択肢を当てるほど儲かります。\n\n' +
             (lines.length > 0 ? `**いま開催中**\n${lines.join('\n')}` : 'いまは開催中の大会がありません。'),
           fields: [
-            { name: '進め方', value: 'お題を立てる → みんなが賭ける → 締切 → **出題者が正解を決める** → 山分け' },
+            { name: '進め方', value: 'お題を立てる → みんなが賭ける → 締切 → **出題者（または管理者）が正解を決める** → 山分け' },
             {
               name: '決まりごと',
               value: [
@@ -67,7 +68,8 @@ export async function open(ix, _args, ctx, notice = null) {
                 `・選択肢は ${MIN_OPTIONS}〜${MAX_OPTIONS} 個`,
                 '・正解者がいなければ全員に返金',
                 '・参加者が1人だけなら不成立で返金',
-                '・出題者も賭けられます',
+                '・出題者も賭けられます（そのときは掲示板に表示されます）。正解を **管理者に任せる** こともできます',
+                '・掲示板の「当たれば ×◯」は、いま締め切ったときの倍率の目安です',
                 '・出題者は **自腹で賞金を上乗せ**できます（不成立・中止なら戻ります）',
                 '・出題者はいつでも **中止**できます（全額返金）',
               ].join('\n'),
@@ -96,6 +98,7 @@ export function newPoll() {
       }),
       textInput('minutes', '締切まで何分か（空欄なら締切なし）', { placeholder: '例: 60', max: 6 }),
       textInput('stake', '参加費（空欄なら好きな額を賭けられる）', { placeholder: '例: 100', max: 12 }),
+      textInput('judge', '正解を決める人（空欄なら自分。任せるなら「管理者」）', { placeholder: '管理者', max: 10 }),
     ]),
   );
 }
@@ -105,6 +108,7 @@ export async function create(ix, _args, ctx) {
   const rawOptions = readText(ix, 'options');
   const minutes = readInt(ix, 'minutes', { min: MIN_MINUTES, max: MAX_MINUTES });
   const stake = readInt(ix, 'stake', { min: 1, fallback: 0 });
+  const judge = /管理|admin/i.test(readText(ix, 'judge', { line: true, max: 10 }) ?? '') ? 'admin' : 'owner';
 
   if (!question) return open(ix, [], ctx, 'お題を入力してください。');
   if (isError(minutes)) return open(ix, [], ctx, minutes.error);
@@ -129,6 +133,7 @@ export async function create(ix, _args, ctx) {
     mode: stake > 0 ? 'fixed' : 'free',
     stake: stake ?? 0,
     minutes,
+    judge,
   });
 
   const board = await boardPayload(ctx.db, poll, settings);
@@ -152,8 +157,11 @@ export async function create(ix, _args, ctx) {
           (poll.open_ended
             ? '締切はありません（**🔒 締め切る** を押すまで受け付けます）。\n'
             : `締切は <t:${Math.floor(poll.closes_at / 1000)}:R> です。\n`) +
-          `${MODES[poll.mode].label}（${MODES[poll.mode].hint}）\n\n` +
-          '締切がきたら、投稿の **✅ 正解を決める** から正解を選んでください。\n' +
+          `${MODES[poll.mode].label}（${MODES[poll.mode].hint}）\n` +
+          `正解を決める人：**${JUDGES[poll.judge].label}**（${JUDGES[poll.judge].hint}）\n\n` +
+          (poll.judge === 'admin'
+            ? '締切がきたら、サーバー管理者が投稿の **✅ 正解を決める** から正解を選びます。\n'
+            : '締切がきたら、投稿の **✅ 正解を決める** から正解を選んでください。\n') +
           '**💰 賞金を上乗せ** で自腹を切って盛り上げたり、**🚫 中止** で取りやめたりもできます。',
       }),
     ],
