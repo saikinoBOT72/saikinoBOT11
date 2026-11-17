@@ -5,6 +5,23 @@ import { modalResponse, reply, update } from '../discord/respond.js';
 /** メニューの customId は `m:<画面>:<操作>:<引数...>`。 */
 export const MENU_PREFIX = 'm';
 
+/**
+ * 色のルール。どの画面にいるかが色で分かるよう、場所ごとに1色にそろえる。
+ * 結果は「勝ち＝緑・負け＝灰・大当たり＝金・中止や失敗＝赤」。
+ */
+export const COLORS = {
+  home: 0x5865f2,
+  earn: 0x2ecc71,
+  play: 0xe67e22,
+  shop: 0x1abc9c,
+  wallet: 0xf1c40f,
+  admin: 0x9b59b6,
+  win: 0x2ecc71,
+  lose: 0x95a5a6,
+  jackpot: 0xf1c40f,
+  stop: 0xe74c3c,
+};
+
 export function id(...parts) {
   return [MENU_PREFIX, ...parts].join(':');
 }
@@ -15,7 +32,8 @@ export function id(...parts) {
  * スラッシュコマンドからは新しく本人だけに見えるメッセージを出す。
  */
 export function show(ix, payload) {
-  const data = { content: '', embeds: [], components: [], ...payload };
+  // 条件によって出さない行は null で渡してよい（ここで落とす）
+  const data = { content: '', embeds: [], ...payload, components: (payload.components ?? []).filter(Boolean) };
   if (ix.isComponent || (ix.isModalSubmit && ix.fromMessage)) return update(data);
   return reply(data);
 }
@@ -25,11 +43,29 @@ export function openModal(data) {
   return modalResponse(data);
 }
 
-/** 画面の先頭に一言お知らせを差し込む。 */
+/**
+ * お知らせの種類。成功したのに ⚠️ が付くと「何か失敗した？」と読めてしまうので、
+ * うまくいった・注意・できなかった、を見分けて印を変える。
+ */
+export const NOTICE_MARKS = { ok: '✅', info: 'ℹ️', warn: '⚠️' };
+
+/**
+ * 文字だけで渡されたお知らせの種類を、言い回しから決める。
+ * 「〜ません」「〜ください」は注意、「〜しました」は成功、それ以外は案内。
+ */
+export function noticeKind(text) {
+  if (/ません|ください|できな|使えな|足りな|失敗|不明|もう終わって|先に入りました/.test(text)) return 'warn';
+  if (/ました|ています/.test(text)) return 'ok';
+  return 'info';
+}
+
+/** 画面の先頭に一言お知らせを差し込む。文字でも {kind, text} でも受け取る。 */
 export function withNotice(embedObject, notice) {
   if (!notice) return embedObject;
+  const { kind, text } = typeof notice === 'string' ? { kind: noticeKind(notice), text: notice } : notice;
+  if (!text) return embedObject;
   const body = embedObject.description ? `\n\n${embedObject.description}` : '';
-  return { ...embedObject, description: `⚠️ ${notice}${body}` };
+  return { ...embedObject, description: `${NOTICE_MARKS[kind] ?? NOTICE_MARKS.info} ${text}${body}` };
 }
 
 export const button = makeButton;

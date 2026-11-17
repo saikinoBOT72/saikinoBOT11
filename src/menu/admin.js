@@ -1,4 +1,11 @@
-import { PRESET_ACTIVITIES, getActivity, listActivities, removeActivity, upsertActivity } from '../lib/activities.js';
+import {
+  getActivity,
+  listActivities,
+  PRESET_ACTIVITIES,
+  removeActivity,
+  renameActivity,
+  upsertActivity,
+} from '../lib/activities.js';
 import {
   BULK_COLUMNS,
   CONDITION_EXAMPLES,
@@ -29,7 +36,9 @@ import { disabledSet, disabledText, GAME_BY_KEY, GAMES } from '../lib/game-catal
 import {
   WEEKDAYS,
   createAnnouncement,
+  cyclePeriodMode,
   describeAnnouncement,
+  periodModeOf,
   describeSchedule,
   getAnnouncement,
   listAnnouncements,
@@ -47,9 +56,10 @@ import {
   setPool as setLotteryPool,
 } from '../lib/lottery.js';
 import { SUIT_KEYS, cardSlot, diceSlot, saveCustomEmoji } from '../lib/emoji.js';
-import { METRICS, rankingTitle } from '../lib/ranking.js';
+import { METRICS, PERIOD_MODES, rankingTitle } from '../lib/ranking.js';
 import { ButtonStyle, TextInputStyle } from '../discord/constants.js';
 import {
+  COLORS,
   backButton,
   button,
   embed,
@@ -64,7 +74,7 @@ import {
   withNotice,
 } from './common.js';
 import { open as openHome } from './home.js';
-import { reasonLabel } from './wallet.js';
+import { reasonLabel } from '../lib/ledger-reasons.js';
 
 /** 管理操作は毎回権限を確かめる。権限が無ければホームに戻す。 */
 function denied(ix, ctx) {
@@ -79,7 +89,7 @@ export async function open(ix, _args, ctx, notice = null) {
     embeds: [
       withNotice(
         embed({
-          color: 0x9b59b6,
+          color: COLORS.admin,
           title: '⚙️ 管理メニュー',
           description: 'サーバー管理権限を持つ人だけが使えます。',
           fields: [
@@ -135,7 +145,7 @@ export async function streak(ix, _args, ctx, notice = null) {
       embeds: [
         withNotice(
           embed({
-            color: 0xe67e22,
+            color: COLORS.admin,
             title: '🔥 連日ボーナス',
             description: '先に **📋 アクション管理** でアクションを作ってください。連日ボーナスはアクションごとに設定します。',
           }),
@@ -159,7 +169,7 @@ export async function streak(ix, _args, ctx, notice = null) {
     embeds: [
       withNotice(
         embed({
-          color: 0xe67e22,
+          color: COLORS.admin,
           title: '🔥 連日ボーナス',
           description:
             'アクションごとに「何日目から何日目までは毎日何コイン」を決められます。\n連続はアクション別に数えるので、筋トレと勉強は別々です。\n' +
@@ -267,7 +277,7 @@ export async function streakout(ix, _args, ctx) {
   return show(ix, {
     embeds: [
       embed({
-        color: 0xe67e22,
+        color: COLORS.admin,
         title: '📤 連日ボーナスの書き出し',
         description:
           `\`\`\`\n${STREAK_BULK_COLUMNS}\n${body}\n\`\`\`\n` +
@@ -318,7 +328,7 @@ export async function streakview(ix, args, ctx, notice = null) {
     embeds: [
       withNotice(
         embed({
-          color: 0xe67e22,
+          color: COLORS.admin,
           title: `🔥 ${activity} の連日ボーナス`,
           description:
             rewards.length === 0
@@ -417,7 +427,7 @@ export async function ach(ix, _args, ctx, notice = null) {
     embeds: [
       withNotice(
         embed({
-          color: 0xf39c12,
+          color: COLORS.admin,
           title: '🏅 称号',
           description:
             achievements.length === 0
@@ -453,7 +463,7 @@ export async function achnew(ix, _args, ctx) {
   return show(ix, {
     embeds: [
       embed({
-        color: 0xf39c12,
+        color: COLORS.admin,
         title: '🏅 称号を作る',
         description: 'まず、どんな条件で贈るかを選んでください。',
         fields: Object.entries(CONDITION_TYPES).map(([key, type]) => ({
@@ -601,7 +611,7 @@ export async function achout(ix, _args, ctx) {
   return show(ix, {
     embeds: [
       embed({
-        color: 0xf39c12,
+        color: COLORS.admin,
         title: '📤 称号の書き出し',
         description:
           `\`\`\`\n${BULK_COLUMNS}\n${body}\n\`\`\`\n` +
@@ -662,7 +672,7 @@ export async function acts(ix, _args, ctx, notice = null) {
     embeds: [
       withNotice(
         embed({
-          color: 0x9b59b6,
+          color: COLORS.admin,
           title: '📋 アクション管理',
           description:
             activities.length === 0
@@ -697,7 +707,7 @@ export async function actview(ix, args, ctx, notice = null) {
     embeds: [
       withNotice(
         embed({
-          color: 0x9b59b6,
+          color: COLORS.admin,
           title: `${activity.emoji ?? '📋'} ${activity.name}`,
           description: activity.description ?? '説明なし',
           fields: [
@@ -780,6 +790,13 @@ async function saveActivity(ix, ctx, previousName) {
   if (isError(daily)) return acts(ix, [], ctx, daily.error);
 
   const previous = previousName ? await getActivity(ctx.db, ix.guildId, previousName) : null;
+  const renaming = previous && previous.name !== name;
+  if ((!previous || renaming) && (await getActivity(ctx.db, ix.guildId, name))) {
+    return acts(ix, [], ctx, `「${name}」というアクションはもうあります。別の名前にしてください。`);
+  }
+
+  // 名前を変えるときは、記録・連続記録・連日ボーナス・称号・発表もまとめて付け替える
+  if (renaming) await renameActivity(ctx.db, ix.guildId, previous.name, name);
   await upsertActivity(ctx.db, ix.guildId, {
     name,
     reward,
@@ -788,10 +805,13 @@ async function saveActivity(ix, ctx, previousName) {
     emoji: readText(ix, 'emoji'),
     description: previous?.description ?? null,
   });
-  // 名前を変えた場合は古い方を消す（報告履歴は旧名のまま残る）
-  if (previous && previous.name !== name) await removeActivity(ctx.db, ix.guildId, previous.name);
 
-  return actview(ix, [name], ctx, previous ? '更新しました' : '追加しました');
+  const note = renaming
+    ? `「${previous.name}」を「${name}」に変えました。連続記録・連日ボーナス・称号・定期発表も引き継いでいます`
+    : previous
+      ? '更新しました'
+      : '追加しました';
+  return actview(ix, [name], ctx, note);
 }
 
 export async function actdel(ix, args, ctx) {
@@ -820,7 +840,7 @@ export async function bal(ix, _args, ctx, notice = null) {
   return show(ix, {
     embeds: [
       withNotice(
-        embed({ color: 0x9b59b6, title: '💰 残高を調整', description: '対象のメンバーを選んでください。' }),
+        embed({ color: COLORS.admin, title: '💰 残高を調整', description: '対象のメンバーを選んでください。' }),
         notice,
       ),
     ],
@@ -841,7 +861,7 @@ export async function balview(ix, [userId], ctx, notice = null) {
     embeds: [
       withNotice(
         embed({
-          color: 0x9b59b6,
+          color: COLORS.admin,
           title: '💰 残高を調整',
           description: `対象: <@${userId}>\n現在の所持金 ${coins(balance, settings)}`,
         }),
@@ -905,7 +925,7 @@ export async function balhist(ix, [userId], ctx) {
   return show(ix, {
     embeds: [
       embed({
-        color: 0x9b59b6,
+        color: COLORS.admin,
         title: '📜 コインの履歴',
         description:
           entries.length === 0
@@ -1000,7 +1020,7 @@ export async function ann(ix, _args, ctx, notice = null) {
     embeds: [
       withNotice(
         embed({
-          color: 0x3498db,
+          color: COLORS.admin,
           title: '📢 定期発表',
           description:
             list.length === 0
@@ -1022,7 +1042,7 @@ export async function annnew(ix, _args, ctx) {
   return show(ix, {
     embeds: [
       embed({
-        color: 0x3498db,
+        color: COLORS.admin,
         title: '📢 定期発表を作る（1/4）',
         description: 'まず、どのチャンネルに発表するかを選んでください。',
       }),
@@ -1066,7 +1086,7 @@ export async function gm(ix, _args, ctx, notice = null) {
     embeds: [
       withNotice(
         embed({
-          color: 0xe67e22,
+          color: COLORS.admin,
           title: '🎮 ゲームのオンオフ',
           description: `押すと切り替わります。\n\n${lines.join('\n')}`,
           footer: { text: '✅ が遊べるもの／⬜ は「🎮 あそぶ」に出ません' },
@@ -1111,7 +1131,7 @@ export async function allgames(ix, _args, ctx, notice = null) {
     embeds: [
       withNotice(
         embed({
-          color: 0x9b59b6,
+          color: COLORS.admin,
           title: '🕹️ 全ゲーム',
           description:
             'オンオフに関係なく、すべてのゲームをここから開けます。\n' +
@@ -1160,7 +1180,7 @@ export async function panel(ix, _args, ctx) {
   return show(ix, {
     embeds: [
       embed({
-        color: 0x2ecc71,
+        color: COLORS.admin,
         title: '📌 報告パネルを置く',
         description:
           'アクションのボタンを並べたメッセージを、選んだチャンネルに置きます。\n' +
@@ -1214,7 +1234,7 @@ export async function route(ix, _args, ctx, notice = null) {
     embeds: [
       withNotice(
         embed({
-          color: 0x3498db,
+          color: COLORS.admin,
           title: '🔀 報告の転送先',
           description:
             '選んだチャンネルでの報告は、**そのチャンネルには出さず**、決めた別の場所に出します。\n' +
@@ -1241,7 +1261,7 @@ export async function routefrom(ix, _args, ctx) {
   return show(ix, {
     embeds: [
       embed({
-        color: 0x3498db,
+        color: COLORS.admin,
         title: '🔀 報告の転送先（2/2）',
         description: `<#${fromChannelId}> でした報告を、**どこに出しますか**。`,
       }),
@@ -1265,7 +1285,7 @@ export async function routeto(ix, [fromChannelId], ctx) {
     await ctx.rest.createMessage(toChannelId, {
       embeds: [
         embed({
-          color: 0x3498db,
+          color: COLORS.admin,
           title: '🔀 報告の転送先になりました',
           description: `これから <#${fromChannelId}> でした報告は、ここに出ます。`,
         }),
@@ -1308,7 +1328,7 @@ export async function annch(ix, _args, ctx) {
   return show(ix, {
     embeds: [
       embed({
-        color: 0x3498db,
+        color: COLORS.admin,
         title: '📢 定期発表を作る（2/4）',
         description: `発表先: <#${channelId}>\n\n何のランキングを出しますか？`,
         fields: Object.entries(METRICS).map(([key, meta]) => ({
@@ -1358,7 +1378,7 @@ export async function annmetric(ix, [channelId], ctx) {
   return show(ix, {
     embeds: [
       embed({
-        color: 0x3498db,
+        color: COLORS.admin,
         title: '📢 定期発表を作る（3/4）',
         description:
           `発表先: <#${channelId}>\n種類: **${METRICS[metric].label}**\n\nどのくらいの頻度で発表しますか？\n` +
@@ -1449,7 +1469,7 @@ export async function annview(ix, [rawId], ctx, notice = null) {
     embeds: [
       withNotice(
         embed({
-          color: 0x3498db,
+          color: COLORS.admin,
           title: '📢 発表の設定',
           description: `発表先: <#${announcement.channel_id}>\n${describeAnnouncement(announcement)}`,
           fields: [
@@ -1468,9 +1488,27 @@ export async function annview(ix, [rawId], ctx, notice = null) {
         }),
         button(id('admin', 'anndel', String(announcement.id)), '削除する', { emoji: '🗑️', style: ButtonStyle.DANGER }),
       ),
+      METRICS[announcement.metric]?.usesPeriod
+        ? row(
+            button(
+              id('admin', 'annperiod', String(announcement.id)),
+              `集計: ${PERIOD_MODES[periodModeOf(announcement)].label}（押すと切り替え）`,
+              { emoji: '🗓️' },
+            ),
+          )
+        : null,
       row(backButton('admin', '管理メニュー'), button(id('admin', 'ann'), '一覧へ', { emoji: '📢' }), homeButton()),
     ],
   });
+}
+
+/** 集計期間の選び方を切り替える。 */
+export async function annperiod(ix, [rawId], ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const updated = await cyclePeriodMode(ctx.db, ix.guildId, Number(rawId));
+  if (!updated) return ann(ix, [], ctx, 'その設定は見つかりませんでした。');
+  const mode = PERIOD_MODES[periodModeOf(updated)];
+  return annview(ix, [rawId], ctx, `集計を「${mode.label}」にしました。${mode.hint}`);
 }
 
 export async function anntoggle(ix, [rawId], ctx) {
@@ -1516,7 +1554,7 @@ export async function emoji(ix, [rawPage], ctx) {
     return show(ix, {
       embeds: [
         embed({
-          color: 0xe74c3c,
+          color: COLORS.stop,
           title: '😀 絵文字の確認',
           description:
             '絵文字の一覧を取得できませんでした。\n' +
@@ -1531,7 +1569,7 @@ export async function emoji(ix, [rawPage], ctx) {
     return show(ix, {
       embeds: [
         embed({
-          color: 0x95a5a6,
+          color: COLORS.admin,
           title: '😀 絵文字の確認',
           description:
             'このアプリにはまだ絵文字が登録されていません。\n' +
@@ -1559,7 +1597,7 @@ export async function emoji(ix, [rawPage], ctx) {
   return show(ix, {
     embeds: [
       embed({
-        color: 0x9b59b6,
+        color: COLORS.admin,
         title: '😀 絵文字の確認',
         description:
           `このアプリに **${sorted.length} 個** 登録されています（${page + 1}/${pages} ページ）。\n` +
@@ -1603,7 +1641,7 @@ export async function lot(ix, _args, ctx, notice = null) {
     embeds: [
       withNotice(
         embed({
-          color: 0x16a085,
+          color: COLORS.admin,
           title: '🎫 宝くじの設定',
           description:
             `毎週日曜の **${LOTTERY_DRAW_HOUR}時** に自動で抽選します。\n` +
@@ -1721,6 +1759,7 @@ export const actions = {
   annpick,
   annview,
   anntoggle,
+  annperiod,
   anndel,
   streak,
   streakbulk,

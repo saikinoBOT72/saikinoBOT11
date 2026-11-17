@@ -44,6 +44,32 @@ export async function upsertActivity(db, guildId, activity) {
   return getActivity(db, guildId, activity.name);
 }
 
+/**
+ * アクションの名前を変える。
+ *
+ * 報告の記録・連続記録・連日ボーナス・称号の条件・定期発表は、どれもアクションを
+ * 名前で指している。名前だけ変えると、全員の連続記録が切れ、称号も発表も
+ * 古い名前を見たままになる。なので全部まとめて新しい名前に付け替える（1つの処理で）。
+ * @returns {Promise<{ok: true} | {ok: false, reason: 'missing'|'taken'}>}
+ */
+export async function renameActivity(db, guildId, from, to) {
+  if (from === to) return { ok: true };
+  if (!(await getActivity(db, guildId, from))) return { ok: false, reason: 'missing' };
+  if (await getActivity(db, guildId, to)) return { ok: false, reason: 'taken' };
+
+  await db.batch([
+    ['UPDATE activities SET name = ?3 WHERE guild_id = ?1 AND name = ?2', guildId, from, to],
+    ['UPDATE activity_logs SET activity = ?3 WHERE guild_id = ?1 AND activity = ?2', guildId, from, to],
+    ['UPDATE streaks SET activity = ?3 WHERE guild_id = ?1 AND activity = ?2', guildId, from, to],
+    ['UPDATE streak_rewards SET activity = ?3 WHERE guild_id = ?1 AND activity = ?2', guildId, from, to],
+    ['UPDATE achievements SET activity_name = ?3 WHERE guild_id = ?1 AND activity_name = ?2', guildId, from, to],
+    ['UPDATE announcements SET activity_name = ?3 WHERE guild_id = ?1 AND activity_name = ?2', guildId, from, to],
+    // 報告の履歴の説明（detail）にもアクション名が入っている
+    ["UPDATE ledger SET detail = ?3 WHERE guild_id = ?1 AND reason = 'report' AND detail = ?2", guildId, from, to],
+  ]);
+  return { ok: true };
+}
+
 export async function removeActivity(db, guildId, name) {
   const result = await db.run('DELETE FROM activities WHERE guild_id = ?1 AND name = ?2', guildId, name);
   return result.changes > 0;

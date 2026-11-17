@@ -4,7 +4,7 @@ import { coins, duration, truncate } from '../lib/format.js';
 import { describeDayStart } from '../lib/calendar.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { stringSelect } from '../discord/builders.js';
-import { backButton, button, embed, homeButton, id, row, show, withNotice } from './common.js';
+import { COLORS, backButton, button, embed, homeButton, id, row, show, withNotice } from './common.js';
 
 export async function open(ix, _args, ctx, notice = null) {
   const settings = await ctx.settings(ix.guildId);
@@ -15,7 +15,7 @@ export async function open(ix, _args, ctx, notice = null) {
       embeds: [
         withNotice(
           embed({
-            color: 0x3498db,
+            color: COLORS.earn,
             title: '💪 報告してかせぐ',
             description:
               'まだアクションが登録されていません。\nサーバー管理者が **⚙️ 管理 → 📋 アクション管理 → 📦 おすすめを一括登録** すればすぐ始められます。',
@@ -52,7 +52,7 @@ export async function open(ix, _args, ctx, notice = null) {
     embeds: [
       withNotice(
         embed({
-          color: 0x2ecc71,
+          color: COLORS.earn,
           title: '💪 報告してかせぐ',
           description: lines.join('\n'),
           footer: { text: [describeDayStart(ctx.calendar), '下のリストから選ぶだけで報告できます'].filter(Boolean).join(' ／ ') },
@@ -104,7 +104,7 @@ export async function pick(ix, _args, ctx) {
   return show(ix, {
     embeds: [
       embed({
-        color: 0x2ecc71,
+        color: COLORS.earn,
         title: `${activity.emoji ?? '✅'} ${activity.name} を報告しました`,
         description: `${coins(activity.reward, settings)} を獲得！\n所持金は ${coins(result.balance, settings)} です。`,
         footer: { text: 'みんなに見えるようにチャンネルにも投稿しました' },
@@ -134,7 +134,7 @@ export async function stats(ix, _args, ctx) {
   return show(ix, {
     embeds: [
       embed({
-        color: 0x3498db,
+        color: COLORS.earn,
         author: { name: ix.displayName, icon_url: ix.avatar },
         title: '📈 報告の実績',
         description: `報告回数 **${data.total.n}** 回／獲得 ${coins(data.total.sum, settings)}`,

@@ -145,6 +145,31 @@ await test('削除できる', async () => {
   assert.equal(await act.removeActivity(db, G, '自炊'), false);
 });
 
+await test('名前を変えても、記録・連続記録・連日ボーナス・称号・発表が引き継がれる', async () => {
+  const RG = 'rename-guild';
+  const streakLib = await import(src('lib/streak.js'));
+  const achLib = await import(src('lib/achievements.js'));
+  const annLib = await import(src('lib/announcements.js'));
+  await act.upsertActivity(db, RG, { name: 'ジョグ', reward: 10 });
+  await act.logReport(db, RG, 'rn1', 'ジョグ', 10);
+  await streakLib.touchStreak(db, RG, 'rn1', 'ジョグ', 'Asia/Tokyo');
+  await streakLib.upsertStreakReward(db, RG, 'ジョグ', 3, 0, 50);
+  await achLib.createAchievement(db, RG, { name: '走る人', condition_type: 'activity_count', threshold: 5, activity_name: 'ジョグ' });
+  await annLib.createAnnouncement(db, RG, { channelId: 'c', metric: 'activity_streak', activityName: 'ジョグ', frequency: 'daily', hour: 9, topN: 3 });
+
+  assert.deepEqual(await act.renameActivity(db, RG, 'ジョグ', 'ランニング'), { ok: true });
+  assert.equal(await act.getActivity(db, RG, 'ジョグ'), null);
+  assert.ok(await act.getActivity(db, RG, 'ランニング'));
+  assert.equal((await act.reportStats(db, RG, 'rn1')).byActivity[0].activity, 'ランニング', '報告の記録');
+  assert.equal((await streakLib.getStreak(db, RG, 'rn1', 'ランニング', 'Asia/Tokyo')).current, 1, '連続記録');
+  assert.equal((await streakLib.listStreakRewards(db, RG, 'ランニング')).length, 1, '連日ボーナス');
+  assert.equal((await achLib.listAchievements(db, RG))[0].activity_name, 'ランニング', '称号の条件');
+  assert.equal((await annLib.listAnnouncements(db, RG))[0].activity_name, 'ランニング', '定期発表');
+
+  await act.upsertActivity(db, RG, { name: '散歩', reward: 5 });
+  assert.deepEqual(await act.renameActivity(db, RG, 'ランニング', '散歩'), { ok: false, reason: 'taken' }, '別のアクションと同じ名前にはできない');
+});
+
 section('[連日ボーナス（アクションごと）]');
 
 const streak = await import(src('lib/streak.js'));
@@ -464,6 +489,36 @@ await test('見出しが読める日本語になる', () => {
     ranking.rankingTitle({ metric: 'activity_streak', activityName: '筋トレ' }),
     '「筋トレ」の連続記録ランキング',
   );
+  assert.equal(ranking.rankingTitle({ metric: 'earned', period: 'week', back: true }), '稼いだコインランキング（先週）');
+});
+
+await test('おまかせの集計は、期間の前半に発表するならひとつ前を見る', () => {
+  const mondayMorning = new Date('2026-09-07T09:00:00+09:00');
+  const friday = new Date('2026-09-11T21:00:00+09:00');
+  assert.equal(ranking.looksBack('auto', 'week', 'Asia/Tokyo', mondayMorning), true, '月曜の朝は先週');
+  assert.equal(ranking.looksBack('auto', 'week', 'Asia/Tokyo', friday), false, '金曜の夜は今週');
+  assert.equal(ranking.looksBack('auto', 'day', 'Asia/Tokyo', mondayMorning), true, '朝9時の日次は昨日');
+  assert.equal(ranking.looksBack('current', 'week', 'Asia/Tokyo', mondayMorning), false);
+  assert.equal(ranking.looksBack('previous', 'week', 'Asia/Tokyo', friday), true);
+
+  const { since, until } = ranking.periodRange('week', 'Asia/Tokyo', mondayMorning, true);
+  assert.equal(new Date(since).toISOString(), '2026-08-30T15:00:00.000Z', '先週の月曜0時から');
+  assert.equal(new Date(until).toISOString(), '2026-09-06T15:00:00.000Z', '今週の月曜0時まで');
+});
+
+await test('ひとつ前の期間を集計するとき、いまの期間のぶんは混ざらない', async () => {
+  const RG = 'range-guild';
+  const lastWeek = new Date('2026-09-03T12:00:00+09:00').getTime();
+  const thisWeek = new Date('2026-09-07T08:00:00+09:00').getTime();
+  for (const [user, at, amount] of [['rA', lastWeek, 500], ['rB', thisWeek, 900]]) {
+    await db.run(
+      "INSERT INTO ledger (guild_id, user_id, amount, reason, created_at) VALUES (?1, ?2, ?3, 'report', ?4)",
+      RG, user, amount, at,
+    );
+  }
+  const { since, until } = ranking.periodRange('week', 'Asia/Tokyo', new Date('2026-09-07T09:00:00+09:00'), true);
+  const rows = await ranking.computeRanking(db, { guildId: RG, metric: 'earned', since, until, limit: 5, calendar: 'Asia/Tokyo' });
+  assert.deepEqual(rows.map((row) => row.user_id), ['rA'], '今週の900は入らない');
 });
 
 section('[定期発表]');

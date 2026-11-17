@@ -1,6 +1,6 @@
 import { deposit } from './economy.js';
 import { equippedTitles, titleTag } from './achievements.js';
-import { METRICS, computeRanking, formatValue, periodStart, rankingTitle } from './ranking.js';
+import { METRICS, PERIOD_MODES, computeRanking, formatValue, looksBack, periodRange, rankingTitle } from './ranking.js';
 import { currentHour, dateKey } from './calendar.js';
 
 export { currentHour };
@@ -52,15 +52,35 @@ export function describeSchedule(announcement) {
   return `${when} ${announcement.hour}時`;
 }
 
+/** 発表の集計期間。'day' か 'week'。 */
+export function periodOf(announcement) {
+  return announcement.frequency === 'weekly' ? 'week' : 'day';
+}
+
+/** 集計期間の選び方（おまかせ・昨日先週・今日今週）。 */
+export function periodModeOf(announcement) {
+  return PERIOD_MODES[announcement.period] ? announcement.period : 'auto';
+}
+
 export function describeAnnouncement(announcement) {
-  const period = announcement.frequency === 'weekly' ? 'week' : 'day';
   const title = rankingTitle({
     metric: announcement.metric,
     activityName: announcement.activity_name,
-    period,
+    period: periodOf(announcement),
   });
   const prize = announcement.prize > 0 ? `／1位に ${announcement.prize}` : '';
-  return `${title}　*(${describeSchedule(announcement)}・上位${announcement.top_n}人${prize})*`;
+  const mode = METRICS[announcement.metric]?.usesPeriod ? `・集計 ${PERIOD_MODES[periodModeOf(announcement)].label}` : '';
+  return `${title}　*(${describeSchedule(announcement)}・上位${announcement.top_n}人${prize}${mode})*`;
+}
+
+/** 集計期間の選び方を順に切り替える（おまかせ → 昨日・先週 → 今日・今週 → おまかせ）。 */
+export async function cyclePeriodMode(db, guildId, id) {
+  const current = await getAnnouncement(db, guildId, id);
+  if (!current) return null;
+  const order = Object.keys(PERIOD_MODES);
+  const next = order[(order.indexOf(periodModeOf(current)) + 1) % order.length];
+  await db.run('UPDATE announcements SET period = ?3 WHERE guild_id = ?1 AND id = ?2', guildId, id, next);
+  return getAnnouncement(db, guildId, id);
 }
 
 /**
@@ -90,13 +110,17 @@ export async function markAnnounced(db, id, dateString) {
  * 発表用の Embed を組み立て、必要なら1位へ賞金を渡す。
  * @returns {Promise<{embed: object, winners: string[]} | null>} 対象がいなければ null
  */
-export async function buildAnnouncement(db, announcement, { settings, calendar }) {
-  const period = announcement.frequency === 'weekly' ? 'week' : 'day';
+export async function buildAnnouncement(db, announcement, { settings, calendar, now = new Date() }) {
+  const period = periodOf(announcement);
+  const usesPeriod = Boolean(METRICS[announcement.metric]?.usesPeriod);
+  const back = usesPeriod && looksBack(periodModeOf(announcement), period, calendar, now);
+  const { since, until } = periodRange(usesPeriod ? period : 'all', calendar, now, back);
   const rows = await computeRanking(db, {
     guildId: announcement.guild_id,
     metric: announcement.metric,
     activityName: announcement.activity_name,
-    since: periodStart(METRICS[announcement.metric]?.usesPeriod ? period : 'all', calendar),
+    since,
+    until,
     limit: announcement.top_n,
     calendar,
   });
@@ -120,7 +144,7 @@ export async function buildAnnouncement(db, announcement, { settings, calendar }
   return {
     embed: embed({
       color: 0xf1c40f,
-      title: `📢 ${rankingTitle({ metric: announcement.metric, activityName: announcement.activity_name, period })}`,
+      title: `📢 ${rankingTitle({ metric: announcement.metric, activityName: announcement.activity_name, period, back })}`,
       description: lines.join('\n'),
       footer: { text: describeSchedule(announcement) },
     }),

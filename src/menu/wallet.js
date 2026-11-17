@@ -1,6 +1,7 @@
 import { getBalance, ledgerFor, rankOf, topBalances, totals, transfer } from '../lib/economy.js';
 import { equippedTitles, titleTag } from '../lib/achievements.js';
 import { coins } from '../lib/format.js';
+import { reasonLabel } from '../lib/ledger-reasons.js';
 import { modal, textInput, userSelect } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import {
@@ -111,29 +112,6 @@ export async function paydo(ix, [targetId], ctx) {
     ],
     components: [row(backButton('wallet'), homeButton())],
   });
-}
-
-const REASONS = {
-  initial: '初期残高',
-  report: '報告',
-  pay: '送金',
-  'slot:bet': 'スロット',
-  'slot:win': 'スロット当選',
-  'coinflip:bet': 'コイントス',
-  'coinflip:win': 'コイントス的中',
-  'rps:bet': 'じゃんけん',
-  'rps:win': 'じゃんけん勝利',
-  'rps:refund': 'じゃんけん返金',
-  'shop:buy': 'ショップで購入',
-  'shop:sell': 'ショップで売れた',
-  'admin:give': '管理者から',
-  'admin:take': '管理者が回収',
-  'admin:set': '管理者が調整',
-};
-
-export function reasonLabel(entry) {
-  const base = REASONS[entry.reason] ?? entry.reason;
-  return entry.detail && entry.reason === 'report' ? `${base}（${entry.detail}）` : base;
 }
 
 export async function history(ix, _args, ctx) {

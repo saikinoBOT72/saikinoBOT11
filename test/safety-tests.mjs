@@ -195,4 +195,32 @@ await test('src の中で Math.random を使っていない（出目を読まれ
   }
 });
 
+section('[履歴の表示]');
+
+await test('お金を動かすときの理由は、すべて日本語で表示できる', async () => {
+  const { reasonText } = await import(src('lib/ledger-reasons.js'));
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const root = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'src');
+  const walk = (dir) =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = path.join(dir, entry.name);
+      return entry.isDirectory() ? walk(full) : entry.name.endsWith('.js') ? [full] : [];
+    });
+  const reasons = new Set(['initial', 'report', 'pay', 'streak', 'achievement', 'ranking']);
+  const ACTION = '(?:bet|ante|call|double|escrow|win|refund|buy|sell|bonus|give|take|set|send|receive)';
+  for (const file of walk(root)) {
+    for (const found of fs.readFileSync(file, 'utf8').matchAll(new RegExp(`'([a-z]+:${ACTION})'`, 'g'))) reasons.add(found[1]);
+  }
+  // 1対1のゲームは `${duel.game}:bet` の形で書くので、ゲームの名前から作る
+  for (const game of ['rr', 'cs', 'mine', 'doors']) for (const action of ['bet', 'refund']) reasons.add(`${game}:${action}`);
+
+  assert.ok(reasons.size > 40, `見張れた理由が少なすぎる: ${reasons.size}`);
+  for (const reason of reasons) {
+    const text = reasonText(reason);
+    assert.doesNotMatch(text, /[a-z]+:[a-z]+/, `${reason} が英語のまま出る`);
+    assert.notEqual(text, reason, `${reason} の日本語が無い`);
+  }
+});
+
 runner.done();
