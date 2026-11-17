@@ -76,6 +76,43 @@ export function backButton(target = 'home', label = '戻る') {
   return button(id(target, 'open'), label, { emoji: '◀️' });
 }
 
+/**
+ * 自分だけに見えている結果を、チャンネルのみんなに見せるボタン（home.share が受ける）。
+ * 押された画面そのものを出すので、どの画面にもそのまま付けられる。
+ */
+/**
+ * 押されたメッセージの embed を、送り直せる形に整える。
+ * Discord から返ってきた embed には、こちらから送れない項目（proxy_url など）が混ざるため。
+ */
+export function plainEmbed(source) {
+  return embed({
+    color: source.color,
+    author: source.author?.name ? { name: source.author.name, icon_url: source.author.icon_url } : undefined,
+    title: source.title,
+    description: source.description,
+    fields: (source.fields ?? []).map((field) => ({ name: field.name, value: field.value, inline: field.inline })),
+    footer: source.footer?.text ? { text: source.footer.text } : undefined,
+    image: source.image?.url,
+    thumbnail: source.thumbnail?.url,
+  });
+}
+
+/**
+ * 公開メッセージのボタンから、押した人にだけ見える新しい画面を開く。
+ * 押されたメッセージ（みんなに見えている案内など）は書き換えない。
+ */
+export function asNewMessage(ix) {
+  return Object.create(ix, {
+    isComponent: { value: false },
+    isModalSubmit: { value: false },
+    fromMessage: { value: false },
+  });
+}
+
+export function shareButton() {
+  return button(id('home', 'share'), 'みんなに見せる', { emoji: '📣' });
+}
+
 export function homeButton() {
   return button(id('home', 'open'), 'メニュー', { emoji: '🏠' });
 }

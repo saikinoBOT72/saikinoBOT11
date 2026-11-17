@@ -1700,6 +1700,109 @@ await test('使い切ると使うボタンが押せなくなる', async () => {
   assert.match(firstEmbed(again).description, /使えるものがありません/);
 });
 
+await test('ショップは並べ替えられ、いま選んでいる並べ方は押せない', async () => {
+  const cheap = await press('m:shop:open:0:cheap');
+  assert.match(firstEmbed(cheap).footer.text, /安い順/);
+  const sortRow = cheap.data.components.find((r) => r.components?.some((c) => c.custom_id === 'm:shop:open:0:cheap'));
+  assert.equal(sortRow.components.find((c) => c.custom_id === 'm:shop:open:0:cheap').disabled, true);
+  assert.ok(!sortRow.components.find((c) => c.custom_id === 'm:shop:open:0:new').disabled);
+  const prices = [...firstEmbed(cheap).description.matchAll(/— \S*?([\d,]+)　/g)].map((m) => Number(m[1].replace(/,/g, '')));
+  assert.deepEqual(prices, [...prices].sort((a, b) => a - b), '安い順に並ぶ');
+  assertAllButtonsWork(cheap, '安い順');
+});
+
+await test('ショップで名前を探せて、% や _ はただの文字として扱う', async () => {
+  const opened = await press('m:shop:search');
+  assert.equal(opened.type, 9, '入力フォームを開く');
+  const found = await press('m:shop:find', { type: 5, fields: { q: 'テスト' } });
+  assert.match(firstEmbed(found).description, /テスト商品/);
+  assert.match(firstEmbed(found).footer.text, /「テスト」で/);
+  assertAllButtonsWork(found, '探した結果');
+
+  const none = await press('m:shop:find', { type: 5, fields: { q: '%' } });
+  assert.match(firstEmbed(none).description, /当てはまる出品はありませんでした/);
+});
+
+const shopPublic = await import(src('menu/shop-public.js'));
+async function pressPublic(customId, options = {}) {
+  const ix = new Ix(rawInteraction({ customId, ...options }));
+  const response = await shopPublic.handleComponent(ix, ctx);
+  await ctx.settle();
+  return response.json();
+}
+
+await test('出品のお知らせの「見る・買う」は、押した人にだけ商品ページを開く', async () => {
+  await press('m:shop:create', { type: 5, fields: { name: 'お知らせ確認用', price: '10' } });
+  const announced = ctx.sent.at(-1).payload;
+  const listed = (await shop.listItems(db, GUILD, { sellerId: ME })).find((row) => row.name === 'お知らせ確認用');
+  assert.ok(customIds({ data: announced }).includes(`sp:buy:${listed.id}`), 'お知らせに買うボタン');
+
+  const page = await pressPublic(`sp:buy:${listed.id}`, { userId: OTHER });
+  assert.equal(page.type, 4, 'お知らせは書き換えず、新しいメッセージで返す');
+  assert.equal(page.data.flags, 64, '押した人にだけ見える');
+  assert.match(firstEmbed(page).title, /お知らせ確認用/);
+  assert.ok(customIds(page).includes(`m:shop:confirm:${listed.id}`), 'そこから買える');
+});
+
+await test('使われたら出品者の「対応待ち」に載り、出品者だけが「対応した」を押せる', async () => {
+  const itemId = globalThis.__consumableId;
+  const used = await db.all('SELECT * FROM purchases WHERE item_id = ?1 AND used_at IS NOT NULL ORDER BY id', itemId);
+  assert.equal(used.length, 2);
+
+  const mine = await press('m:shop:mine');
+  assert.ok(customIds(mine).includes('m:shop:pending'));
+  const pendingScreen = await press('m:shop:pending');
+  assert.match(firstEmbed(pendingScreen).description, /肩たたき券/);
+
+  // お知らせのボタン：買った人が押しても何も変わらない
+  const announcement = { embeds: [{ title: '✨ 肩たたき券 を使いました！', fields: [{ name: '商品番号', value: `#${itemId}` }] }] };
+  const byBuyer = await pressPublic(`sp:done:${used[0].id}`, { userId: OTHER, message: announcement });
+  assert.equal(byBuyer.type, 4);
+  assert.match(byBuyer.data.content, /出品者だけ/);
+  assert.equal((await db.get('SELECT delivered_at FROM purchases WHERE id = ?1', used[0].id)).delivered_at, null);
+
+  // 出品者が押すと、お知らせに印が付いてボタンが外れる
+  const bySeller = await pressPublic(`sp:done:${used[0].id}`, { userId: ME, message: announcement });
+  assert.equal(bySeller.type, 7, 'お知らせを書き換える');
+  assert.deepEqual(bySeller.data.components, []);
+  assert.match(JSON.stringify(bySeller.data.embeds), /対応済み/);
+  assert.ok((await db.get('SELECT delivered_at FROM purchases WHERE id = ?1', used[0].id)).delivered_at);
+
+  // メニューからも押せる
+  const marked = await press('m:shop:deliver', { values: [String(used[1].id)] });
+  assert.match(screenText(marked), /対応した/);
+  assert.equal((await shop.pendingDeliveries(db, GUILD, ME)).length, 0);
+});
+
+await test('管理者が取り下げた出品は、出品者が再開も編集での復活もできない', async () => {
+  const target = await shop.createItem(db, { guildId: GUILD, sellerId: ME, name: '取り下げ確認用', price: 50, stock: -1 });
+
+  const notAdmin = await press(`m:admin:itemdown:${target.id}`, { admin: false });
+  assert.match(screenText(notAdmin), /権限が必要/);
+  assert.equal((await shop.getItem(db, GUILD, target.id)).active, 1);
+
+  const list = await press('m:admin:items', { admin: true });
+  assert.match(firstEmbed(list).description, /取り下げ確認用/);
+  assertAllButtonsWork(list, '取り下げ一覧');
+  await press(`m:admin:itemdown:${target.id}`, { admin: true });
+  let row = await shop.getItem(db, GUILD, target.id);
+  assert.equal(row.active, 0);
+  assert.equal(row.taken_down, 1);
+
+  const resume = await press(`m:shop:remove:${target.id}`);
+  assert.match(screenText(resume), /自分では再開できません/);
+  await press(`m:shop:update:${target.id}`, { type: 5, fields: { name: '取り下げ確認用', price: '50' } });
+  assert.equal((await shop.getItem(db, GUILD, target.id)).active, 0, '編集しても売り場に戻らない');
+  assert.doesNotMatch(firstEmbed(await press('m:shop:open')).description ?? '', /取り下げ確認用/);
+
+  await press(`m:admin:itemup:${target.id}`, { admin: true });
+  row = await shop.getItem(db, GUILD, target.id);
+  assert.equal(row.taken_down, 0);
+  assert.equal(row.active, 0, '解いても、再開は出品者が決める');
+  await press(`m:shop:remove:${target.id}`);
+  assert.equal((await shop.getItem(db, GUILD, target.id)).active, 1);
+});
+
 await test('ずっと残るアイテムには使うボタンが無い', async () => {
   await press('m:shop:create:permanent', {
     type: 5,

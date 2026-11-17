@@ -14,6 +14,7 @@ import { handleComponent as handlePig } from './menu/pig-table.js';
 import { handleComponent as handleChohan } from './menu/chohan-table.js';
 import { handleComponent as handleYacht } from './menu/yacht-table.js';
 import { handleComponent as handleReportPanel } from './menu/report-panel.js';
+import { handleComponent as handleShopPublic } from './menu/shop-public.js';
 import { findCommand } from './commands.js';
 import { runScheduled } from './cron.js';
 
@@ -91,6 +92,7 @@ async function dispatch(ix, ctx) {
     if (namespace === 'ch') return handleChohan(ix, ctx);
     if (namespace === 'yt') return handleYacht(ix, ctx);
     if (namespace === 'rp') return handleReportPanel(ix, ctx);
+    if (namespace === 'sp') return handleShopPublic(ix, ctx);
     return reply({ content: 'この操作はもう使えません。`/menu` を開き直してください。' });
   }
 

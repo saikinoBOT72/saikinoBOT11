@@ -78,6 +78,7 @@ import { reasonLabel } from '../lib/ledger-reasons.js';
 import { clampHour } from '../lib/calendar.js';
 import { describeVersion } from '../lib/version.js';
 import { clearErrors, recentErrors } from '../lib/error-report.js';
+import { itemActions } from './admin-items.js';
 
 /** 管理操作は毎回権限を確かめる。権限が無ければホームに戻す。 */
 function denied(ix, ctx) {
@@ -128,6 +129,7 @@ export async function open(ix, _args, ctx, notice = null) {
       row(
         button(id('admin', 'panel'), '報告パネルを置く', { emoji: '📌', style: ButtonStyle.PRIMARY }),
         button(id('admin', 'log'), '管理用チャンネル', { emoji: '🧰' }),
+        button(id('admin', 'items'), '出品の取り下げ', { emoji: '🚫' }),
         backButton(),
       ),
     ],
@@ -2071,6 +2073,7 @@ export async function lottoggle(ix, _args, ctx) {
 
 export const actions = {
   open,
+  ...itemActions,
   prefs,
   prefhour,
   prefgame,

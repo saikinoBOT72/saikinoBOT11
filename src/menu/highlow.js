@@ -27,6 +27,7 @@ import {
   openModal,
   readInt,
   row,
+  shareButton,
   show,
   withNotice,
 } from './common.js';
@@ -242,7 +243,7 @@ export async function pick(ix, [choice], ctx) {
               ],
             }),
           ],
-          components: [row(button(id('hl', 'open'), 'もう一度', { emoji: '🔁', style: ButtonStyle.SUCCESS }), homeButton())],
+          components: [row(button(id('hl', 'open'), 'もう一度', { emoji: '🔁', style: ButtonStyle.SUCCESS }), shareButton(), homeButton())],
         },
       },
     ]);
@@ -271,7 +272,7 @@ export async function pick(ix, [choice], ctx) {
               fields: [{ name: '所持金', value: coins(balance, settings), inline: true }],
             }),
           ],
-          components: [row(button(id('hl', 'open'), 'もう一度', { emoji: '🔁', style: ButtonStyle.SUCCESS }), homeButton())],
+          components: [row(button(id('hl', 'open'), 'もう一度', { emoji: '🔁', style: ButtonStyle.SUCCESS }), shareButton(), homeButton())],
         },
       },
     ]);
@@ -380,7 +381,7 @@ export async function stop(ix, _args, ctx) {
         ],
       }),
     ],
-    components: [row(button(id('hl', 'open'), 'もう一度', { emoji: '🔁', style: ButtonStyle.SUCCESS }), homeButton())],
+    components: [row(button(id('hl', 'open'), 'もう一度', { emoji: '🔁', style: ButtonStyle.SUCCESS }), shareButton(), homeButton())],
   });
 }
 

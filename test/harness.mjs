@@ -126,6 +126,7 @@ export function rawInteraction({
   commandName,
   resolvedUsers = {},
   fromMessage = true,
+  message = null,
 } = {}) {
   const data = {};
   if (customId) data.custom_id = customId;
@@ -149,7 +150,7 @@ export function rawInteraction({
       permissions: admin ? ADMIN_PERMISSION : '0',
       user: { id: userId, username: `user${userId}`, global_name: null, avatar: null },
     },
-    ...(fromMessage && type !== 2 ? { message: { id: 'menu-message' } } : {}),
+    ...(fromMessage && type !== 2 ? { message: { id: 'menu-message', ...(message ?? {}) } } : {}),
   };
 }
 

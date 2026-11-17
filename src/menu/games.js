@@ -45,6 +45,7 @@ import {
   readInt,
   resultEmbed,
   row,
+  shareButton,
   show,
   withNotice,
 } from './common.js';
@@ -646,6 +647,7 @@ async function slotSpin(ix, ctx, bet) {
         disabled: after < bet,
       }),
       button(id('slot', 'open'), '賭け金を変える', { emoji: '💰' }),
+      shareButton(),
       homeButton(),
     ),
   ];
@@ -812,6 +814,7 @@ async function cfGo(ix, [rawBet, side], ctx) {
               disabled: after < bet,
             }),
             button(id('cf', 'open'), '賭け金を変える', { emoji: '💰' }),
+            shareButton(),
             homeButton(),
           ),
         ],

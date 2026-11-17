@@ -5,7 +5,7 @@ import { countItems } from '../lib/shop.js';
 import { coins, truncate } from '../lib/format.js';
 import { CATEGORIES, enabledGames, gamesIn } from '../lib/game-catalog.js';
 import { ButtonStyle } from '../discord/constants.js';
-import { button, embed, homeButton, id, row, show, withNotice } from './common.js';
+import { button, embed, homeButton, id, plainEmbed, row, show, withNotice } from './common.js';
 import { describeDayStart } from '../lib/calendar.js';
 
 export async function open(ix, _args, ctx, notice = null) {
@@ -136,4 +136,33 @@ function gameHelp(settings) {
     .filter(Boolean);
 }
 
-export const actions = { open, help };
+/**
+ * 自分だけに見えている結果を、チャンネルに出す。
+ * 押されたメッセージ（Bot が出したもの）をそのまま写すので、作り話は混ざらない。
+ * 一度見せたら、その画面からはボタンを外す（同じものが何度も流れないように）。
+ */
+export async function share(ix, _args, ctx) {
+  const message = ix.raw.message;
+  if (!message?.embeds?.length) return open(ix, [], ctx, '見せられるものがありませんでした。');
+
+  const posted = {
+    content: message.content ?? '',
+    embeds: [
+      embed({ color: 0x5865f2, description: `📣 <@${ix.userId}> が結果を見せてくれました` }),
+      ...message.embeds.slice(0, 4).map(plainEmbed),
+    ],
+    allowed_mentions: { parse: [] },
+  };
+  ctx.announce(ix.channelId, posted);
+
+  // 画面はそのまま、見せるボタンだけを外す
+  const components = (message.components ?? [])
+    .map((actionRow) => ({
+      ...actionRow,
+      components: (actionRow.components ?? []).filter((component) => component.custom_id !== id('home', 'share')),
+    }))
+    .filter((actionRow) => actionRow.components.length > 0);
+  return show(ix, { content: message.content ?? '', embeds: message.embeds.map(plainEmbed), components });
+}
+
+export const actions = { open, help, share };

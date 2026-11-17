@@ -132,6 +132,7 @@ export async function deleteUserData(db, guildId, userId) {
     ['DELETE FROM rps_matches WHERE guild_id = ?1 AND (challenger_id = ?2 OR opponent_id = ?2)', guildId, userId],
     ['DELETE FROM chinchiro_matches WHERE guild_id = ?1 AND (challenger_id = ?2 OR opponent_id = ?2)', guildId, userId],
     ['DELETE FROM duels WHERE guild_id = ?1 AND (challenger_id = ?2 OR opponent_id = ?2)', guildId, userId],
+    ['DELETE FROM match_results WHERE guild_id = ?1 AND (winner_id = ?2 OR loser_id = ?2)', guildId, userId],
     // 終わった卓の記録は、何人ぶんもの手札や得点が1行に入っている。本人が出てくる卓は丸ごと消す
     ...CARD_TABLES.map((table) => [`DELETE FROM ${table} WHERE guild_id = ?1 AND status IN ('done', 'cancelled') AND ${IN_STATE}`, guildId, userId]),
   ]);

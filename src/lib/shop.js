@@ -38,6 +38,61 @@ export async function getItem(db, guildId, id) {
   return db.get('SELECT * FROM shop_items WHERE guild_id = ?1 AND id = ?2', guildId, id);
 }
 
+/** 一覧の並べ方。 */
+export const SORTS = {
+  new: { label: '新着', emoji: '🆕', order: 'created_at DESC, id DESC' },
+  cheap: { label: '安い順', emoji: '💴', order: 'price ASC, id DESC' },
+  popular: { label: '人気', emoji: '🔥', order: 'sold DESC, id DESC' },
+};
+
+/**
+ * 売り場の一覧。並べ方と、名前・説明での絞り込みができる。
+ * 絞り込みの言葉は LIKE の記号（% と _）をそのままの文字として扱う。
+ */
+export async function browseItems(db, guildId, { sort = 'new', query = null, limit = 25, offset = 0 } = {}) {
+  const order = (SORTS[sort] ?? SORTS.new).order;
+  if (!query) {
+    return db.all(
+      `SELECT * FROM shop_items WHERE guild_id = ?1 AND active = 1 ORDER BY ${order} LIMIT ?2 OFFSET ?3`,
+      guildId,
+      limit,
+      offset,
+    );
+  }
+  const pattern = `%${query.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
+  return db.all(
+    `SELECT * FROM shop_items
+      WHERE guild_id = ?1 AND active = 1 AND (name LIKE ?2 ESCAPE '\\' OR description LIKE ?2 ESCAPE '\\')
+      ORDER BY ${order} LIMIT ?3`,
+    guildId,
+    pattern,
+    limit,
+  );
+}
+
+/** 使われたのに、出品者がまだ「対応した」を押していないもの。 */
+export async function pendingDeliveries(db, guildId, sellerId) {
+  return db.all(
+    `SELECT * FROM purchases
+      WHERE guild_id = ?1 AND seller_id = ?2 AND used_at IS NOT NULL AND delivered_at IS NULL
+      ORDER BY used_at ASC LIMIT 25`,
+    guildId,
+    sellerId,
+  );
+}
+
+/** 出品者が「対応した」を押す。出品者本人でなければ false。 */
+export async function markDelivered(db, guildId, purchaseId, sellerId) {
+  const result = await db.run(
+    'UPDATE purchases SET delivered_at = ?4 WHERE guild_id = ?1 AND id = ?2 AND seller_id = ?3 AND used_at IS NOT NULL AND delivered_at IS NULL',
+    guildId,
+    purchaseId,
+    sellerId,
+    Date.now(),
+  );
+  return result.changes === 1;
+}
+
 export async function listItems(db, guildId, { includeInactive = false, sellerId = null, limit = 25, offset = 0 } = {}) {
   if (sellerId) {
     const activeClause = includeInactive ? '' : ' AND active = 1';
@@ -205,5 +260,30 @@ export async function salesOf(db, guildId, userId) {
       WHERE guild_id = ?1 AND seller_id = ?2 GROUP BY item_id, name ORDER BY total DESC LIMIT 10`,
     guildId,
     userId,
+  );
+}
+
+/**
+ * 管理者が出品を取り下げる（down=true）／取り下げを解く（down=false）。
+ * 取り下げた出品は出品者が自分で再開できない。解いても販売は止まったままで、
+ * 再開するかどうかは出品者に任せる。
+ */
+export async function takeDown(db, guildId, id, down) {
+  await db.run(
+    down
+      ? 'UPDATE shop_items SET taken_down = 1, active = 0 WHERE guild_id = ?1 AND id = ?2'
+      : 'UPDATE shop_items SET taken_down = 0 WHERE guild_id = ?1 AND id = ?2',
+    guildId,
+    id,
+  );
+  return getItem(db, guildId, id);
+}
+
+/** 管理者が見る一覧。販売中と、取り下げ済みのもの。 */
+export async function moderationList(db, guildId) {
+  return db.all(
+    `SELECT * FROM shop_items WHERE guild_id = ?1 AND (active = 1 OR taken_down = 1)
+      ORDER BY taken_down DESC, created_at DESC LIMIT 25`,
+    guildId,
   );
 }
