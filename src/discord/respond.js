@@ -1,4 +1,5 @@
 import { CallbackType, MessageFlags } from './constants.js';
+import { withSafeMentions } from './rest.js';
 
 export function json(data, init = {}) {
   return new Response(JSON.stringify(data), {
@@ -13,11 +14,11 @@ export const pong = () => json({ type: CallbackType.PONG });
 export const reply = (data, { ephemeral = true } = {}) =>
   json({
     type: CallbackType.CHANNEL_MESSAGE_WITH_SOURCE,
-    data: ephemeral ? { ...data, flags: MessageFlags.EPHEMERAL } : data,
+    data: withSafeMentions(ephemeral ? { ...data, flags: MessageFlags.EPHEMERAL } : data),
   });
 
 /** 押されたメッセージを書き換える。 */
-export const update = (data) => json({ type: CallbackType.UPDATE_MESSAGE, data });
+export const update = (data) => json({ type: CallbackType.UPDATE_MESSAGE, data: withSafeMentions(data) });
 
 /**
  * 「受け取った」とだけ先に返す（見た目は変わらない）。

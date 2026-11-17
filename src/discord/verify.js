@@ -19,15 +19,25 @@ async function importKey(publicKey) {
 }
 
 /**
+ * 署名に付いている時刻が、いまからどれだけずれていても受け付けるか（秒）。
+ * 署名は「時刻＋本文」に付くので、時刻を見れば、盗み見た古いリクエストを
+ * あとから送り直されても弾ける。Discord は押された瞬間に送ってくるので、5分あれば十分。
+ */
+export const MAX_SKEW_SECONDS = 300;
+
+/**
  * @returns {Promise<{valid: boolean, body: string}>}
  */
-export async function verifyRequest(request, publicKey) {
+export async function verifyRequest(request, publicKey, now = Date.now()) {
   const signature = request.headers.get('x-signature-ed25519');
   const timestamp = request.headers.get('x-signature-timestamp');
   const body = await request.text();
 
   if (!signature || !timestamp || !publicKey) return { valid: false, body };
   if (!/^[0-9a-f]+$/i.test(signature) || signature.length !== 128) return { valid: false, body };
+  if (!/^\d{1,12}$/.test(timestamp) || Math.abs(now / 1000 - Number(timestamp)) > MAX_SKEW_SECONDS) {
+    return { valid: false, body };
+  }
 
   try {
     const key = await importKey(publicKey);

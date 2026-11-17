@@ -9,6 +9,7 @@ import {
   tally,
 } from '../lib/polls.js';
 import { boardPayload } from './poll-board.js';
+import { cleanLine } from '../lib/text.js';
 import { coins, truncate } from '../lib/format.js';
 import { modal, textInput } from '../discord/builders.js';
 import { ButtonStyle, TextInputStyle } from '../discord/constants.js';
@@ -99,7 +100,7 @@ export function newPoll() {
 }
 
 export async function create(ix, _args, ctx) {
-  const question = readText(ix, 'question');
+  const question = readText(ix, 'question', { line: true });
   const rawOptions = readText(ix, 'options');
   const minutes = readInt(ix, 'minutes', { min: MIN_MINUTES, max: MAX_MINUTES });
   const stake = readInt(ix, 'stake', { min: 1, fallback: 0 });
@@ -110,7 +111,7 @@ export async function create(ix, _args, ctx) {
 
   const options = (rawOptions ?? '')
     .split('\n')
-    .map((line) => line.trim())
+    .map((line) => cleanLine(line, { max: 80 }))
     .filter(Boolean)
     .slice(0, MAX_OPTIONS);
   if (options.length < MIN_OPTIONS) {

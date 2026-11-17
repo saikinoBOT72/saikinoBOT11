@@ -18,6 +18,7 @@ import {
   useItem,
 } from '../lib/shop.js';
 import { modal, stringSelect, textInput } from '../discord/builders.js';
+import { realMoneyWord } from '../lib/text.js';
 import { ButtonStyle, TextInputStyle } from '../discord/constants.js';
 import {
   backButton,
@@ -35,6 +36,17 @@ import {
 } from './common.js';
 
 const PAGE_SIZE = 25;
+
+/**
+ * コインを現金や電子マネーと交換する出品は受け付けない。
+ * コインに現実のお金の価値を持たせると、遊びのポイントではなく賭博の道具になってしまうため。
+ */
+function realMoneyMessage(word) {
+  return (
+    `${word}とのやり取りに見える出品は受け付けていません。` +
+    'コインは現金・電子マネー・ギフト券などと交換できない決まりです（「肩たたき券」「1回おごり」のような身内のやり取りは大丈夫です）。'
+  );
+}
 
 function isImageUrl(url) {
   return /^https?:\/\/\S+$/i.test(url);
@@ -298,12 +310,14 @@ export function sellform(ix, [kind]) {
 }
 
 export async function create(ix, [kind = 'consumable'] = [], ctx) {
-  const name = readText(ix, 'name');
+  const name = readText(ix, 'name', { line: true, max: 60 });
   const price = readInt(ix, 'price', { min: 0 });
   const stock = readInt(ix, 'stock', { min: 1, fallback: -1 });
   const imageUrl = readText(ix, 'image_url');
 
   if (!name) return open(ix, [], ctx, 'アイテム名を入力してください。');
+  const money = realMoneyWord(`${name} ${readText(ix, 'description') ?? ''}`);
+  if (money) return open(ix, [], ctx, realMoneyMessage(money));
   if (isError(price)) return open(ix, [], ctx, price.error);
   if (isError(stock)) return open(ix, [], ctx, stock.error);
   if (imageUrl && !isImageUrl(imageUrl)) return open(ix, [], ctx, '画像URLは http(s) から始まるURLを入力してください。');
@@ -478,12 +492,14 @@ export async function update(ix, [rawId], ctx) {
   if (!item) return mine(ix, [], ctx, 'そのアイテムは見つかりませんでした。');
   if (item.seller_id !== ix.userId) return open(ix, [], ctx, '自分の出品だけ編集できます。');
 
-  const name = readText(ix, 'name');
+  const name = readText(ix, 'name', { line: true, max: 60 });
   const price = readInt(ix, 'price', { min: 0 });
   const stock = readInt(ix, 'stock', { min: 0, fallback: -1 });
   const imageUrl = readText(ix, 'image_url');
 
   if (!name) return manage(ix, [rawId], ctx, 'アイテム名を入力してください。');
+  const money = realMoneyWord(`${name} ${readText(ix, 'description') ?? ''}`);
+  if (money) return manage(ix, [rawId], ctx, realMoneyMessage(money));
   if (isError(price)) return manage(ix, [rawId], ctx, price.error);
   if (isError(stock)) return manage(ix, [rawId], ctx, stock.error);
   if (imageUrl && !isImageUrl(imageUrl)) return manage(ix, [rawId], ctx, '画像URLは http(s) から始まるURLにしてください。');

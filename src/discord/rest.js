@@ -1,5 +1,19 @@
 import { DISCORD_API } from './constants.js';
 
+/**
+ * 通知を飛ばしてよい相手の既定。
+ * 何も指定しないと、本文に @everyone やロールが入っていれば全員に通知が飛ぶ。
+ * みんなが書いた文字（商品名・お題・メモ）が本文に入ることがあるので、
+ * 指定が無ければ「本文に書いた人にだけ」に絞る。
+ */
+export const SAFE_MENTIONS = { parse: ['users'] };
+
+/** メッセージの中身に、通知の既定を入れる。 */
+export function withSafeMentions(payload) {
+  if (!payload || typeof payload !== 'object' || 'allowed_mentions' in payload) return payload;
+  return { ...payload, allowed_mentions: SAFE_MENTIONS };
+}
+
 /** Discord REST API の最小限のクライアント。 */
 export function createRest(token) {
   async function call(method, path, body) {
@@ -21,17 +35,17 @@ export function createRest(token) {
   return {
     /** チャンネルに投稿する（みんなに見える告知用）。 */
     createMessage(channelId, payload) {
-      return call('POST', `/channels/${channelId}/messages`, payload);
+      return call('POST', `/channels/${channelId}/messages`, withSafeMentions(payload));
     },
     editMessage(channelId, messageId, payload) {
-      return call('PATCH', `/channels/${channelId}/messages/${messageId}`, payload);
+      return call('PATCH', `/channels/${channelId}/messages/${messageId}`, withSafeMentions(payload));
     },
     /**
      * 返事として出したメッセージを後から書き換える。
      * 「回転中…」→「結果」のような演出に使う（トークンは15分間有効）。
      */
     editOriginalResponse(applicationId, interactionToken, payload) {
-      return call('PATCH', `/webhooks/${applicationId}/${interactionToken}/messages/@original`, payload);
+      return call('PATCH', `/webhooks/${applicationId}/${interactionToken}/messages/@original`, withSafeMentions(payload));
     },
 
     /**

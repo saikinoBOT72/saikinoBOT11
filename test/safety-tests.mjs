@@ -195,6 +195,60 @@ await test('src の中で Math.random を使っていない（出目を読まれ
   }
 });
 
+section('[文字の悪用]');
+
+await test('偽リンク・見えない文字・@everyone を整える', async () => {
+  const { cleanText, cleanLine } = await import(src('lib/text.js'));
+  assert.equal(cleanText('[公式](https://evil.example)'), '公式（https://evil.example）', 'リンク先が見える');
+  assert.equal(cleanText('あ\u200Bい\u202Eう'), 'あいう', '見えない文字を消す');
+  assert.equal(cleanText('@everyone 集合'), '＠everyone 集合');
+  assert.equal(cleanText('👨\u200D👩\u200D👧'), '👨\u200D👩\u200D👧', '絵文字のつなぎは残す');
+  assert.equal(cleanLine('1行目\n2行目'), '1行目 2行目', '名前は1行に');
+  assert.equal(cleanText('   '), null);
+});
+
+await test('現金・電子マネー・ギフト券との交換に見える出品は止める', async () => {
+  const { realMoneyWord } = await import(src('lib/text.js'));
+  for (const text of ['1000円で買い取ります', '1,000円分', 'PayPayで払います', 'アマギフ 500', 'Amazon ギフト券', '現金と交換']) {
+    assert.ok(realMoneyWord(text), `${text} を止めていない`);
+  }
+  for (const text of ['肩たたき券', '1回おごり', '円陣を組む', 'ギフト（手作り）', '記念トロフィー']) {
+    assert.equal(realMoneyWord(text), null, `${text} まで止めている`);
+  }
+
+  const ctx = fresh();
+  const response = await handleComponent(
+    new Ix(rawInteraction({ type: 5, customId: 'm:shop:create:consumable', fields: { name: '500円', price: '10', description: '', stock: '', image_url: '' } })),
+    ctx,
+  );
+  assert.match(JSON.stringify(await response.json()), /受け付けていません/);
+  assert.equal((await ctx.db.get('SELECT COUNT(*) AS n FROM shop_items')).n, 0, '出品されていない');
+});
+
+await test('Bot の投稿は、指定が無ければ @everyone やロールに通知を飛ばさない', async () => {
+  const { withSafeMentions } = await import(src('discord/rest.js'));
+  assert.deepEqual(withSafeMentions({ content: '@everyone' }).allowed_mentions, { parse: ['users'] });
+  assert.deepEqual(withSafeMentions({ allowed_mentions: { parse: [] } }).allowed_mentions, { parse: [] }, '指定があればそのまま');
+  const { reply } = await import(src('discord/respond.js'));
+  assert.deepEqual((await reply({ content: 'x' }).json()).data.allowed_mentions, { parse: ['users'] });
+});
+
+await test('src に見えない文字がそのまま入っていない', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const root = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'src');
+  const walk = (dir) =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = path.join(dir, entry.name);
+      return entry.isDirectory() ? walk(full) : entry.name.endsWith('.js') ? [full] : [];
+    });
+  for (const file of walk(root)) {
+    const text = fs.readFileSync(file, 'utf8');
+    const found = text.match(/[\u00AD\u200B\u200C\u200E\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/u);
+    assert.equal(found, null, `${path.relative(root, file)} に見えない文字 U+${found?.[0].codePointAt(0).toString(16)} がある`);
+  }
+});
+
 section('[履歴の表示]');
 
 await test('お金を動かすときの理由は、すべて日本語で表示できる', async () => {

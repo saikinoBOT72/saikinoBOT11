@@ -524,10 +524,10 @@ export async function achsave(ix, [type], ctx) {
   const meta = CONDITION_TYPES[type];
   if (!meta) return ach(ix, [], ctx, '不明な条件です。');
 
-  const name = readText(ix, 'name');
+  const name = readText(ix, 'name', { line: true, max: 32 });
   const threshold = readInt(ix, 'threshold', { min: 1 });
   const reward = readInt(ix, 'reward', { min: 0, fallback: 0 });
-  const activityName = meta.needsActivity ? readText(ix, 'activity') : null;
+  const activityName = meta.needsActivity ? readText(ix, 'activity', { line: true }) : null;
 
   if (!name) return ach(ix, [], ctx, '称号の名前を入力してください。');
   if (isError(threshold)) return ach(ix, [], ctx, threshold.error);
@@ -542,7 +542,7 @@ export async function achsave(ix, [type], ctx) {
 
   await createAchievement(ctx.db, ix.guildId, {
     name,
-    emoji: readText(ix, 'emoji'),
+    emoji: readText(ix, 'emoji', { line: true, max: 8 }),
     condition_type: type,
     threshold,
     activity_name: activityName,
@@ -826,7 +826,7 @@ export async function actsave2(ix, args, ctx) {
 
 async function saveActivity(ix, ctx, previousName) {
   if (!ix.isAdmin) return denied(ix, ctx);
-  const name = readText(ix, 'name');
+  const name = readText(ix, 'name', { line: true, max: 32 });
   const reward = readInt(ix, 'reward', { min: 0 });
   const cooldown = readInt(ix, 'cooldown', { min: 0, fallback: 0 });
   const daily = readInt(ix, 'daily', { min: 0, fallback: 0 });
@@ -849,7 +849,7 @@ async function saveActivity(ix, ctx, previousName) {
     reward,
     cooldown_sec: cooldown * 60,
     daily_limit: daily,
-    emoji: readText(ix, 'emoji'),
+    emoji: readText(ix, 'emoji', { line: true, max: 8 }),
     description: previous?.description ?? null,
   });
 
@@ -1034,7 +1034,7 @@ export async function cfgsave(ix, _args, ctx) {
   }
 
   await updateSettings(ctx.db, ix.guildId, {
-    currency_name: readText(ix, 'currency_name'),
+    currency_name: readText(ix, 'currency_name', { line: true }),
     currency_emoji: readText(ix, 'currency_emoji'),
     starting_balance: starting,
     min_bet: minBet,
@@ -1494,7 +1494,7 @@ export async function annsave(ix, [channelId, metric, when], ctx) {
 
   let activityName = null;
   if (meta.needsActivity) {
-    activityName = readText(ix, 'activity');
+    activityName = readText(ix, 'activity', { line: true });
     if (meta.needsActivity === true && !activityName) {
       return ann(ix, [], ctx, 'この種類では対象のアクション名が必要です。');
     }

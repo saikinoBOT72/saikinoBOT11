@@ -281,7 +281,7 @@ function cellRows(duel, state) {
       const index = y * SIZE + x;
       const owner = state.board[index];
       buttons.push(
-        button(`d:cell:${duel.id}:${index}`, '​', {
+        button(`d:cell:${duel.id}:${index}`, '\u200B', {
           emoji: owner ? MARKS[owner] : NUMBERS[index],
           style: owner === 'challenger' ? ButtonStyle.DANGER : owner === 'opponent' ? ButtonStyle.PRIMARY : ButtonStyle.SECONDARY,
           disabled: owner !== null,

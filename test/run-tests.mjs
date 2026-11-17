@@ -2259,6 +2259,13 @@ await test('Discord の署名を検証できる', async () => {
   const tampered = `${signature.slice(0, 126)}${signature.slice(126) === 'ff' ? '00' : 'ff'}`;
   assert.equal((await verify.verifyRequest(makeRequest(tampered), publicKey)).valid, false);
   assert.equal((await verify.verifyRequest(makeRequest('zz'), publicKey)).valid, false);
+
+  const tenMinutesLater = Date.now() + 10 * 60 * 1000;
+  assert.equal(
+    (await verify.verifyRequest(makeRequest(signature), publicKey, tenMinutesLater)).valid,
+    false,
+    '正しい署名でも、古すぎるリクエストの送り直しは弾く',
+  );
 });
 
 await test('埋め込みとボタンの JSON が Discord の形になる', () => {

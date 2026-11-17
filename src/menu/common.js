@@ -1,6 +1,7 @@
 import { button as makeButton, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { modalResponse, reply, update } from '../discord/respond.js';
+import { cleanLine, cleanText } from '../lib/text.js';
 
 /** メニューの customId は `m:<画面>:<操作>:<引数...>`。 */
 export const MENU_PREFIX = 'm';
@@ -117,10 +118,14 @@ export function isError(value) {
   return typeof value === 'object' && value !== null && 'error' in value;
 }
 
-/** 入力フォームの任意テキスト（空欄なら null）。 */
-export function readText(ix, field) {
-  const value = ix.field(field).trim();
-  return value === '' ? null : value;
+/**
+ * 入力フォームの任意テキスト（空欄なら null）。
+ * 偽リンク・見えない文字・@everyone をここで整える（lib/text.js）。
+ * 名前のように1行で使うものは { line: true } を付ける。
+ */
+export function readText(ix, field, { line = false, max } = {}) {
+  const raw = ix.field(field);
+  return line ? cleanLine(raw, { max: max ?? 100 }) : cleanText(raw, { max: max ?? 4000 });
 }
 
 /**
