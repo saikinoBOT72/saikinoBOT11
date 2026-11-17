@@ -1,4 +1,5 @@
 import { EMOJI } from './emoji.js';
+import { rollDie } from './random.js';
 
 /**
  * ロシアンルーレット。
@@ -11,7 +12,7 @@ export const CHAMBERS = 6;
 
 /** 何回目の引き金で実弾が来るかを決める。1〜6。 */
 export function loadBullet() {
-  return 1 + Math.floor(Math.random() * CHAMBERS);
+  return rollDie(CHAMBERS);
 }
 
 /** k回目（1始まり）を引くときに当たる確率。 */

@@ -84,6 +84,46 @@ export async function canReport(db, guildId, userId, activity, calendar) {
   return { ok: true };
 }
 
+/**
+ * 報告を確定してコインを渡す。制限に引っかかったら何もせず false。
+ *
+ * 【同時押しで制限をすり抜けさせない】
+ * 「制限を確かめる → 記録する」を別々にやると、同時に2回押されたとき
+ * 両方が「まだ大丈夫」と判断して2回とも通ってしまう（1日1回のアクションでも）。
+ * そこで履歴・残高・報告の記録を1つの処理にまとめ、どの文にも同じ条件
+ * （1日の上限に届いていない・休憩中でない）を付ける。報告の記録を最後に置くので、
+ * 条件の真偽は途中で変わらない。2回目の処理は条件が偽になって、何も動かない。
+ */
+export async function claimReport(db, guildId, userId, activity, calendar, note = null, now = Date.now()) {
+  // ?1=サーバー ?2=本人 ?3=アクション ?4=今日の始まり ?5=1日の上限 ?6=休憩(秒) ?7=いま
+  const allowed = `
+    (?5 <= 0 OR (SELECT COUNT(*) FROM activity_logs
+                  WHERE guild_id = ?1 AND user_id = ?2 AND activity = ?3 AND created_at >= ?4) < ?5)
+    AND (?6 <= 0 OR NOT EXISTS (SELECT 1 FROM activity_logs
+                  WHERE guild_id = ?1 AND user_id = ?2 AND activity = ?3 AND created_at > ?7 - ?6 * 1000))`;
+  const base = [guildId, userId, activity.name, startOfToday(calendar, new Date(now)), activity.daily_limit, activity.cooldown_sec, now];
+
+  const statements = [];
+  if (activity.reward > 0) {
+    statements.push(
+      [
+        `INSERT INTO ledger (guild_id, user_id, amount, reason, detail, created_at)
+         SELECT ?1, ?2, ?8, 'report', ?3, ?7 WHERE ${allowed}`,
+        ...base, activity.reward,
+      ],
+      [`UPDATE balances SET balance = balance + ?8 WHERE guild_id = ?1 AND user_id = ?2 AND ${allowed}`, ...base, activity.reward],
+    );
+  }
+  statements.push([
+    `INSERT INTO activity_logs (guild_id, user_id, activity, reward, note, created_at)
+     SELECT ?1, ?2, ?3, ?8, ?9, ?7 WHERE ${allowed}`,
+    ...base, activity.reward, note,
+  ]);
+
+  const results = await db.batch(statements);
+  return results.at(-1).changes === 1;
+}
+
 export async function logReport(db, guildId, userId, name, reward, note = null) {
   await db.run(
     'INSERT INTO activity_logs (guild_id, user_id, activity, reward, note, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)',

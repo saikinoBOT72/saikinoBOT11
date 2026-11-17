@@ -10,6 +10,7 @@
  * 「読んだときの version のまま」でなければ書けないので、勝った1リクエストだけが進む。
  */
 import { deposit } from './economy.js';
+import { chance } from './random.js';
 
 export const INVITE_TIMEOUT_MS = 120_000;
 export const PLAY_TIMEOUT_MS = 600_000;
@@ -195,5 +196,5 @@ export async function cancelExpired(db, now = Date.now()) {
 
 /** どちらが先攻か、コインで決める。 */
 export function randomFirst() {
-  return Math.random() < 0.5 ? 'challenger' : 'opponent';
+  return chance(0.5) ? 'challenger' : 'opponent';
 }

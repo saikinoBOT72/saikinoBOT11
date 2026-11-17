@@ -54,30 +54,44 @@ export async function touchStreak(db, guildId, userId, activity, calendar, now =
     activity,
   );
 
+  // 同じ瞬間に2回報告されても「その日はじめて」になるのは1回だけ。
+  // そうしないと連日ボーナスが2回出る。書けなかった側は読み直して、その日の2回目として扱う
+  const sameDay = async () => {
+    const fresh = await db.get(
+      'SELECT * FROM streaks WHERE guild_id = ?1 AND user_id = ?2 AND activity = ?3',
+      guildId,
+      userId,
+      activity,
+    );
+    return { current: fresh?.current ?? 1, best: fresh?.best ?? 1, isNewDay: false };
+  };
+
   if (!row) {
-    await db.run(
-      'INSERT INTO streaks (guild_id, user_id, activity, current, best, last_date) VALUES (?1, ?2, ?3, 1, 1, ?4)',
+    const created = await db.run(
+      'INSERT OR IGNORE INTO streaks (guild_id, user_id, activity, current, best, last_date) VALUES (?1, ?2, ?3, 1, 1, ?4)',
       guildId,
       userId,
       activity,
       today,
     );
-    return { current: 1, best: 1, isNewDay: true };
+    return created.changes === 1 ? { current: 1, best: 1, isNewDay: true } : sameDay();
   }
   if (row.last_date === today) return { current: row.current, best: row.best, isNewDay: false };
 
   const current = row.last_date === previousDay(today) ? row.current + 1 : 1;
   const best = Math.max(row.best, current);
-  await db.run(
-    'UPDATE streaks SET current = ?4, best = ?5, last_date = ?6 WHERE guild_id = ?1 AND user_id = ?2 AND activity = ?3',
+  const moved = await db.run(
+    `UPDATE streaks SET current = ?4, best = ?5, last_date = ?6
+      WHERE guild_id = ?1 AND user_id = ?2 AND activity = ?3 AND last_date IS ?7`,
     guildId,
     userId,
     activity,
     current,
     best,
     today,
+    row.last_date,
   );
-  return { current, best, isNewDay: true };
+  return moved.changes === 1 ? { current, best, isNewDay: true } : sameDay();
 }
 
 /**

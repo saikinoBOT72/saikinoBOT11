@@ -3,6 +3,7 @@
  * 役が出るまで最大3回振り、役の格で勝敗と倍率が決まる。
  */
 import { DICE_FACES, EMOJI } from './emoji.js';
+import { rollDie } from './random.js';
 
 export const MAX_THROWS = 3;
 
@@ -22,7 +23,7 @@ const KINDS = {
 export { DICE_FACES };
 
 export function rollDice() {
-  return [0, 0, 0].map(() => 1 + Math.floor(Math.random() * 6));
+  return [0, 0, 0].map(() => rollDie());
 }
 
 /** 出目3つから役を判定する。 */

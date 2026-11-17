@@ -18,6 +18,7 @@ import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
 import { handleRematch, rematchButton } from './rematch.js';
 import { diceFaces } from '../lib/emoji.js';
+import { rollDie } from '../lib/random.js';
 
 /** 公開メッセージのボタンは `cc:` 始まり。 */
 export const namespace = 'cc';
@@ -255,7 +256,7 @@ function lastThrow(json) {
 }
 
 function rolling(faces) {
-  const roll = faces[1 + Math.floor(Math.random() * 6)];
+  const roll = faces[rollDie()];
   return `${roll} ${roll} ${roll}`;
 }
 

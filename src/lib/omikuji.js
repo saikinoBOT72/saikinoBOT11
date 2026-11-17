@@ -15,6 +15,7 @@
  */
 import { LUCKY_COLORS, LUCKY_ITEMS, OMIKUJI_ITEMS, OMIKUJI_TEXT } from './omikuji-data.js';
 import { dateKey } from './calendar.js';
+import { random } from './random.js';
 
 export { OMIKUJI_ITEMS };
 
@@ -55,12 +56,12 @@ function weighted(entries, weightOf, rng) {
   return entries[entries.length - 1];
 }
 
-export function rollRank(rng = Math.random) {
+export function rollRank(rng = random) {
   return weighted(RANKS, (rank) => rank.weight, rng);
 }
 
 /** その総合運のもとで、1項目ぶんの段階を引く。 */
-export function rollTier(rank, rng = Math.random) {
+export function rollTier(rank, rng = random) {
   const tiers = ['low', 'mid', 'high'].filter((tier) => rank.odds[tier] > 0);
   return weighted(tiers, (tier) => rank.odds[tier], rng);
 }
@@ -71,7 +72,7 @@ const pick = (list, rng) => Math.floor(rng() * list.length);
  * 1回ぶん引く。保存できる形（添字だけ）で返す。
  * 文そのものを保存しないのは、あとから文言を直しても壊れないようにするため。
  */
-export function drawOmikuji(rng = Math.random) {
+export function drawOmikuji(rng = random) {
   const rank = rollRank(rng);
   const picks = OMIKUJI_ITEMS.map((item) => {
     const tier = rollTier(rank, rng);
@@ -136,7 +137,7 @@ export async function todaysDraw(db, guildId, userId, calendar) {
  * 同じ瞬間に二度押されても結果が2つできない）。
  * @returns {Promise<{draw: object, fresh: boolean}>}
  */
-export async function drawToday(db, guildId, userId, calendar, rng = Math.random) {
+export async function drawToday(db, guildId, userId, calendar, rng = random) {
   const today = dateKey(calendar);
   const draw = drawOmikuji(rng);
   const saved = await db.run(

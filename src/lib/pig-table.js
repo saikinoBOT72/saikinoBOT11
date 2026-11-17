@@ -12,7 +12,8 @@
  * 時間切れなら全員に返す。
  */
 import { deposit, withdraw } from './economy.js';
-import { TURNS, applyRoll, rollDie, shuffleSeats } from './pig.js';
+import { TURNS, applyRoll, shuffleSeats } from './pig.js';
+import { rollDie } from './random.js';
 import { createTableStore } from './card-table.js';
 
 export const MIN_PLAYERS = 2;

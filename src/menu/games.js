@@ -1,4 +1,4 @@
-import { deposit, getBalance, withdraw } from '../lib/economy.js';
+import { getBalance, settleWager } from '../lib/economy.js';
 import { checkBet } from '../lib/wager.js';
 import { coins } from '../lib/format.js';
 import { payoutTable, spin } from '../lib/slot.js';
@@ -49,6 +49,7 @@ import {
   withNotice,
 } from './common.js';
 import { EMOJI as em } from '../lib/emoji.js';
+import { chance } from '../lib/random.js';
 
 /* ------------------------------------------------------------------ ゲーム選択 */
 
@@ -568,15 +569,18 @@ async function slotSpin(ix, ctx, bet) {
   const check = checkBet(bet, balance, settings);
   if (!check.ok) return slotOpen(ix, [], ctx, check.message);
 
-  if (!(await withdraw(ctx.db, ix.guildId, ix.userId, bet, 'slot:bet'))) {
-    return slotOpen(ix, [], ctx, '残高が足りません。');
-  }
-
-  // 先にお金の処理を済ませてから、演出だけ後追いで見せる
+  // 結果を先に決め、賭け金と払い戻しを1回の処理で動かす。演出はそのあとで見せるだけ
   const result = spin();
   const payout = result.multiplier * bet;
-  if (payout > 0) await deposit(ctx.db, ix.guildId, ix.userId, payout, 'slot:win', `x${result.multiplier}`);
-  const after = await getBalance(ctx.db, ix.guildId, ix.userId);
+  const settled = await settleWager(ctx.db, ix.guildId, ix.userId, {
+    bet,
+    payout,
+    betReason: 'slot:bet',
+    winReason: 'slot:win',
+    detail: `x${result.multiplier}`,
+  });
+  if (!settled.ok) return slotOpen(ix, [], ctx, '残高が足りません。');
+  const after = settled.balance;
   const net = payout - bet;
 
   // リールは content に絵文字だけで置く。Discord がいちばん大きく描いてくれる。
@@ -716,14 +720,18 @@ async function cfGo(ix, [rawBet, side], ctx) {
   const check = checkBet(bet, balance, settings);
   if (!check.ok) return cfOpen(ix, [], ctx, check.message);
 
-  if (!(await withdraw(ctx.db, ix.guildId, ix.userId, bet, 'coinflip:bet'))) {
-    return cfOpen(ix, [], ctx, '残高が足りません。');
-  }
+  if (!SIDES[side]) return cfOpen(ix, [], ctx, '表か裏を選んでください。');
 
-  const outcome = Math.random() < 0.5 ? 'heads' : 'tails';
+  const outcome = chance(0.5) ? 'heads' : 'tails';
   const won = outcome === side;
-  if (won) await deposit(ctx.db, ix.guildId, ix.userId, bet * 2, 'coinflip:win');
-  const after = await getBalance(ctx.db, ix.guildId, ix.userId);
+  const settled = await settleWager(ctx.db, ix.guildId, ix.userId, {
+    bet,
+    payout: won ? bet * 2 : 0,
+    betReason: 'coinflip:bet',
+    winReason: 'coinflip:win',
+  });
+  if (!settled.ok) return cfOpen(ix, [], ctx, '残高が足りません。');
+  const after = settled.balance;
 
   // コインは content に絵文字だけで置く。ここがいちばん大きく出る。
   const tossing = (note) => ({

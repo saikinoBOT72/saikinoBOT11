@@ -1,4 +1,5 @@
 import { EMOJI } from './emoji.js';
+import { random } from './random.js';
 
 /**
  * スロットの出目テーブル。
@@ -18,7 +19,7 @@ export const SLOT_SYMBOLS = [
 const TOTAL_WEIGHT = SLOT_SYMBOLS.reduce((sum, s) => sum + s.weight, 0);
 
 function spinReel() {
-  let roll = Math.random() * TOTAL_WEIGHT;
+  let roll = random() * TOTAL_WEIGHT;
   for (const s of SLOT_SYMBOLS) {
     roll -= s.weight;
     if (roll < 0) return s;

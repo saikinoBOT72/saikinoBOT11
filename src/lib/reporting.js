@@ -1,5 +1,5 @@
-import { canReport, countToday, logReport } from './activities.js';
-import { deposit, getBalance } from './economy.js';
+import { canReport, claimReport, countToday } from './activities.js';
+import { ensureAccount, getBalance } from './economy.js';
 import { payStreakBonus, touchStreak } from './streak.js';
 import { equippedTitle, evaluate, titleTag } from './achievements.js';
 import { coins, duration, relative, truncate } from './format.js';
@@ -74,8 +74,12 @@ export async function attemptReport(db, { guildId, userId, activity, calendar, n
   const gate = await canReport(db, guildId, userId, activity, calendar);
   if (!gate.ok) return { ok: false, message: gateMessage(gate, activity) };
 
-  await logReport(db, guildId, userId, activity.name, activity.reward, note);
-  await deposit(db, guildId, userId, activity.reward, 'report', activity.name);
+  // 記録とコインは1つの処理で。同時に押されたぶんはここで弾かれる
+  await ensureAccount(db, guildId, userId);
+  if (!(await claimReport(db, guildId, userId, activity, calendar, note))) {
+    const again = await canReport(db, guildId, userId, activity, calendar);
+    return { ok: false, message: again.ok ? 'いま混み合っています。もう一度押してください。' : gateMessage(again, activity) };
+  }
 
   // 連続記録はアクションごとに数える
   const streak = await touchStreak(db, guildId, userId, activity.name, calendar);

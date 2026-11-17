@@ -8,6 +8,7 @@
  */
 import { deposit, withdraw } from './economy.js';
 import { dateKey } from './calendar.js';
+import { randomInt } from './random.js';
 
 export const TICKET_PRICE = 100;
 
@@ -85,7 +86,7 @@ export function parseNumbers(input, limit = MAX_TICKETS_PER_USER) {
 }
 
 function drawNumber() {
-  return Math.floor(Math.random() * (MAX_NUMBER + 1));
+  return randomInt(MAX_NUMBER + 1);
 }
 
 /* ------------------------------------------------------------------ 回（draw）の区切り */
@@ -265,7 +266,7 @@ export async function pickFreeNumbers(db, guildId, drawKey, count) {
   const free = [];
   // 1000通りしかないので、埋まっていても必ず有限回で終わる
   for (let attempt = 0; attempt < 400 && free.length < count; attempt++) {
-    const number = Math.floor(Math.random() * (MAX_NUMBER + 1));
+    const number = randomInt(MAX_NUMBER + 1);
     if (taken.has(number)) continue;
     taken.add(number);
     free.push(number);

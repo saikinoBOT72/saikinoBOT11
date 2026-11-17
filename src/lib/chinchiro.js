@@ -1,5 +1,6 @@
 import { deposit } from './economy.js';
 import { MAX_MULTIPLIER } from './dice.js';
+import { chance } from './random.js';
 
 export const INVITE_TIMEOUT_MS = 120_000;
 export const PLAY_TIMEOUT_MS = 300_000;
@@ -45,7 +46,7 @@ export async function setStatus(db, id, status) {
  * 先攻はランダム。あとから振るほうが相手の目を見られて有利なので、固定にしない。
  * @returns {Promise<'challenger'|'opponent'|null>} 取れたら先攻の役、取れなければ null
  */
-export async function markPlaying(db, id, first = Math.random() < 0.5 ? 'challenger' : 'opponent') {
+export async function markPlaying(db, id, first = chance(0.5) ? 'challenger' : 'opponent') {
   const result = await db.run(
     "UPDATE chinchiro_matches SET status = 'playing', turn = ?3, expires_at = ?2 WHERE id = ?1 AND status = 'pending'",
     id,

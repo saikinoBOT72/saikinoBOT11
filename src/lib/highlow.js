@@ -4,6 +4,7 @@
  * いつでも降りて確定できる。同じ数字は引き分けとして引き直す。
  */
 import { cardFace } from './emoji.js';
+import { pick, randomInt } from './random.js';
 
 export const RANKS = { 1: 'A', 11: 'J', 12: 'Q', 13: 'K' };
 export const SUITS = ['♠️', '♥️', '♦️', '♣️'];
@@ -21,7 +22,7 @@ export const MAX_STEPS = 20;
 export const MAX_MULTIPLIER = 1000;
 
 export function drawCard() {
-  return { rank: 1 + Math.floor(Math.random() * 13), suit: SUITS[Math.floor(Math.random() * SUITS.length)] };
+  return { rank: 1 + randomInt(13), suit: pick(SUITS) };
 }
 
 /**

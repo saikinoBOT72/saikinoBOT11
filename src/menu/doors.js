@@ -14,6 +14,7 @@ import {
   openDoor,
   payout,
 } from '../lib/doors.js';
+import { createSoloStore } from '../lib/solo-session.js';
 import { modal, textInput } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import {
@@ -34,27 +35,17 @@ import { EMOJI as em } from '../lib/emoji.js';
 
 /* ------------------------------------------------------------------ 進行中の勝負 */
 
-async function getGame(ctx, ix) {
-  return ctx.db.get('SELECT * FROM doors_games WHERE guild_id = ?1 AND user_id = ?2', ix.guildId, ix.userId);
-}
+// 進める・持ち帰る・外れる、のどれも「読んだときの版のまま」でなければ通らない
+// （2台の端末で同時に押しても、払い戻しが2回入ったりしない）
+const store = createSoloStore('doors_games', ['bet', 'multiplier', 'steps']);
 
-async function saveGame(ctx, ix, game) {
-  await ctx.db.run(
-    `INSERT INTO doors_games (guild_id, user_id, bet, multiplier, steps, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-     ON CONFLICT(guild_id, user_id) DO UPDATE SET
-       bet = excluded.bet, multiplier = excluded.multiplier, steps = excluded.steps`,
-    ix.guildId,
-    ix.userId,
-    game.bet,
-    game.multiplier,
-    game.steps,
-    Date.now(),
-  );
-}
+const getGame = (ctx, ix) => store.get(ctx.db, ix.guildId, ix.userId);
 
-async function clearGame(ctx, ix) {
-  await ctx.db.run('DELETE FROM doors_games WHERE guild_id = ?1 AND user_id = ?2', ix.guildId, ix.userId);
+/** 別の端末からの操作が先に入っていたとき。いまの状態を出し直す。 */
+async function stale(ix, ctx) {
+  const fresh = await getGame(ctx, ix);
+  if (!fresh) return open(ix, [], ctx, 'この勝負はもう終わっています。');
+  return table(ix, ctx, fresh, '別の操作が先に入りました。いまの状態です。');
 }
 
 /* ------------------------------------------------------------------ 画面 */
@@ -123,8 +114,12 @@ async function start(ix, ctx, betAmount) {
   }
 
   const game = { bet: betAmount, multiplier: 1, steps: 0 };
-  await saveGame(ctx, ix, game);
-  return table(ix, ctx, { bet: game.bet, multiplier: game.multiplier, steps: game.steps });
+  if (!(await store.start(ctx.db, ix.guildId, ix.userId, game))) {
+    // 同じ瞬間にもう1つ始まっていた。預かったぶんは返す
+    await deposit(ctx.db, ix.guildId, ix.userId, betAmount, 'doors:refund');
+    return open(ix, [], ctx, 'すでに勝負が進んでいます。');
+  }
+  return table(ix, ctx, game);
 }
 
 /** 扉の前。次の扉を選ぶ画面。 */
@@ -184,7 +179,7 @@ export async function pick(ix, [choice], ctx) {
   };
 
   if (!hit) {
-    await clearGame(ctx, ix);
+    if (!(await store.lose(ctx.db, game))) return stale(ix, ctx);
     const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
     ctx.animate(ix, [
       {
@@ -215,9 +210,8 @@ export async function pick(ix, [choice], ctx) {
   const steps = game.steps + 1;
 
   if (isCapped(steps, multiplier)) {
-    await clearGame(ctx, ix);
     const won = payout(game.bet, multiplier);
-    await deposit(ctx.db, ix.guildId, ix.userId, won, 'doors:win', `×${multiplier}`);
+    if (!(await store.cashOut(ctx.db, game, won, 'doors:win', `×${multiplier}`))) return stale(ix, ctx);
     const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
     ctx.animate(ix, [
       {
@@ -248,7 +242,7 @@ export async function pick(ix, [choice], ctx) {
     return show(ix, { ...opening, components: [] });
   }
 
-  await saveGame(ctx, ix, { bet: game.bet, multiplier, steps });
+  if (!(await store.advance(ctx.db, game, { bet: game.bet, multiplier, steps }))) return stale(ix, ctx);
   ctx.animate(ix, [
     { after: 1000, payload: await openedFrame(ix, ctx, choice, { bet: game.bet, multiplier, steps }) },
   ]);
@@ -290,8 +284,8 @@ export async function stop(ix, _args, ctx) {
 
   const settings = await ctx.settings(ix.guildId);
   const won = payout(game.bet, game.multiplier);
-  await clearGame(ctx, ix);
-  await deposit(ctx.db, ix.guildId, ix.userId, won, 'doors:win', `×${game.multiplier}`);
+  // 払い戻しと片付けは1つの処理。別の端末で先に持ち帰っていたら、ここでは何も払わない
+  if (!(await store.cashOut(ctx.db, game, won, 'doors:win', `×${game.multiplier}`))) return stale(ix, ctx);
   const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
 
   return show(ix, {

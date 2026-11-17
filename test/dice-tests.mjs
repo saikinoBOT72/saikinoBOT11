@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { createRunner, createTestContext, customIds, rawInteraction, screenText, src } from './harness.mjs';
 
 const pig = await import(src('lib/pig.js'));
+const random = await import(src('lib/random.js'));
 const pigLib = await import(src('lib/pig-table.js'));
 const pigBoard = await import(src('menu/pig-table.js'));
 const chohan = await import(src('lib/chohan.js'));
@@ -54,7 +55,7 @@ await test('1が出たらそのターンの貯金は0、それ以外は足され
 
 await test('振って出る目は1〜6に収まる', () => {
   const seen = new Set();
-  for (let i = 0; i < 600; i++) seen.add(pig.rollDie());
+  for (let i = 0; i < 600; i++) seen.add(random.rollDie());
   assert.deepEqual([...seen].sort((a, b) => a - b), [1, 2, 3, 4, 5, 6]);
 });
 

@@ -4,6 +4,7 @@
  * suit の並びは lib/emoji.js の SUIT_KEYS と同じ（spade / heart / diamond / club）。
  */
 import { SUIT_KEYS, cardFace } from './emoji.js';
+import { shuffle } from './random.js';
 
 export const RANK_LABELS = ['', 'A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
 
@@ -18,12 +19,7 @@ export function newDeck(decks = 1) {
       for (let rank = 1; rank <= 13; rank++) deck.push({ rank, suit });
     }
   }
-  // Fisher–Yates
-  for (let i = deck.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [deck[i], deck[j]] = [deck[j], deck[i]];
-  }
-  return deck;
+  return shuffle(deck);
 }
 
 /**
