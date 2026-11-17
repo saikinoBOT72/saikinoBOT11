@@ -40,7 +40,7 @@ const store = createTableStore('poker_tables', {
   playTimeoutMs: PLAY_TIMEOUT_MS,
 });
 
-export const { createTable, getTable, stateOf, setMessageId, setStatus, mutate, expiredTables } = store;
+export const { createTable, getTable, stateOf, setMessageId, setStatus, mutate, close, expiredTables } = store;
 
 export function seatOf(state, userId) {
   return state.players.findIndex((player) => player.userId === userId);
@@ -306,6 +306,30 @@ export async function settleTable(db, table, state) {
     hand: evaluate(player.cards),
   }));
   return { kind: 'showdown', pot, winners, hands };
+}
+
+/**
+ * 時間切れのとき、いま待たせている人。
+ *  ・交換の段階：まだ交換を終えていない人
+ *  ・提案の周：まだ動いていない人
+ *  ・承認の周：上がったぶんをまだ払っていない人
+ */
+export function idlePlayers(state) {
+  return stayers(state).filter((player) => {
+    if (state.phase === 'draw') return !player.exchanged;
+    if (state.phase !== 'bet') return false;
+    return state.step === ACCEPT ? owedBy(state, player) > 0 : !player.acted;
+  });
+}
+
+/** 待たせていた人を降りた扱いにして、勝負を終わらせた形にする。 */
+export function foldIdle(state) {
+  const idle = new Set(idlePlayers(state).map((player) => player.userId));
+  return {
+    ...state,
+    phase: 'done',
+    players: state.players.map((player) => (idle.has(player.userId) ? { ...player, folded: true, timedOut: true } : player)),
+  };
 }
 
 /** 時間切れで流すときの返金。場に出したぶんを全員に返す。 */

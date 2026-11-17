@@ -86,6 +86,22 @@ export function createTableStore(tableName, { emptyState, joinTimeoutMs, playTim
     return { ok: false, reason: 'busy' };
   }
 
+  /**
+   * 卓を閉じる（終わり・流れ）。読んだときの版のままでなければ閉じられない。
+   * お金を動かす前に必ずこれを通し、取れた1つだけが払う（二重払いを防ぐ）。
+   */
+  async function close(db, table, { status, state = undefined }) {
+    const result = await db.run(
+      `UPDATE ${tableName} SET status = ?3, state = ?4, version = version + 1
+        WHERE id = ?1 AND version = ?2 AND status IN ('joining', 'playing')`,
+      table.id,
+      table.version,
+      status,
+      JSON.stringify(state ?? stateOf(table)),
+    );
+    return result.changes === 1;
+  }
+
   /** 時間切れの卓（1分ごとの定期処理から拾う）。 */
   async function expiredTables(db, now = Date.now()) {
     return db.all(
@@ -94,5 +110,5 @@ export function createTableStore(tableName, { emptyState, joinTimeoutMs, playTim
     );
   }
 
-  return { createTable, getTable, stateOf, setMessageId, setStatus, mutate, expiredTables };
+  return { createTable, getTable, stateOf, setMessageId, setStatus, mutate, close, expiredTables };
 }

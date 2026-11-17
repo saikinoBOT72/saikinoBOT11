@@ -19,6 +19,12 @@ export const emojiSlot = 'roulette';
 export const color = 0x992d22;
 export const firstTurn = randomFirst;
 
+/** 時間切れ：引き金を引かなかった人の負け。 */
+export function timeoutOutcome(duel, state) {
+  if (!state.bulletAt || !duel.turn) return { kind: 'refund' };
+  return { kind: 'forfeit', loser: duel.turn };
+}
+
 export function inviteFields() {
   return [{ name: 'ルール', value: RULES }];
 }

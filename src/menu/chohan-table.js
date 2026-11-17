@@ -13,6 +13,7 @@ import {
   CHO,
   HAN,
   betOf,
+  close,
   createTable,
   getTable,
   openPot,
@@ -254,7 +255,7 @@ export async function timeOut(ctx, table) {
     }
   }
 
+  if (!(await close(ctx.db, table, { status: 'cancelled' }))) return null;
   await refundTable(ctx.db, table, state);
-  await setStatus(ctx.db, table.id, 'cancelled');
   return { payload: unmatchedPayload(table) };
 }

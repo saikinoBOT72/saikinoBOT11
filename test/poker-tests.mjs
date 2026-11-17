@@ -712,15 +712,41 @@ await test('レイズを2回挟んでもコインの総量は変わらない', a
   assert.equal(await totalCoins(), startTotal, 'コインが湧いたり消えたりしない');
 });
 
-await test('レイズの途中で時間切れになっても全額返る', async () => {
+await test('レイズの承認待ちで時間切れになったら、払っていない人は降りた扱いで決着する', async () => {
   const { table, startTotal } = await toBetPhase(200);
   await propose(table, 'u1', 'same');
   for (const userId of SEATS.slice(1)) await pressPk(`pk:call:${table.id}`, { userId });
   await pressPk(`pk:call:${table.id}`, { userId: 'u2' });
+  const before = { u3: await eco.getBalance(db, GUILD, 'u3'), u4: await eco.getBalance(db, GUILD, 'u4') };
 
   await db.run('UPDATE poker_tables SET expires_at = 1 WHERE id = ?1', table.id);
+  const handled = await board.timeOut(ctx, await db.get('SELECT * FROM poker_tables WHERE id = ?1', table.id));
+  assert.equal(await totalCoins(), startTotal, 'コインは湧かない・消えない');
+  assert.equal(await eco.getBalance(db, GUILD, 'u3'), before.u3, '払っていない人には何も返らない');
+  assert.equal(await eco.getBalance(db, GUILD, 'u4'), before.u4);
+  assert.equal((await db.get('SELECT status FROM poker_tables WHERE id = ?1', table.id)).status, 'done');
+  assert.match(JSON.stringify(handled.payload), /時間切れ/);
+});
+
+await test('誰も動かないまま時間切れなら、全員に返す', async () => {
+  const { table, startTotal } = await toBetPhase(200);
+  await db.run('UPDATE poker_tables SET expires_at = 1 WHERE id = ?1', table.id);
   await board.timeOut(ctx, await db.get('SELECT * FROM poker_tables WHERE id = ?1', table.id));
-  assert.equal(await totalCoins(), startTotal, '出したぶんが全部返る');
+  assert.equal(await totalCoins(), startTotal);
+  assert.equal((await db.get('SELECT status FROM poker_tables WHERE id = ?1', table.id)).status, 'cancelled');
+});
+
+await test('時間切れの片付けは二重に払わない', async () => {
+  const { table } = await toBetPhase(200);
+  await pressPk(`pk:call:${table.id}`, { userId: 'u1' });
+  await db.run('UPDATE poker_tables SET expires_at = 1 WHERE id = ?1', table.id);
+  const snapshot = await db.get('SELECT * FROM poker_tables WHERE id = ?1', table.id);
+  const before = await totalCoins();
+  await board.timeOut(ctx, snapshot);
+  const after = await totalCoins();
+  assert.equal(await board.timeOut(ctx, snapshot), null, '同じ卓を2回片付けない');
+  assert.equal(await totalCoins(), after);
+  assert.ok(after >= before);
 });
 
 await test('3人降りたら、4人目は押さなくても総取りになる', async () => {

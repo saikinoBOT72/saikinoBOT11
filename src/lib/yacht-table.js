@@ -40,7 +40,7 @@ const store = createTableStore('yacht_tables', {
   playTimeoutMs: PLAY_TIMEOUT_MS,
 });
 
-export const { createTable, getTable, stateOf, setMessageId, setStatus, mutate, expiredTables } = store;
+export const { createTable, getTable, stateOf, setMessageId, setStatus, mutate, close, expiredTables } = store;
 
 /** ひとり練習の卓か（参加費0）。 */
 const isSolo = (table) => table.bet === 0;

@@ -3,7 +3,7 @@
  * 二人が同時に手を選び、そろったところで結果を出す。
  */
 import { MAX_HP, MAX_ROUNDS, MOVES, canUse, hearts, playRound } from '../lib/charge.js';
-import { finishDuel, mutate, otherRole, refundDuel, settleDuel, userIdOf } from '../lib/duel.js';
+import { finishDuel, forfeitUnchosen, mutate, otherRole, refundDuel, settleDuel, userIdOf } from '../lib/duel.js';
 import { coins } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
@@ -15,6 +15,12 @@ export const key = 'cs';
 export const title = 'チャージ＆シュート';
 export const emojiSlot = 'charge';
 export const color = 0xf1c40f;
+
+/** 時間切れ：手を選ばなかった人の負け。二人とも選んでいなければ返金。 */
+export function timeoutOutcome(_duel, state) {
+  if (!state.choice) return { kind: 'refund' };
+  return forfeitUnchosen(state.choice);
+}
 
 export function inviteFields() {
   return [{ name: 'ルール', value: RULES }];

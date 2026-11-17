@@ -226,7 +226,7 @@ function playEmbed(match, settings, round) {
       `<@${match.challenger_id}> vs <@${match.opponent_id}>\n` +
       (match.bet > 0 ? `賭け金 ${coins(match.bet, settings)}（勝者が総取り）\n` : '') +
       '\n二人ともボタンで手を選んでください。選んだ手は相手には見えません。',
-    footer: { text: round > 1 ? `第${round}ラウンド` : '3分以内に選ばないと引き分け返金になります' },
+    footer: { text: round > 1 ? `第${round}ラウンド` : '3分たっても選ばない人は負けになります（二人とも選ばなければ返金）' },
   });
 }
 

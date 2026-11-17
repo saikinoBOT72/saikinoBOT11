@@ -11,6 +11,7 @@ import {
 } from '../lib/blackjack.js';
 import {
   JOIN_TIMEOUT_MS,
+  close,
   createTable,
   deal,
   getTable,
@@ -305,7 +306,8 @@ export async function timeOut(ctx, table) {
   const settings = await getSettings(ctx.db, table.guild_id);
 
   if (table.status === 'joining') {
-    await setStatus(ctx.db, table.id, 'cancelled');
+    // 先に閉じてから返す。取れなかったら（誰かが同時に始めた等）何もしない
+    if (!(await close(ctx.db, table, { status: 'cancelled' }))) return null;
     await refundTable(ctx.db, table, state);
     return {
       payload: {

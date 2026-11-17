@@ -8,7 +8,7 @@ import { cancelEmbed } from './menu/rps-challenge.js';
 import { cancelExpired } from './lib/rps.js';
 import { cancelEmbed as chinchiroCancelEmbed } from './menu/chinchiro-match.js';
 import { cancelExpired as cancelExpiredChinchiro } from './lib/chinchiro.js';
-import { cancelExpired as cancelExpiredDuels, findGame } from './menu/duel-board.js';
+import { expireDuels, findGame } from './menu/duel-board.js';
 import { timeOut as blackjackTimeOut } from './menu/blackjack-table.js';
 import { expiredTables } from './lib/blackjack-table.js';
 import { timeOut as pokerTimeOut } from './menu/poker-table.js';
@@ -68,15 +68,32 @@ export async function runScheduled(ctx) {
   }
 }
 
+/** 時間切れで「動かなかった人の負け」になったときの表示。 */
+function forfeitEmbed(title, winnerId, loserId, prize, settings) {
+  return embed({
+    color: 0xf1c40f,
+    title: `⏰ ${title}：時間切れ`,
+    description:
+      `<@${loserId}> が時間内に動かなかったので、**<@${winnerId}> の勝ち**です。\n` +
+      (prize > 0 ? `${settings.currency_emoji} **${prize.toLocaleString('ja-JP')}** を受け取りました。` : ''),
+  });
+}
+
 export async function sweepExpiredMatches(ctx) {
   const handled = await cancelExpired(ctx.db);
-  for (const { match, refunded } of handled) {
+  for (const { match, refunded, winnerId, loserId } of handled) {
     if (!match.message_id) continue;
+    const settings = await ctx.settings(match.guild_id);
     await ctx.rest
       .editMessage(match.channel_id, match.message_id, {
         content: '',
-        embeds: [cancelEmbed(refunded ? '時間切れのため中止しました。賭け金は返しました。' : '時間切れのため勝負は流れました。')],
+        embeds: [
+          winnerId
+            ? forfeitEmbed('じゃんけん', winnerId, loserId, match.bet * 2, settings)
+            : cancelEmbed(refunded ? '時間切れのため中止しました。賭け金は返しました。' : '時間切れのため勝負は流れました。'),
+        ],
         components: [],
+        allowed_mentions: { parse: [] },
       })
       .catch((error) => console.error('時間切れメッセージの更新に失敗:', error));
   }
@@ -85,43 +102,67 @@ export async function sweepExpiredMatches(ctx) {
 
 export async function sweepExpiredChinchiro(ctx) {
   const handled = await cancelExpiredChinchiro(ctx.db);
-  for (const { match, refunded } of handled) {
+  for (const { match, refunded, winnerId, loserId, prize } of handled) {
     if (!match.message_id) continue;
+    const settings = await ctx.settings(match.guild_id);
     await ctx.rest
       .editMessage(match.channel_id, match.message_id, {
         content: '',
         embeds: [
-          chinchiroCancelEmbed(
-            refunded ? '時間切れのため中止しました。預かった額は返しました。' : '時間切れのため勝負は流れました。',
-          ),
+          winnerId
+            ? forfeitEmbed('チンチロ', winnerId, loserId, prize, settings)
+            : chinchiroCancelEmbed(
+                refunded ? '時間切れのため中止しました。預かった額は返しました。' : '時間切れのため勝負は流れました。',
+              ),
         ],
         components: [],
+        allowed_mentions: { parse: [] },
       })
       .catch((error) => console.error('時間切れメッセージの更新に失敗:', error));
   }
   if (handled.length > 0) console.log(`時間切れのチンチロを ${handled.length} 件片付けました`);
 }
 
-/** 締切が来た予想大会を締め、放置されたものは返金して片付ける。 */
-/** 時間切れの1対1ゲーム（ロシアンルーレット・チャージ＆シュートなど）を片付ける。 */
+/**
+ * 時間切れの1対1ゲーム（ロシアンルーレット・チャージ＆シュートなど）を片付ける。
+ * 始まっていれば「待たせていた人の負け」。誰の負けかは各ゲームが決める。
+ */
 export async function sweepExpiredDuels(ctx) {
-  const handled = await cancelExpiredDuels(ctx.db);
-  for (const { duel, refunded } of handled) {
+  const handled = await expireDuels(ctx.db);
+  for (const { duel, outcome, refunded } of handled) {
     if (!duel.message_id) continue;
     const rules = findGame(duel.game);
+    const settings = await ctx.settings(duel.guild_id);
+    const title = rules?.title ?? '勝負';
+
+    let shown;
+    if (outcome.kind === 'forfeit') {
+      const loserId = outcome.loser === 'challenger' ? duel.challenger_id : duel.opponent_id;
+      const winnerId = outcome.loser === 'challenger' ? duel.opponent_id : duel.challenger_id;
+      shown = forfeitEmbed(title, winnerId, loserId, outcome.pot ?? 0, settings);
+    } else if (outcome.kind === 'payout') {
+      shown = embed({
+        color: 0xf1c40f,
+        title: `⏰ ${title}：時間切れ`,
+        description:
+          'ここで持ち帰ったことにしました。選んでいなかった人は「山分け」として数えています。\n' +
+          `<@${duel.challenger_id}> → ${outcome.amounts.challenger.toLocaleString('ja-JP')}\n` +
+          `<@${duel.opponent_id}> → ${outcome.amounts.opponent.toLocaleString('ja-JP')}`,
+      });
+    } else {
+      shown = embed({
+        color: 0xe74c3c,
+        title: `${title} 中止`,
+        description: refunded ? '時間切れのため中止しました。賭け金は返しました。' : '時間切れのため勝負は流れました。',
+      });
+    }
+
     await ctx.rest
       .editMessage(duel.channel_id, duel.message_id, {
         content: '',
-        embeds: [
-          embed({
-            color: 0xe74c3c,
-            title: `${rules?.title ?? '勝負'} 中止`,
-            description: refunded
-              ? '時間切れのため中止しました。賭け金は返しました。'
-              : '時間切れのため勝負は流れました。',
-          }),
-        ],
+        embeds: [shown],
         components: [],
+        allowed_mentions: { parse: [] },
       })
       .catch((error) => console.error('時間切れメッセージの更新に失敗:', error));
   }

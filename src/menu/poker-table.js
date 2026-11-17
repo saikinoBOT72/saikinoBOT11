@@ -21,15 +21,18 @@ import {
   PROPOSE,
   acceptRoundOver,
   actInRound,
+  close,
   closeAcceptRound,
   closeProposeRound,
   createTable,
   deal,
   everyoneExchanged,
   exchange,
+  foldIdle,
   foldPlayer,
   getTable,
   giveBack,
+  idlePlayers,
   joinTable,
   mutate,
   owedBy,
@@ -782,7 +785,8 @@ function potOf(state) {
   return state.players.reduce((sum, player) => sum + player.staked, 0);
 }
 
-function resultPayload(table, state, result, settings, em) {
+function resultPayload(table, state, result, settings, em, note = null) {
+  const lead = note ? `${note}\n\n` : '';
   if (result.kind === 'nobody') {
     return {
       content: '',
@@ -790,7 +794,7 @@ function resultPayload(table, state, result, settings, em) {
         embed({
           color: 0x95a5a6,
           title: '🤝 全員が降りました',
-          description: '勝負は流れました。参加費は全員に返しています。',
+          description: `${lead}勝負は流れました。参加費は全員に返しています。`,
         }),
       ],
       components: [rematchRow(table)],
@@ -806,7 +810,7 @@ function resultPayload(table, state, result, settings, em) {
           color: 0xf1c40f,
           title: '🏆 ひとり残って総取り',
           description:
-            `**<@${winnerId}> の勝ち！**\n` +
+            `${lead}**<@${winnerId}> の勝ち！**\n` +
             `ほかの全員が降りたので、手札を見せずに ${coins(result.pot, settings)} を持っていきました。`,
         }),
       ],
@@ -819,7 +823,7 @@ function resultPayload(table, state, result, settings, em) {
   const champion = winnerHands.get(best.userId);
 
   const lines = state.players.map((player) => {
-    if (player.folded) return `　<@${player.userId}>　🏳️ 降りた`;
+    if (player.folded) return `　<@${player.userId}>　${player.timedOut ? '⏰ 時間切れ' : '🏳️ 降りた'}`;
     const shown = winnerHands.get(player.userId);
     const crown = result.winners.some((winner) => winner.userId === player.userId) ? '　👑' : '';
     return `　<@${player.userId}>　${renderHand(em, shown.cards)}　**${shown.hand.label}**${crown}`;
@@ -838,7 +842,7 @@ function resultPayload(table, state, result, settings, em) {
       embed({
         color: 0xf1c40f,
         title: `🏆 ${champion.hand.label}`,
-        description: `${verdict}\n\n${lines.join('\n')}`,
+        description: `${lead}${verdict}\n\n${lines.join('\n')}`,
         footer: { text: `参加費 ${table.bet}` },
       }),
     ],
@@ -878,12 +882,16 @@ async function handleAgain(ix, ctx, table) {
 
 /* ------------------------------------------------------------------ 時間切れ */
 
-/** 1分ごとの見回りから呼ばれる。配る前も途中も、預かったぶんを返して流す。 */
+/**
+ * 1分ごとの見回りから呼ばれる。
+ *
+ * 配る前なら流して全員に返す。始まっていたら、**待たせていた人は降りた扱い**にして
+ * 残った人で決着させる（負けそうな人が放置して返金を待つ、を許さないため）。
+ * 誰も動いていなかったときだけ、全員に返す。
+ */
 export async function timeOut(ctx, table) {
   const state = stateOf(table);
-  await refundTable(ctx.db, table, state);
-  await setStatus(ctx.db, table.id, 'cancelled');
-  return {
+  const flowed = {
     payload: {
       content: '',
       embeds: [
@@ -896,5 +904,20 @@ export async function timeOut(ctx, table) {
       components: [],
     },
   };
+
+  const idle = idlePlayers(state);
+  const nobodyMoved = table.status === 'joining' || idle.length === stayers(state).length;
+  if (nobodyMoved) {
+    if (!(await close(ctx.db, table, { status: 'cancelled' }))) return null;
+    await refundTable(ctx.db, table, state);
+    return flowed;
+  }
+
+  const final = foldIdle(state);
+  if (!(await close(ctx.db, table, { status: 'done', state: final }))) return null;
+  const result = await settleTable(ctx.db, table, final);
+  const settings = await getSettings(ctx.db, table.guild_id);
+  const note = `⏰ 時間切れ。${idle.map((player) => `<@${player.userId}>`).join(' ')} は動かなかったので降りた扱いにしました。`;
+  return { payload: resultPayload(table, final, result, settings, await ctx.emoji(), note) };
 }
 

@@ -329,16 +329,31 @@ await test('決着した卓のボタンはもう効かない', async () => {
   assert.match(screenText(denied), /もう終わって/);
 });
 
-await test('時間切れは流れて、参加費が全員に返る', async () => {
-  for (const userId of SEATS) await eco.setBalance(db, GUILD, userId, 2000, 'test');
-  const startTotal = await totalCoins();
-  const table = await pigTable(100);
-  assert.equal(await totalCoins(), startTotal - 400, 'いったん預かっている');
+await test('始まる前の時間切れは流れて、参加費が全員に返る', async () => {
+  for (const userId of SEATS.slice(0, 2)) await eco.setBalance(db, GUILD, userId, 2000, 'test');
+  const startTotal = await totalCoins(SEATS.slice(0, 2));
+  await press('m:pig:go:100', { userId: 'u1' });
+  const table = await db.get('SELECT * FROM pig_tables ORDER BY created_at DESC, rowid DESC');
+  await pressOn(pigBoard, `pg:join:${table.id}`, { userId: 'u2' });
 
   await db.run('UPDATE pig_tables SET expires_at = 1 WHERE id = ?1', table.id);
   await cron.sweepPig(ctx);
-  assert.equal(await totalCoins(), startTotal, '全員に返る');
+  assert.equal(await totalCoins(SEATS.slice(0, 2)), startTotal, '全員に返る');
   assert.equal((await db.get('SELECT * FROM pig_tables WHERE id = ?1', table.id)).status, 'cancelled');
+});
+
+await test('始まってからの時間切れは、手番のまま動かなかった人が脱落する', async () => {
+  for (const userId of SEATS) await eco.setBalance(db, GUILD, userId, 2000, 'test');
+  const startTotal = await totalCoins();
+  const table = await pigTable(100);
+  const idle = await pigNow(table.id);
+
+  await db.run('UPDATE pig_tables SET expires_at = 1 WHERE id = ?1', table.id);
+  await cron.sweepPig(ctx);
+  assert.equal(await totalCoins(), startTotal, 'コインは湧かない・消えない');
+  assert.equal(await eco.getBalance(db, GUILD, idle.userId), 1900, '放置した人は参加費を失う');
+  assert.equal((await db.get('SELECT * FROM pig_tables WHERE id = ?1', table.id)).status, 'done');
+  assert.match(JSON.stringify(ctx.edited.at(-1).payload), /脱落/);
 });
 
 await test('掲示に出目が絵文字で出る', async () => {
@@ -948,7 +963,7 @@ await test('自己ベストが記録される', async () => {
   assert.ok(after.best > 0, 'ベストが入る');
 });
 
-await test('時間切れは流れて、参加費が全員に返る', async () => {
+await test('誰も書かないまま時間切れなら、流れて参加費が全員に返る', async () => {
   for (const userId of ['u1', 'u2']) await eco.setBalance(db, GUILD, userId, 2000, 'test');
   const startTotal = await totalCoins(['u1', 'u2']);
   const table = await yachtTable(200, ['u1', 'u2']);
@@ -957,6 +972,20 @@ await test('時間切れは流れて、参加費が全員に返る', async () =>
   await db.run('UPDATE yacht_tables SET expires_at = 1 WHERE id = ?1', table.id);
   await cron.sweepYacht(ctx);
   assert.equal(await totalCoins(['u1', 'u2']), startTotal, '全員に返る');
+});
+
+await test('書きかけで時間切れなら、書いていない欄は0点で決着する（放置しても得をしない）', async () => {
+  for (const userId of ['u1', 'u2']) await eco.setBalance(db, GUILD, userId, 2000, 'test');
+  const startTotal = await totalCoins(['u1', 'u2']);
+  const table = await yachtTable(200, ['u1', 'u2']);
+  await writeAs(table, 'u1', [6, 6, 6, 6, 6], 'yacht');
+  await writeAs(table, 'u2', [1, 2, 3, 4, 6], 'ones');
+
+  await db.run('UPDATE yacht_tables SET expires_at = 1 WHERE id = ?1', (await db.get('SELECT * FROM yacht_tables WHERE id = ?1', table.id)).id);
+  await cron.sweepYacht(ctx);
+  assert.equal(await totalCoins(['u1', 'u2']), startTotal, 'コインは湧かない・消えない');
+  assert.equal(await eco.getBalance(db, GUILD, 'u1'), 2200, '点の高い人が総取り');
+  assert.equal((await db.get('SELECT * FROM yacht_tables WHERE id = ?1', table.id)).status, 'done');
 });
 
 section('[ヨット] ひとり練習');

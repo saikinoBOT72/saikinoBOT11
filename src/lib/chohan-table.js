@@ -22,7 +22,7 @@ const store = createTableStore('chohan_tables', {
   playTimeoutMs: OPEN_TIMEOUT_MS,
 });
 
-export const { createTable, getTable, stateOf, setMessageId, setStatus, mutate, expiredTables } = store;
+export const { createTable, getTable, stateOf, setMessageId, setStatus, mutate, close, expiredTables } = store;
 
 /**
  * コマを張る。先に記録してから引き落とし、払えなければ取り消す。
@@ -83,8 +83,10 @@ export async function openPot(db, table, dice = rollPair()) {
 
   if (!claimed.ok) {
     if (claimed.reason !== 'unmatched') return { kind: 'late' };
-    await refundTable(db, table, stateOf(await getTable(db, table.id)));
-    await setStatus(db, table.id, 'cancelled');
+    // 先に閉じてから返す。閉じるまでのあいだに誰かが張っていたら、閉じられないので返さない
+    const fresh = await getTable(db, table.id);
+    if (!fresh || !(await close(db, fresh, { status: 'cancelled' }))) return { kind: 'late' };
+    await refundTable(db, fresh, stateOf(fresh));
     return { kind: 'unmatched' };
   }
 

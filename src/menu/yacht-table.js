@@ -19,6 +19,7 @@ import {
   MIN_PLAYERS,
   canRoll,
   canWrite,
+  close,
   createTable,
   everyoneDone,
   getTable,
@@ -602,12 +603,29 @@ async function handleAgain(ix, ctx, table) {
 
 /* ------------------------------------------------------------------ 時間切れ */
 
-/** 1分ごとの見回りから呼ばれる。預かったぶんを返して流す。 */
+/**
+ * 1分ごとの見回りから呼ばれる。
+ *
+ * 始まっていて誰かが1欄でも書いていたら、**書いていない欄は0点**として決着させる。
+ * 手を止めても得をしないので、負けそうな人が放置して返金を待つことができない。
+ * 始まる前・誰も書いていない・ひとり練習のときは、流して全員に返す。
+ */
 export async function timeOut(ctx, table) {
   const state = stateOf(table);
+  const anyWritten = state.players.some((player) => openCategories(player.card).length < CATEGORIES.length);
+
+  if (table.status === 'playing' && table.bet > 0 && anyWritten) {
+    if (!(await close(ctx.db, table, { status: 'done' }))) return null;
+    const result = await settleTable(ctx.db, table, state);
+    const settings = await getSettings(ctx.db, table.guild_id);
+    const payload = resultPayload(table, result, settings);
+    payload.embeds[0].description = `⏰ 時間切れ。書いていない欄は0点で数えました。\n\n${payload.embeds[0].description}`;
+    return { payload };
+  }
+
+  if (!(await close(ctx.db, table, { status: 'cancelled' }))) return null;
   await refundTable(ctx.db, table, state);
-  await setStatus(ctx.db, table.id, 'cancelled');
-  if (!table.message_id) return null; // ひとり練習は掲示がない
+  if (!table.message_id) return null; // 掲示がなければ書き換えるものもない
   return {
     payload: {
       content: '',

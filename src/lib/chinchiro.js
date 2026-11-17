@@ -113,6 +113,14 @@ export async function settle(db, match, winner, multiplier) {
   return { prize, winnerId, loserId };
 }
 
+/**
+ * 期限切れの勝負を片付ける。
+ *
+ * 振る番の人が振らなかったら、その人の負け（倍率は×1）。
+ * 振り終わるまで放置すれば負けが消える、を許さないため。
+ * 受ける前（pending）なら、まだお金は動いていないので流すだけ。
+ * @returns {Promise<Array<{match: object, refunded: boolean, winnerId?: string, loserId?: string, prize?: number}>>}
+ */
 export async function cancelExpired(db, now = Date.now()) {
   const matches = await db.all(
     "SELECT * FROM chinchiro_matches WHERE status IN ('pending', 'playing') AND expires_at <= ?1 LIMIT 25",
@@ -120,11 +128,27 @@ export async function cancelExpired(db, now = Date.now()) {
   );
   const handled = [];
   for (const match of matches) {
+    const forfeit = match.status === 'playing' && match.escrow > 0 && Boolean(match.turn);
+
+    // 読んだときのまま（手番も出目も変わっていない）ときだけ書き換える
     const claimed = await db.run(
-      "UPDATE chinchiro_matches SET status = 'cancelled' WHERE id = ?1 AND status IN ('pending', 'playing')",
+      `UPDATE chinchiro_matches SET status = ?2
+        WHERE id = ?1 AND status = ?3 AND turn IS ?4 AND challenger_dice IS ?5 AND opponent_dice IS ?6`,
       match.id,
+      forfeit ? 'done' : 'cancelled',
+      match.status,
+      match.turn,
+      match.challenger_dice,
+      match.opponent_dice,
     );
     if (claimed.changes !== 1) continue;
+
+    if (forfeit) {
+      const winner = match.turn === 'challenger' ? 'opponent' : 'challenger';
+      const settled = await settle(db, match, winner, 1);
+      handled.push({ match, refunded: false, ...settled });
+      continue;
+    }
     const refunded = match.status === 'playing' && match.escrow > 0;
     if (refunded) await refundEscrow(db, match);
     handled.push({ match, refunded });

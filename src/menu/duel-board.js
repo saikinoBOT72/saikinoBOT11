@@ -33,7 +33,10 @@ import { EMOJI as em } from '../lib/emoji.js';
 /** 公開メッセージのボタンは `d:` 始まり。 */
 export const namespace = 'd';
 
-export { cancelExpired };
+/** 期限切れの対戦を片付ける。誰の負けかは各ゲームの timeoutOutcome が決める。 */
+export function expireDuels(db, now = Date.now()) {
+  return cancelExpired(db, now, (duel, state) => findGame(duel.game)?.timeoutOutcome?.(duel, state));
+}
 
 /** ルールごとの実装。キーは duels.game に入る。 */
 export const GAMES = {

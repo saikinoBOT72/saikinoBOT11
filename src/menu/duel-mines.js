@@ -14,7 +14,7 @@ import {
   leader,
   placeMine,
 } from '../lib/mines.js';
-import { finishDuel, mutate, otherRole, randomFirst, settleDuel, userIdOf } from '../lib/duel.js';
+import { finishDuel, forfeitUnchosen, mutate, otherRole, randomFirst, settleDuel, userIdOf } from '../lib/duel.js';
 import { coins } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
@@ -29,6 +29,21 @@ export const color = 0x34495e;
 
 const MARKS = { challenger: em.cell_challenger, opponent: em.cell_opponent, null: em.cell_empty };
 const NUMBERS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'];
+
+/**
+ * 時間切れ。地雷を埋める段階なら埋め終えていない人、
+ * 取り合う段階なら手番の人の負け。二人とも埋めていなければ返金。
+ */
+export function timeoutOutcome(_duel, state) {
+  if (!state.mines) return { kind: 'refund' };
+  if (state.phase === 'place') {
+    return forfeitUnchosen({
+      challenger: state.mines.challenger.length >= MINES_PER_PLAYER,
+      opponent: state.mines.opponent.length >= MINES_PER_PLAYER,
+    });
+  }
+  return state.turn ? { kind: 'forfeit', loser: state.turn } : { kind: 'refund' };
+}
 
 export function inviteFields() {
   return [{ name: 'ルール', value: RULES }];

@@ -30,6 +30,22 @@ export const title = '運命の扉';
 export const emojiSlot = 'doors';
 export const color = 0x8e44ad;
 
+/**
+ * 時間切れ。扉はどちらが押してもいいので、誰かを負けにはしない。
+ *  ・まだ1枚も開けていなければ返金
+ *  ・開けていれば、そこで持ち帰ったことにして、選んでいない人は「山分け」扱い
+ */
+export function timeoutOutcome(duel, state) {
+  if (!state.phase || state.phase === 'lost') return { kind: 'refund' };
+  if (state.phase === 'doors' && !(state.steps > 0)) return { kind: 'refund' };
+  const choices = {
+    challenger: state.choice?.challenger ?? 'split',
+    opponent: state.choice?.opponent ?? 'split',
+  };
+  const share = splitOrSteal(payout(duel.escrow * 2, state.multiplier), choices);
+  return { kind: 'payout', amounts: { challenger: share.challenger, opponent: share.opponent }, share };
+}
+
 export function inviteFields() {
   return [{ name: 'ルール', value: RULES }];
 }

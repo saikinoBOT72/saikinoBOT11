@@ -14,9 +14,11 @@ import {
   MAX_PLAYERS,
   MIN_PLAYERS,
   TURNS,
+  close,
   createTable,
   current,
   everyoneDone,
+  forfeitCurrent,
   getTable,
   hold,
   isTurn,
@@ -277,13 +279,14 @@ function boardPayload(table, state, settings, em) {
   };
 }
 
-function resultPayload(table, state, result, settings, em) {
+function resultPayload(table, state, result, settings, em, note = null) {
   const faces = diceFaces(em);
   const winners = new Set(result.winners.map((winner) => winner.userId));
   const ranked = [...state.players].sort((a, b) => b.score - a.score);
-  const lines = ranked.map(
-    (player) => `　<@${player.userId}>　**${player.score}点**${winners.has(player.userId) ? '　👑' : ''}`,
-  );
+  const lines = ranked.map((player) => {
+    const mark = player.out ? '　⏰ 脱落' : winners.has(player.userId) ? '　👑' : '';
+    return `　<@${player.userId}>　**${player.score}点**${mark}`;
+  });
 
   const share = Math.floor(result.pot / result.winners.length);
   const verdict =
@@ -298,7 +301,7 @@ function resultPayload(table, state, result, settings, em) {
       embed({
         color: 0xf1c40f,
         title: '🏆 勝負あり',
-        description: `${verdict}\n\n${lines.join('\n')}`,
+        description: `${note ? `${note}\n\n` : ''}${verdict}\n\n${lines.join('\n')}`,
         footer: { text: `参加費 ${table.bet}・1人${TURNS}ターン` },
       }),
     ],
@@ -334,10 +337,25 @@ async function handleAgain(ix, ctx, table) {
 
 /* ------------------------------------------------------------------ 時間切れ */
 
-/** 1分ごとの見回りから呼ばれる。預かったぶんを返して流す。 */
+/**
+ * 1分ごとの見回りから呼ばれる。
+ * 始まる前なら全員に返す。始まっていたら、手番のまま動かなかった人を脱落させて
+ * いまの持ち点で決着させる（負けそうな人が放置して返金を待つ、を許さないため）。
+ */
 export async function timeOut(ctx, table) {
-  await refundTable(ctx.db, table, stateOf(table));
-  await setStatus(ctx.db, table.id, 'cancelled');
+  const state = stateOf(table);
+  if (table.status === 'playing' && state.players.length >= MIN_PLAYERS) {
+    const final = forfeitCurrent(state);
+    if (!(await close(ctx.db, table, { status: 'done', state: final }))) return null;
+    const result = await payWinners(ctx.db, table, final);
+    const settings = await getSettings(ctx.db, table.guild_id);
+    const idle = current(state);
+    const note = `⏰ 時間切れ。<@${idle?.userId}> が振らなかったので脱落にしました。`;
+    return { payload: resultPayload(table, final, result, settings, await ctx.emoji(), note) };
+  }
+
+  if (!(await close(ctx.db, table, { status: 'cancelled' }))) return null;
+  await refundTable(ctx.db, table, state);
   return {
     payload: {
       content: '',

@@ -685,6 +685,24 @@ await test('時間切れの対戦を返金して中止する', async () => {
   assert.equal((await rps.cancelExpired(db)).length, 0, '二重返金しない');
 });
 
+await test('じゃんけんで片方だけ手を出したまま時間切れなら、出さなかった人の負け', async () => {
+  await rps.createMatch(db, { id: 'm3', guildId: G, channelId: 'c', challengerId: A, opponentId: B, bet: 10 });
+  await rps.markPlaying(db, 'm3');
+  await eco.withdraw(db, G, A, 10, 'test');
+  await eco.withdraw(db, G, B, 10, 'test');
+  await rps.setHand(db, 'm3', 'challenger', 'rock');
+  const beforeA = await eco.getBalance(db, G, A);
+  const beforeB = await eco.getBalance(db, G, B);
+
+  await db.run('UPDATE rps_matches SET expires_at = ?1 WHERE id = ?2', Date.now() - 1000, 'm3');
+  const handled = await rps.cancelExpired(db);
+  const mine = handled.find((entry) => entry.match.id === 'm3');
+  assert.equal(mine.winnerId, A);
+  assert.equal(await eco.getBalance(db, G, A), beforeA + 20, '手を出した人が総取り');
+  assert.equal(await eco.getBalance(db, G, B), beforeB, '出さなかった人には返らない');
+  assert.equal((await rps.getMatch(db, 'm3')).status, 'done');
+});
+
 await test('まだ期限が来ていない対戦は触らない', async () => {
   await rps.createMatch(db, { id: 'm2', guildId: G, channelId: 'c', challengerId: A, opponentId: B, bet: 5 });
   assert.equal((await rps.cancelExpired(db)).length, 0);
@@ -861,7 +879,7 @@ await test('引き分けなら預かった額がそのまま返る', async () =>
   assert.equal(await eco.getBalance(db, G, P2), 1000);
 });
 
-await test('決着は先に取った1つだけ、時間切れは返金される', async () => {
+await test('決着は先に取った1つだけ、時間切れは振らなかった人の負け', async () => {
   const match = await chinchiro.createMatch(db, {
     id: 'cc4', guildId: G, channelId: 'c', challengerId: 'ccE', opponentId: 'ccF', bet: 100,
   });
@@ -873,17 +891,34 @@ await test('決着は先に取った1つだけ、時間切れは返金される'
   const expiring = await chinchiro.createMatch(db, {
     id: 'cc5', guildId: G, channelId: 'c', challengerId: 'ccE', opponentId: 'ccF', bet: 100,
   });
-  await chinchiro.markPlaying(db, 'cc5');
+  const first = await chinchiro.markPlaying(db, 'cc5');
   await eco.withdraw(db, G, 'ccE', expiring.escrow, 'test');
   await eco.withdraw(db, G, 'ccF', expiring.escrow, 'test');
-  const before = await eco.getBalance(db, G, 'ccE');
+  const idle = first === 'challenger' ? 'ccE' : 'ccF';
+  const other = first === 'challenger' ? 'ccF' : 'ccE';
+  const idleBefore = await eco.getBalance(db, G, idle);
+  const otherBefore = await eco.getBalance(db, G, other);
 
   await db.run('UPDATE chinchiro_matches SET expires_at = ?1 WHERE id = ?2', Date.now() - 1000, 'cc5');
   const handled = await chinchiro.cancelExpired(db);
   assert.equal(handled.length, 1);
-  assert.equal(handled[0].refunded, true);
-  assert.equal(await eco.getBalance(db, G, 'ccE'), before + expiring.escrow);
-  assert.equal((await chinchiro.cancelExpired(db)).length, 0, '二重返金しない');
+  assert.equal(handled[0].refunded, false, '返金ではない');
+  assert.equal(handled[0].loserId, idle, '振る番だった人の負け');
+  assert.equal(await eco.getBalance(db, G, other), otherBefore + expiring.escrow + 100, '相手は預けた分＋賭け金×1');
+  assert.equal(await eco.getBalance(db, G, idle), idleBefore + expiring.escrow - 100, '放置した人は賭け金×1を失う');
+  assert.equal((await chinchiro.cancelExpired(db)).length, 0, '二重に払わない');
+});
+
+await test('チンチロは受ける前の時間切れなら、お金は動かずに流れる', async () => {
+  await chinchiro.createMatch(db, {
+    id: 'cc-pending', guildId: G, channelId: 'c', challengerId: 'ccE', opponentId: 'ccF', bet: 100,
+  });
+  const before = await eco.getBalance(db, G, 'ccE');
+  await db.run('UPDATE chinchiro_matches SET expires_at = ?1 WHERE id = ?2', Date.now() - 1000, 'cc-pending');
+  const handled = await chinchiro.cancelExpired(db);
+  assert.equal(handled.length, 1);
+  assert.equal(handled[0].refunded, false);
+  assert.equal(await eco.getBalance(db, G, 'ccE'), before);
 });
 
 await test('順番に振るので同じ人が続けて振れない', async () => {
@@ -1508,6 +1543,61 @@ await test('時間切れの対戦は返金して片付ける', async () => {
   assert.equal(await eco.getBalance(db, G, 'd2'), 100);
 
   assert.equal((await duel.cancelExpired(db)).length, 0, '二重返金しない');
+});
+
+const board = await import(src('menu/duel-board.js'));
+
+/** 始まった対戦を作り、預かりまで済ませる。 */
+async function playingDuel(id, game, state, turn = null) {
+  await eco.setBalance(db, G, 'd1', 0, 'test');
+  await eco.setBalance(db, G, 'd2', 0, 'test');
+  await makeDuel({ id, game });
+  await duel.startDuel(db, id, { first: turn, state });
+  await db.run('UPDATE duels SET expires_at = ?2 WHERE id = ?1', id, Date.now() - 1000);
+}
+
+await test('ロシアンルーレットで引かずに放置したら、引く番だった人の負け', async () => {
+  await playingDuel('duelR', 'rr', { bulletAt: 6, pulled: 5, log: [] }, 'opponent');
+  const handled = await board.expireDuels(db);
+  const mine = handled.find((row) => row.duel.id === 'duelR');
+  assert.equal(mine.outcome.kind, 'forfeit');
+  assert.equal(mine.outcome.loser, 'opponent');
+  assert.equal(await eco.getBalance(db, G, 'd1'), 200, '待たされた人が総取り');
+  assert.equal(await eco.getBalance(db, G, 'd2'), 0, '放置した人には返らない');
+  assert.equal((await duel.getDuel(db, 'duelR')).status, 'done');
+  assert.equal((await board.expireDuels(db)).filter((row) => row.duel.id === 'duelR').length, 0, '二重に払わない');
+});
+
+await test('チャージ＆シュートで片方だけ選んでいたら、選ばなかった人の負け', async () => {
+  const state = {
+    hp: { challenger: 1, opponent: 2 },
+    energy: { challenger: 0, opponent: 0 },
+    choice: { challenger: 'guard', opponent: null },
+    round: 3,
+    log: [],
+  };
+  await playingDuel('duelS', 'cs', state);
+  await board.expireDuels(db);
+  assert.equal(await eco.getBalance(db, G, 'd1'), 200);
+  assert.equal(await eco.getBalance(db, G, 'd2'), 0);
+});
+
+await test('チャージ＆シュートで二人とも選んでいなければ返金', async () => {
+  const state = { hp: {}, energy: {}, choice: { challenger: null, opponent: null }, round: 1, log: [] };
+  await playingDuel('duelT', 'cs', state);
+  await board.expireDuels(db);
+  assert.equal(await eco.getBalance(db, G, 'd1'), 100);
+  assert.equal(await eco.getBalance(db, G, 'd2'), 100);
+});
+
+await test('運命の扉（2人）は、開けたぶんを持ち帰り、選んでいない人は山分け扱い', async () => {
+  const state = { phase: 'share', steps: 2, multiplier: 4, log: [], choice: { challenger: null, opponent: null } };
+  await playingDuel('duelU', 'doors', state);
+  const handled = await board.expireDuels(db);
+  const mine = handled.find((row) => row.duel.id === 'duelU');
+  assert.equal(mine.outcome.kind, 'payout');
+  assert.equal(await eco.getBalance(db, G, 'd1'), 400, '200×4 を半分ずつ');
+  assert.equal(await eco.getBalance(db, G, 'd2'), 400);
 });
 
 section('[ブラックジャック]');
