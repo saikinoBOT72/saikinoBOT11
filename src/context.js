@@ -3,6 +3,7 @@ import { createRest } from './discord/rest.js';
 import { getSettings } from './lib/economy.js';
 import { clampHour } from './lib/calendar.js';
 import { loadEmoji } from './lib/emoji.js';
+import { errorNotice, recordError } from './lib/error-report.js';
 
 /**
  * 1リクエストぶんの道具箱。DB・Discord API・サーバー設定をまとめて持ち回る。
@@ -50,16 +51,51 @@ export function createContext(env, executionCtx) {
       emojiCache = null;
     },
 
+    /** いま応えている操作（押した人にあとから一言送るのに使う）。index.js が入れる。 */
+    ix: null,
+
     /** 応答を返したあとで走らせる処理（チャンネルへの告知など）。 */
     waitUntil(promise) {
       if (executionCtx?.waitUntil) executionCtx.waitUntil(promise.catch((error) => console.error(error)));
       else promise.catch((error) => console.error(error));
     },
 
-    /** みんなに見えるメッセージをチャンネルに流す。 */
+    /**
+     * エラーを記録し、管理用チャンネルが決まっていれば知らせる（同じものは間をあけて）。
+     * ここで失敗しても本来の処理は止めない。
+     */
+    async reportError(guildId, place, error) {
+      console.error(`${place} で失敗:`, error);
+      try {
+        const channelId = await recordError(db, guildId, place, error);
+        if (channelId) await rest.createMessage(channelId, errorNotice(place, error));
+      } catch (inner) {
+        console.error('エラーの記録に失敗:', inner);
+      }
+    },
+
+    /**
+     * みんなに見えるメッセージをチャンネルに流す。
+     * 投稿できなかったら（Bot がそのチャンネルに書けない等）、押した本人にだけそう伝え、
+     * 管理用チャンネルにも記録する。黙って消えないように。
+     */
     announce(channelId, payload) {
       if (!channelId) return;
-      this.waitUntil(rest.createMessage(channelId, payload));
+      const ix = this.ix;
+      this.waitUntil(
+        rest.createMessage(channelId, payload).catch(async (error) => {
+          await this.reportError(ix?.guildId, 'チャンネルへの投稿', error);
+          if (ix?.raw?.application_id && ix.raw.token) {
+            await rest
+              .createFollowup(ix.raw.application_id, ix.raw.token, {
+                content:
+                  `⚠️ <#${channelId}> に投稿できませんでした。操作そのものは済んでいます。\n` +
+                  'Bot がそのチャンネルを見られるか・書き込めるかを、サーバー管理者に確かめてもらってください。',
+              })
+              .catch((followupError) => console.error('お知らせの送信に失敗:', followupError));
+          }
+        }),
+      );
     },
 
     /**

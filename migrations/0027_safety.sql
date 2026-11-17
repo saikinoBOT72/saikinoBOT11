@@ -25,3 +25,19 @@ ALTER TABLE announcements ADD COLUMN period TEXT NOT NULL DEFAULT 'auto';
 -- 【管理用チャンネル】
 -- エラーや反映のお知らせを流す先。決めていなければどこにも流さない。
 ALTER TABLE guild_settings ADD COLUMN log_channel_id TEXT;
+
+-- 【エラーの記録】
+-- いままではログを見に行かないとエラーに気づけなかった。
+-- 同じエラーは1行にまとめて回数を数え、管理用チャンネルへは間をあけて知らせる。
+-- 中身はエラーの種類と短い説明だけ（入力された文字やメッセージ本文は入れない）。
+CREATE TABLE IF NOT EXISTS error_reports (
+  guild_id    TEXT    NOT NULL,
+  fingerprint TEXT    NOT NULL,
+  place       TEXT    NOT NULL,   -- どこで起きたか（画面や定期処理の名前）
+  message     TEXT    NOT NULL,   -- 短くしたエラーの説明（長いIDは伏せる）
+  count       INTEGER NOT NULL DEFAULT 1,
+  first_at    INTEGER NOT NULL,
+  last_at     INTEGER NOT NULL,
+  notified_at INTEGER,
+  PRIMARY KEY (guild_id, fingerprint)
+);

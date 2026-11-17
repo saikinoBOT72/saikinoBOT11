@@ -63,7 +63,21 @@ export async function runScheduled(ctx) {
     } catch (error) {
       // 1件こけても、ほかの定期処理は動かす
       console.error(`定期処理 ${step.name} に失敗:`, error);
+      await reportToLogChannels(ctx, `定期処理 ${step.name}`, error);
     }
+  }
+}
+
+/**
+ * 定期処理はサーバーをまたいで動くので、どのサーバーのせいか分からない。
+ * 管理用チャンネルを決めているサーバーそれぞれに記録する（中身は長い ID を伏せた短い説明だけ）。
+ */
+async function reportToLogChannels(ctx, place, error) {
+  try {
+    const guilds = await ctx.db.all('SELECT guild_id FROM guild_settings WHERE log_channel_id IS NOT NULL LIMIT 25');
+    for (const { guild_id: guildId } of guilds) await ctx.reportError(guildId, place, error);
+  } catch (inner) {
+    console.error('エラーの記録に失敗:', inner);
   }
 }
 

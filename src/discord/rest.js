@@ -49,6 +49,14 @@ export function createRest(token) {
     },
 
     /**
+     * 押した人にだけ、あとから一言送る（応答を返したあとで分かったことを伝える）。
+     * 例：チャンネルに投稿しようとしたら権限が無くて失敗した、など。
+     */
+    createFollowup(applicationId, interactionToken, payload) {
+      return call('POST', `/webhooks/${applicationId}/${interactionToken}`, withSafeMentions({ ...payload, flags: 64 }));
+    },
+
+    /**
      * このアプリ自身が持っている絵文字（アプリケーション絵文字）の一覧。
      * サーバーに属さないので、Bot はどこでもこれを使える。
      */

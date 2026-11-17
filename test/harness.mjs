@@ -17,6 +17,10 @@ export function createTestContext() {
   const settingsCache = new Map();
   const pending = [];
   const applicationEmojis = { items: [], error: false };
+  // 押した本人にだけ送った一言（投稿に失敗したときなど）
+  const followups = [];
+  // チャンネルへの投稿をわざと失敗させるときに true にする
+  const failPosts = { on: false };
 
   return {
     db,
@@ -24,13 +28,21 @@ export function createTestContext() {
     edited,
     animated,
     applicationEmojis,
+    followups,
+    failPosts,
+    ix: null,
     env: { TIMEZONE: 'Asia/Tokyo' },
     timezone: 'Asia/Tokyo',
     calendar: { timezone: 'Asia/Tokyo', dayStartHour: 0 },
     rest: {
       async createMessage(channelId, payload) {
+        if (failPosts.on) throw new Error('Discord API POST /channels/x/messages が失敗しました (403): Missing Access');
         sent.push({ channelId, payload });
         return { id: `msg${sent.length}` };
+      },
+      async createFollowup(applicationId, token, payload) {
+        followups.push(payload);
+        return {};
       },
       async editMessage(channelId, messageId, payload) {
         edited.push({ channelId, messageId, payload });
@@ -65,9 +77,23 @@ export function createTestContext() {
     waitUntil(promise) {
       pending.push(promise);
     },
+    async reportError(guildId, place, error) {
+      const { recordError, errorNotice } = await import(src('lib/error-report.js'));
+      const channelId = await recordError(db, guildId, place, error);
+      if (channelId) {
+        failPosts.on = false;
+        await this.rest.createMessage(channelId, errorNotice(place, error));
+      }
+    },
     announce(channelId, payload) {
       if (!channelId) return;
-      this.waitUntil(this.rest.createMessage(channelId, payload));
+      const ix = this.ix;
+      this.waitUntil(
+        this.rest.createMessage(channelId, payload).catch(async (error) => {
+          await this.reportError(ix?.guildId, 'チャンネルへの投稿', error);
+          await this.rest.createFollowup('app', 'token', { content: `⚠️ <#${channelId}> に投稿できませんでした。` });
+        }),
+      );
     },
     animate(_ix, steps) {
       for (const step of steps) animated.push(step.payload);

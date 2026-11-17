@@ -40,12 +40,13 @@ export default {
 
     const ix = new Ix(raw);
     const ctx = createContext(env, executionCtx);
+    ctx.ix = ix;
 
     try {
       return await dispatch(ix, ctx);
     } catch (error) {
-      console.error('処理中のエラー:', error);
-      return reply({ content: '処理中にエラーが発生しました。もう一度お試しください。' });
+      ctx.waitUntil(ctx.reportError(ix.guildId, placeOf(ix), error));
+      return reply({ content: '⚠️ 処理中にエラーが起きました。もう一度お試しください。続くようならサーバー管理者に伝えてください。' });
     }
   },
 
@@ -54,6 +55,12 @@ export default {
     await runScheduled(createContext(env, executionCtx));
   },
 };
+
+/** エラーの記録に残す「どこで起きたか」。ボタンなら操作名まで（引数は入れない）。 */
+function placeOf(ix) {
+  if (ix.type === InteractionType.APPLICATION_COMMAND) return `/${ix.commandName}`;
+  return ix.customId.split(':').slice(0, 3).join(':') || '不明な操作';
+}
 
 async function dispatch(ix, ctx) {
   if (!ix.guildId) return reply({ content: 'このBotはサーバー内でのみ使えます。' });

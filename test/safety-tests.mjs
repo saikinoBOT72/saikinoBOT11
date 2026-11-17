@@ -249,6 +249,44 @@ await test('src に見えない文字がそのまま入っていない', async (
   }
 });
 
+section('[エラーと投稿の失敗]');
+
+await test('チャンネルに投稿できなかったら、押した本人にだけ伝え、エラーとして記録する', async () => {
+  const ctx = fresh();
+  const ix = new Ix(rawInteraction({ customId: 'm:slot:bet:10' }));
+  ctx.ix = ix;
+  ctx.failPosts.on = true;
+  ctx.announce('c1', { content: 'テスト' });
+  await ctx.settle();
+  assert.equal(ctx.followups.length, 1, '本人に一言');
+  assert.match(ctx.followups[0].content, /投稿できませんでした/);
+  const recorded = await ctx.db.get('SELECT * FROM error_reports WHERE guild_id = ?1', GUILD);
+  assert.equal(recorded.place, 'チャンネルへの投稿');
+});
+
+await test('エラーの記録には長いIDやURLを残さず、同じものは1行にまとめる', async () => {
+  const { describeError, recordError, recentErrors } = await import(src('lib/error-report.js'));
+  const text = describeError(new Error('Discord API POST /channels/123456789012345678/messages (403) https://discord.com/x Bot abcdefghijklmnopqrstuvwxyz'));
+  assert.doesNotMatch(text, /123456789012345678|https:|abcdefghijklmnop/);
+
+  const ctx = fresh();
+  await recordError(ctx.db, GUILD, 'テスト', new Error('id 111111111111111111 が無い'));
+  await recordError(ctx.db, GUILD, 'テスト', new Error('id 222222222222222222 が無い'));
+  const rows = await recentErrors(ctx.db, GUILD);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].count, 2);
+});
+
+await test('管理用チャンネルへのお知らせは、同じエラーなら間をあける', async () => {
+  const { recordError } = await import(src('lib/error-report.js'));
+  const ctx = fresh();
+  await eco.getSettings(ctx.db, GUILD);
+  await ctx.db.run("UPDATE guild_settings SET log_channel_id = 'log1' WHERE guild_id = ?1", GUILD);
+  assert.equal(await recordError(ctx.db, GUILD, '場所', new Error('こわれた'), 1_000_000), 'log1', '1回目は知らせる');
+  assert.equal(await recordError(ctx.db, GUILD, '場所', new Error('こわれた'), 1_000_000 + 60_000), null, 'すぐ後は知らせない');
+  assert.equal(await recordError(ctx.db, GUILD, '場所', new Error('こわれた'), 1_000_000 + 31 * 60_000), 'log1', '30分たてばまた知らせる');
+});
+
 section('[履歴の表示]');
 
 await test('お金を動かすときの理由は、すべて日本語で表示できる', async () => {

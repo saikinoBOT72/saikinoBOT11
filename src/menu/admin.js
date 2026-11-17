@@ -75,6 +75,7 @@ import {
 } from './common.js';
 import { open as openHome } from './home.js';
 import { reasonLabel } from '../lib/ledger-reasons.js';
+import { clearErrors, recentErrors } from '../lib/error-report.js';
 
 /** 管理操作は毎回権限を確かめる。権限が無ければホームに戻す。 */
 function denied(ix, ctx) {
@@ -124,6 +125,7 @@ export async function open(ix, _args, ctx, notice = null) {
       ),
       row(
         button(id('admin', 'panel'), '報告パネルを置く', { emoji: '📌', style: ButtonStyle.PRIMARY }),
+        button(id('admin', 'log'), '管理用チャンネル', { emoji: '🧰' }),
         backButton(),
       ),
     ],
@@ -1689,6 +1691,93 @@ export async function emoji(ix, [rawPage], ctx) {
   });
 }
 
+/* ------------------------------------------------------------------ 管理用チャンネル */
+
+/**
+ * エラーのお知らせを流す先。メンバーに見えない、管理者だけのチャンネルを選んでもらう。
+ * 最近のエラーもここで見られる（記録しているのは場所と短い説明だけ）。
+ */
+export async function log(ix, _args, ctx, notice = null) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const settings = await ctx.settings(ix.guildId);
+  const errors = await recentErrors(ctx.db, ix.guildId, 8);
+
+  const list =
+    errors.length === 0
+      ? 'いまは記録がありません。'
+      : errors
+          .map(
+            (entry) =>
+              `<t:${Math.floor(entry.last_at / 1000)}:R>　**${truncate(entry.place, 40)}**` +
+              `${entry.count > 1 ? `（${entry.count}回）` : ''}\n　${truncate(entry.message, 120)}`,
+          )
+          .join('\n');
+
+  return show(ix, {
+    embeds: [
+      withNotice(
+        embed({
+          color: COLORS.admin,
+          title: '🧰 管理用チャンネル',
+          description:
+            'Bot でエラーが起きたとき、ここで選んだチャンネルに知らせます（同じものは30分に1回まで）。\n' +
+            '**メンバーには見えない、管理者だけのチャンネル**を選んでください。\n\n' +
+            `いまの送り先: ${settings.log_channel_id ? `<#${settings.log_channel_id}>` : '未設定（どこにも知らせない）'}`,
+          fields: [{ name: '最近のエラー', value: truncate(list, 1024) }],
+          footer: { text: '記録しているのは、起きた場所と短い説明だけです（入力された文字は残しません）' },
+        }),
+        notice,
+      ),
+    ],
+    components: [
+      channelSelect(id('admin', 'logch'), '知らせる先のチャンネルを選ぶ'),
+      row(
+        settings.log_channel_id ? button(id('admin', 'logoff'), '知らせるのをやめる', { emoji: '🔕' }) : null,
+        errors.length > 0 ? button(id('admin', 'logclear'), '記録を消す', { emoji: '🧹' }) : null,
+        backButton('admin'),
+        homeButton(),
+      ),
+    ],
+  });
+}
+
+export async function logch(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const channelId = ix.values[0];
+  // 書き込めるかをここで確かめる。書けない場所を選んでも、お知らせが消えるだけなので
+  try {
+    await ctx.rest.createMessage(channelId, {
+      embeds: [
+        embed({
+          color: COLORS.admin,
+          title: '🧰 管理用チャンネルになりました',
+          description: 'Bot でエラーが起きたとき、ここに知らせます。',
+        }),
+      ],
+      allowed_mentions: { parse: [] },
+    });
+  } catch (error) {
+    console.error('管理用チャンネルに投稿できませんでした:', error);
+    return log(ix, [], ctx, `<#${channelId}> に投稿できませんでした。Bot が書き込めるか確認してください。`);
+  }
+  await updateSettings(ctx.db, ix.guildId, { log_channel_id: channelId });
+  ctx.forgetSettings(ix.guildId);
+  return log(ix, [], ctx, `<#${channelId}> に知らせるようにしました`);
+}
+
+export async function logoff(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  await ctx.db.run('UPDATE guild_settings SET log_channel_id = NULL WHERE guild_id = ?1', ix.guildId);
+  ctx.forgetSettings(ix.guildId);
+  return log(ix, [], ctx, 'エラーのお知らせを止めました（記録は続けます）');
+}
+
+export async function logclear(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  await clearErrors(ctx.db, ix.guildId);
+  return log(ix, [], ctx, 'エラーの記録を消しました');
+}
+
 /* ------------------------------------------------------------------ 宝くじ */
 
 export async function lot(ix, _args, ctx, notice = null) {
@@ -1796,6 +1885,10 @@ export async function lottoggle(ix, _args, ctx) {
 
 export const actions = {
   open,
+  log,
+  logch,
+  logoff,
+  logclear,
   emoji,
   gm,
   gmtoggle,
