@@ -71,7 +71,7 @@ export function findHandler(customId) {
  * 終わってから画面を書き換える（15分の猶予がある）。
  */
 export const SLOW_ACTIONS = new Set([
-  'admin:emoji', 'admin:panelch', 'admin:routeto', 'admin:logch', 'admin:prefgame', 'admin:preflive',
+  'admin:emoji', 'admin:panelch', 'admin:anntry', 'admin:routeto', 'admin:logch', 'admin:prefgame', 'admin:preflive',
   'poll:create',
   'pk:go', 'pk:amount', 'pig:go', 'pig:amount', 'ch:go', 'ch:amount', 'yt:go', 'yt:amount', 'yt:solo',
   'bj:go', 'bj:solo', 'rps:go', 'rps:amount', 'cc:go', 'cc:amount',

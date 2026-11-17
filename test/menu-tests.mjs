@@ -2496,6 +2496,38 @@ await test('設定を書き出して、別のサーバーにそのまま読み�
   ctx.forgetSettings(GUILD);
 });
 
+await test('定期発表は時刻・人数・賞金を変えられ、中身の下見と試し投稿ができる（試しでは賞金を贈らない）', async () => {
+  await reportLib.attemptReport(db, { guildId: GUILD, userId: ME, activity: await act.getActivity(db, GUILD, '取り消し確認') ?? (await act.listActivities(db, GUILD))[0], calendar: ctx.calendar });
+  const created = await annLib.createAnnouncement(db, GUILD, {
+    channelId: 'c-ann', metric: 'balance', frequency: 'daily', hour: 9, topN: 3, prize: 500,
+  });
+  const view = await press(`m:admin:annview:${created.id}`, { admin: true });
+  assertAllButtonsWork(view, '発表の設定');
+
+  const form = await press(`m:admin:annedit:${created.id}`, { admin: true });
+  assert.equal(form.type, 9);
+  const saved = await press(`m:admin:annupdate:${created.id}`, { type: 5, admin: true, fields: { hour: '21', top_n: '5', prize: '0' } });
+  assert.match(screenText(saved), /上位5人に変えました/);
+  const updated = await annLib.getAnnouncement(db, GUILD, created.id);
+  assert.equal(updated.hour, 21);
+  assert.equal(updated.prize, 0);
+  await db.run('UPDATE announcements SET prize = 500 WHERE id = ?1', created.id);
+
+  const balances = await db.all('SELECT user_id, balance FROM balances WHERE guild_id = ?1 ORDER BY user_id', GUILD);
+  const peek = await press(`m:admin:annpeek:${created.id}`, { admin: true });
+  assert.match(screenText(peek), /いま発表すると/);
+  assert.match(screenText(peek), /まだ贈っていません/);
+  const sentBefore = ctx.sent.length;
+  const tried = await press(`m:admin:anntry:${created.id}`, { admin: true });
+  assert.match(screenText(tried), /試しの投稿をしました/);
+  assert.equal(ctx.sent.length, sentBefore + 1);
+  assert.equal(ctx.sent.at(-1).channelId, 'c-ann');
+  assert.match(ctx.sent.at(-1).payload.content, /試しの投稿/);
+  assert.deepEqual(await db.all('SELECT user_id, balance FROM balances WHERE guild_id = ?1 ORDER BY user_id', GUILD), balances, '賞金は動かない');
+  assert.equal((await annLib.getAnnouncement(db, GUILD, created.id)).last_run_date, null, '本番の発表済みにはしない');
+  await annLib.removeAnnouncement(db, GUILD, created.id);
+});
+
 section('[自分のデータ]');
 
 /** ほかのテストで座ったままの卓を片付ける（本番なら時間切れで閉じる）。 */

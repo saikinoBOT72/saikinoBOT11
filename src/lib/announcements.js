@@ -62,6 +62,19 @@ export function periodModeOf(announcement) {
   return PERIOD_MODES[announcement.period] ? announcement.period : 'auto';
 }
 
+/** 時刻・人数・賞金を変える。 */
+export async function updateAnnouncement(db, guildId, id, { hour, topN, prize }) {
+  await db.run(
+    'UPDATE announcements SET hour = ?3, top_n = ?4, prize = ?5 WHERE guild_id = ?1 AND id = ?2',
+    guildId,
+    id,
+    hour,
+    topN,
+    prize,
+  );
+  return getAnnouncement(db, guildId, id);
+}
+
 export function describeAnnouncement(announcement) {
   const title = rankingTitle({
     metric: announcement.metric,
@@ -118,7 +131,11 @@ export async function markAnnounced(db, id, dateString) {
  * 発表用の Embed を組み立て、必要なら1位へ賞金を渡す。
  * @returns {Promise<{embed: object, winners: string[]} | null>} 対象がいなければ null
  */
-export async function buildAnnouncement(db, announcement, { settings, calendar, now = new Date() }) {
+/**
+ * 発表の中身を作る。本番なら1位に賞金を贈る。
+ * trial: true（試し・下見）のときは賞金を贈らず、そのことを書き添える。
+ */
+export async function buildAnnouncement(db, announcement, { settings, calendar, now = new Date(), trial = false }) {
   const period = periodOf(announcement);
   const usesPeriod = Boolean(METRICS[announcement.metric]?.usesPeriod);
   const back = usesPeriod && looksBack(periodModeOf(announcement), period, calendar, now);
@@ -142,7 +159,9 @@ export async function buildAnnouncement(db, announcement, { settings, calendar, 
   });
 
   const winners = [];
-  if (announcement.prize > 0) {
+  if (announcement.prize > 0 && trial) {
+    lines.push('', `🎁 本番では1位に ${settings.currency_emoji} ${announcement.prize} を贈ります（試しなので、まだ贈っていません）`);
+  } else if (announcement.prize > 0) {
     const top = rows[0];
     await deposit(db, announcement.guild_id, top.user_id, announcement.prize, 'ranking', '1位の賞金');
     winners.push(top.user_id);

@@ -45,6 +45,8 @@ import {
   listAnnouncements,
   removeAnnouncement,
   toggleAnnouncement,
+  buildAnnouncement,
+  updateAnnouncement,
 } from '../lib/announcements.js';
 import {
   DRAW_HOUR as LOTTERY_DRAW_HOUR,
@@ -1598,6 +1600,11 @@ export async function annview(ix, [rawId], ctx, notice = null) {
         }),
         button(id('admin', 'anndel', String(announcement.id)), '削除する', { emoji: '🗑️', style: ButtonStyle.DANGER }),
       ),
+      row(
+        button(id('admin', 'annedit', String(announcement.id)), '時刻・人数・賞金を変える', { emoji: '✏️', style: ButtonStyle.PRIMARY }),
+        button(id('admin', 'annpeek', String(announcement.id)), 'いまの中身を見る', { emoji: '👀' }),
+        button(id('admin', 'anntry', String(announcement.id)), '試しに投稿', { emoji: '🧪' }),
+      ),
       METRICS[announcement.metric]?.usesPeriod
         ? row(
             button(
@@ -1610,6 +1617,76 @@ export async function annview(ix, [rawId], ctx, notice = null) {
       row(backButton('admin', '管理メニュー'), button(id('admin', 'ann'), '一覧へ', { emoji: '📢' }), homeButton()),
     ],
   });
+}
+
+export async function annedit(ix, [rawId], ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const announcement = await getAnnouncement(ctx.db, ix.guildId, Number(rawId));
+  if (!announcement) return ann(ix, [], ctx, 'その設定は見つかりませんでした。');
+  return openModal(
+    modal(id('admin', 'annupdate', String(announcement.id)), '発表を変える', [
+      textInput('hour', '発表する時刻（0〜23の数字）', { required: true, max: 2, value: String(announcement.hour) }),
+      textInput('top_n', '何位まで出すか', { required: true, max: 2, value: String(announcement.top_n) }),
+      textInput('prize', '1位への賞金（0でなし）', { max: 12, value: String(announcement.prize ?? 0) }),
+    ]),
+  );
+}
+
+export async function annupdate(ix, [rawId], ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const announcement = await getAnnouncement(ctx.db, ix.guildId, Number(rawId));
+  if (!announcement) return ann(ix, [], ctx, 'その設定は見つかりませんでした。');
+  const hour = readInt(ix, 'hour', { min: 0, max: 23 });
+  const topN = readInt(ix, 'top_n', { min: 1, max: 20 });
+  const prize = readInt(ix, 'prize', { min: 0, fallback: 0 });
+  for (const value of [hour, topN, prize]) {
+    if (isError(value)) return annview(ix, [rawId], ctx, value.error);
+  }
+  if (hour === null || topN === null) return annview(ix, [rawId], ctx, '時刻と人数を入れてください。');
+  const updated = await updateAnnouncement(ctx.db, ix.guildId, announcement.id, { hour, topN, prize: prize ?? 0 });
+  return annview(ix, [rawId], ctx, `${describeSchedule(updated)}・上位${updated.top_n}人に変えました`);
+}
+
+/** 試しの中身を作る（賞金は贈らない）。まだ誰もいなければ null。 */
+async function trialAnnouncement(ctx, announcement) {
+  const settings = await ctx.settings(announcement.guild_id);
+  return buildAnnouncement(ctx.db, announcement, { settings, calendar: ctx.calendar, trial: true });
+}
+
+/** いま発表するとどうなるかを、管理者にだけ見せる。 */
+export async function annpeek(ix, [rawId], ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const announcement = await getAnnouncement(ctx.db, ix.guildId, Number(rawId));
+  if (!announcement) return ann(ix, [], ctx, 'その設定は見つかりませんでした。');
+  const built = await trialAnnouncement(ctx, announcement);
+  if (!built) return annview(ix, [rawId], ctx, 'いまの期間には、まだ載る人がいません（このままだと発表は出ません）。');
+  return show(ix, {
+    embeds: [embed({ color: COLORS.admin, description: '👀 **いま発表すると、こうなります**（まだ投稿していません）' }), built.embed],
+    components: [row(button(id('admin', 'annview', String(announcement.id)), '設定に戻る', { emoji: '↩️' }))],
+  });
+}
+
+/**
+ * 発表先のチャンネルに、試しに投稿する（賞金は贈らない）。
+ * 投稿できるか（Bot に書き込む権限があるか）を確かめるのにも使う。
+ */
+export async function anntry(ix, [rawId], ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const announcement = await getAnnouncement(ctx.db, ix.guildId, Number(rawId));
+  if (!announcement) return ann(ix, [], ctx, 'その設定は見つかりませんでした。');
+  const built = await trialAnnouncement(ctx, announcement);
+  const body = built?.embed ?? embed({ color: 0xf1c40f, description: 'いまの期間には、まだ載る人がいません。' });
+  try {
+    await ctx.rest.createMessage(announcement.channel_id, {
+      content: '🧪 **試しの投稿です**（管理者が発表の見た目を確かめています）',
+      embeds: [body],
+      allowed_mentions: { parse: [] },
+    });
+  } catch (error) {
+    await ctx.reportError(ix.guildId, '定期発表の試し投稿', error);
+    return annview(ix, [rawId], ctx, `<#${announcement.channel_id}> に投稿できませんでした。Bot がそのチャンネルに書き込めるか確かめてください。`);
+  }
+  return annview(ix, [rawId], ctx, `<#${announcement.channel_id}> に試しの投稿をしました（賞金は贈っていません）`);
 }
 
 /** 集計期間の選び方を切り替える。 */
@@ -2156,6 +2233,10 @@ export const actions = {
   annview,
   anntoggle,
   annperiod,
+  annedit,
+  annupdate,
+  annpeek,
+  anntry,
   anndel,
   streak,
   streakbulk,
