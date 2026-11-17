@@ -188,7 +188,7 @@ async function pretendLastReportWas(daysAgo, activity, userId = A) {
 
 await test('初めての報告で1日目になる', async () => {
   const result = await streak.touchStreak(db, G, A, '筋トレ', 'Asia/Tokyo');
-  assert.deepEqual(result, { current: 1, best: 1, isNewDay: true });
+  assert.deepEqual(result, { current: 1, best: 1, isNewDay: true, before: null });
 });
 
 await test('同じ日に何度報告しても増えない', async () => {
@@ -1329,7 +1329,7 @@ await test('発表の「何時に出すか」は時計どおりのまま', () =>
 await test('4時始まりなら、深夜2時の報告は前日の続きとして数える', async () => {
   const run = (when) => streak.touchStreak(db, G, 'night', '筋トレ', FOUR, at(when));
 
-  assert.deepEqual(await run('2026-09-01T22:00:00+09:00'), { current: 1, best: 1, isNewDay: true });
+  assert.deepEqual(await run('2026-09-01T22:00:00+09:00'), { current: 1, best: 1, isNewDay: true, before: null });
   const sameDay = await run('2026-09-02T02:00:00+09:00');
   assert.equal(sameDay.isNewDay, false, '日付は変わったが同じ「1日」');
   assert.equal(sameDay.current, 1);

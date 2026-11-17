@@ -127,6 +127,64 @@ await test('同じ日に2回報告しても、連日ボーナスは1回', async 
   assert.equal(results.filter((result) => result.streakBonus).length, 1);
 });
 
+await test('報告の取り消しを同時に2回押しても、戻るのは1回（ボーナスと連続記録も）', async () => {
+  const ctx = fresh();
+  const streak = await import(src('lib/streak.js'));
+  const activity = await act.upsertActivity(ctx.db, GUILD, { name: '読書', reward: 40, cooldown_sec: 0, daily_limit: 0 });
+  await streak.upsertStreakReward(ctx.db, GUILD, '読書', 1, 0, 60);
+  await eco.ensureAccount(ctx.db, GUILD, ME);
+  const start = await eco.getBalance(ctx.db, GUILD, ME);
+
+  const result = await reporting.attemptReport(ctx.db, { guildId: GUILD, userId: ME, activity, calendar: ctx.calendar });
+  assert.equal(await eco.getBalance(ctx.db, GUILD, ME), start + 100, '報酬40＋連日ボーナス60');
+
+  const undone = await Promise.all([
+    reporting.undoReport(ctx.db, GUILD, ME, result.logId),
+    reporting.undoReport(ctx.db, GUILD, ME, result.logId),
+  ]);
+  assert.equal(undone.filter((entry) => entry.ok).length, 1);
+  assert.equal(await eco.getBalance(ctx.db, GUILD, ME), start, 'ちょうど元に戻る');
+  assert.equal(await act.countToday(ctx.db, GUILD, ME, '読書', ctx.calendar), 0);
+  assert.equal(await ctx.db.get("SELECT * FROM streaks WHERE user_id = ?1 AND activity = '読書'", ME), null, '連続記録も消える');
+  await assertLedgerMatches(ctx.db, '報告の取り消し');
+
+  // やり直せば、また1日目としてボーナスが出る（取り消しでボーナスを2回取ることはできない）
+  const again = await reporting.attemptReport(ctx.db, { guildId: GUILD, userId: ME, activity, calendar: ctx.calendar });
+  assert.equal(again.streakBonus?.reward, 60);
+  assert.equal(await eco.getBalance(ctx.db, GUILD, ME), start + 100);
+});
+
+await test('もらったコインを使ってしまったら、報告は取り消せない', async () => {
+  const ctx = fresh();
+  const activity = await act.upsertActivity(ctx.db, GUILD, { name: '散歩', reward: 50, cooldown_sec: 0, daily_limit: 0 });
+  await eco.setBalance(ctx.db, GUILD, ME, 0, 'test');
+  const result = await reporting.attemptReport(ctx.db, { guildId: GUILD, userId: ME, activity, calendar: ctx.calendar });
+  await eco.setBalance(ctx.db, GUILD, ME, 10, 'test');
+
+  const undone = await reporting.undoReport(ctx.db, GUILD, ME, result.logId);
+  assert.equal(undone.ok, false);
+  assert.match(undone.message, /使ってしまった/);
+  assert.equal(await eco.getBalance(ctx.db, GUILD, ME), 10, '残高はそのまま');
+  assert.equal(await act.countToday(ctx.db, GUILD, ME, '散歩', ctx.calendar), 1, '報告も残る');
+  const marked = await ctx.db.get('SELECT undoing FROM activity_logs WHERE id = ?1', result.logId);
+  assert.equal(marked.undoing, 0, '取り消し中の印も残らない');
+});
+
+await test('報告の取り消しは5分まで、そして最後の1回だけ', async () => {
+  const ctx = fresh();
+  const activity = await act.upsertActivity(ctx.db, GUILD, { name: '瞑想', reward: 5, cooldown_sec: 0, daily_limit: 0 });
+  const first = await reporting.attemptReport(ctx.db, { guildId: GUILD, userId: ME, activity, calendar: ctx.calendar });
+  const late = await reporting.undoReport(ctx.db, GUILD, ME, first.logId, Date.now() + reporting.UNDO_WINDOW_MS + 1000);
+  assert.match(late.message, /5分以内/);
+
+  await reporting.attemptReport(ctx.db, { guildId: GUILD, userId: ME, activity, calendar: ctx.calendar });
+  const older = await reporting.undoReport(ctx.db, GUILD, ME, first.logId);
+  assert.match(older.message, /最後の1回だけ/);
+
+  const other = await reporting.undoReport(ctx.db, GUILD, 'someone-else', first.logId);
+  assert.equal(other.ok, false, 'ほかの人の報告は取り消せない');
+});
+
 section('[お金の出入り]');
 
 await test('スロットは賭けと払い戻しが1回の処理で、残高と履歴がずれない', async () => {

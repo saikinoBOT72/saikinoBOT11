@@ -6,6 +6,7 @@ ALTER TABLE activity_logs ADD COLUMN bonus INTEGER NOT NULL DEFAULT 0;     -- �
 ALTER TABLE activity_logs ADD COLUMN streak_before TEXT;                   -- 報告前の連続記録（JSON）
 ALTER TABLE activity_logs ADD COLUMN post_channel_id TEXT;                 -- チャンネルに出た報告
 ALTER TABLE activity_logs ADD COLUMN post_message_id TEXT;
+ALTER TABLE activity_logs ADD COLUMN undoing INTEGER NOT NULL DEFAULT 0;  -- 取り消しの途中（同時押しで2回戻さないための印）
 
 -- 【受け渡しの管理】使われたアイテムを、出品者が「対応した」と押した時刻。
 ALTER TABLE purchases ADD COLUMN delivered_at INTEGER;

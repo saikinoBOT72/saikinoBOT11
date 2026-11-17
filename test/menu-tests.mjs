@@ -169,6 +169,27 @@ await test('主要画面のボタンがすべて生きている', async () => {
   }
 });
 
+await test('ホームに「今日やること」が出て、途切れそうな連続記録を先に知らせる', async () => {
+  const cal = await import(src('lib/calendar.js'));
+  const yesterday = cal.previousDay(cal.dateKey(ctx.calendar));
+  await db.run(
+    "INSERT OR REPLACE INTO streaks (guild_id, user_id, activity, current, best, last_date) VALUES (?1, ?2, 'ホーム確認', 5, 5, ?3)",
+    GUILD,
+    ME,
+    yesterday,
+  );
+  await act.upsertActivity(db, GUILD, { name: 'ホーム確認', reward: 1, cooldown_sec: 0, daily_limit: 0 });
+  const todo = (await press('m:home:open')).data.embeds.at(-1).fields.find((field) => field.name === '📝 今日やること');
+  assert.ok(todo, '今日やることが出る');
+  assert.match(todo.value.split('\n')[0], /ホーム確認\*\* 5日連続/, '途切れそうなものが先頭');
+  assert.match(todo.value, /おみくじがまだ/);
+
+  await press('m:report:pick', { values: ['ホーム確認'] });
+  const after = (await press('m:home:open')).data.embeds.at(-1).fields.find((field) => field.name === '📝 今日やること');
+  assert.doesNotMatch(after.value, /ホーム確認/, '報告したら消える');
+  await act.removeActivity(db, GUILD, 'ホーム確認');
+});
+
 await test('未知のボタンでもメニューに戻すだけで落ちない', async () => {
   const payload = await press('m:nowhere:nothing');
   assert.match(screenText(payload), /メニュー/);
@@ -197,6 +218,28 @@ await test('選ぶだけで報告が成立し、チャンネルにも投稿さ�
   assert.equal(await eco.getBalance(db, GUILD, ME), before + activity.reward);
   assert.equal(ctx.sent.length, sentBefore + 1, '公開投稿が1件');
   assert.match(firstEmbed(payload).title, /早起き/);
+});
+
+await test('報告には7日のカレンダーが付き、押し間違いは取り消せて投稿も消える', async () => {
+  await act.upsertActivity(db, GUILD, { name: '取り消し確認', emoji: '🧪', reward: 70, cooldown_sec: 0, daily_limit: 0 });
+  const before = await eco.getBalance(db, GUILD, ME);
+  const done = await press('m:report:pick', { values: ['取り消し確認'] });
+  const posted = ctx.sent.at(-1);
+  const week = posted.payload.embeds[0].fields.find((field) => field.name === 'この7日');
+  assert.match(week.value, /^(⬜){6}🟩　1\/7 日$/, '今日だけ塗られる');
+
+  const undoId = customIds(done).find((customId) => customId.startsWith('m:report:undo:'));
+  assert.ok(undoId, '取り消しボタンがある');
+  const log = await db.get('SELECT * FROM activity_logs WHERE id = ?1', Number(undoId.split(':')[3]));
+  assert.ok(log.post_message_id, '投稿した場所を控えている');
+
+  const undone = await press(undoId);
+  assert.match(screenText(undone), /取り消しました/);
+  assert.equal(await eco.getBalance(db, GUILD, ME), before);
+  assert.deepEqual(ctx.deleted.at(-1), { channelId: log.post_channel_id, messageId: log.post_message_id }, 'チャンネルの報告も消す');
+
+  const twice = await press(undoId);
+  assert.match(screenText(twice), /もう取り消してある/);
 });
 
 await test('1日の上限に達すると理由が画面に出て残高が動かない', async () => {

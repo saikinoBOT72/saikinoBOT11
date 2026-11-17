@@ -12,7 +12,8 @@
  * パネルには一切触らず、押した本人にだけ結果を返す。
  */
 import { listActivities, getActivity } from '../lib/activities.js';
-import { announceChannelFor, attemptReport, reportEmbed } from '../lib/reporting.js';
+import { attemptReport } from '../lib/reporting.js';
+import { postReport, undoButton } from './report.js';
 import { coins, truncate } from '../lib/format.js';
 import { describeDayStart } from '../lib/calendar.js';
 import { ButtonStyle } from '../discord/constants.js';
@@ -95,26 +96,18 @@ export async function handleComponent(ix, ctx) {
   if (!result.ok) return reply({ content: result.message });
 
   // みんなに見えるほうはチャンネルへ。転送先が決まっていればそちらに出す
-  ctx.announce(await announceChannelFor(ctx.db, ix.guildId, ix.channelId), {
-    embeds: [
-      reportEmbed({
-        user: ix.user,
-        displayName: ix.displayName,
-        avatarUrl: ix.avatar,
-        activity,
-        result,
-        settings,
-      }),
-    ],
-  });
+  await postReport(ix, ctx, activity, result, settings);
 
+  const undo = undoButton(result);
   return reply({
     embeds: [
       embed({
         color: 0x2ecc71,
         title: `${activity.emoji ?? '✅'} ${activity.name} を報告しました`,
         description: `${coins(activity.reward, settings)} を獲得！\n所持金は ${coins(result.balance, settings)} です。`,
+        footer: undo ? { text: '押し間違いなら5分以内に取り消せます' } : undefined,
       }),
     ],
+    components: undo ? [row(undo)] : [],
   });
 }

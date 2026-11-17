@@ -1,12 +1,12 @@
 import { getBalance, rankOf } from '../lib/economy.js';
 import { allStreaks } from '../lib/streak.js';
 import { listActivities } from '../lib/activities.js';
-import { countItems } from '../lib/shop.js';
+import { countItems, pendingDeliveries } from '../lib/shop.js';
 import { coins, truncate } from '../lib/format.js';
-import { CATEGORIES, enabledGames, gamesIn } from '../lib/game-catalog.js';
+import { CATEGORIES, disabledSet, enabledGames, gamesIn } from '../lib/game-catalog.js';
+import { dateKey, describeDayStart, startOfDay } from '../lib/calendar.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { button, embed, homeButton, id, plainEmbed, row, show, withNotice } from './common.js';
-import { describeDayStart } from '../lib/calendar.js';
 
 export async function open(ix, _args, ctx, notice = null) {
   const settings = await ctx.settings(ix.guildId);
@@ -19,6 +19,7 @@ export async function open(ix, _args, ctx, notice = null) {
     countItems(ctx.db, ix.guildId),
     allStreaks(ctx.db, ix.guildId, ix.userId, ctx.calendar),
   ]);
+  const todo = firstTime ? [] : await todoList(ix, ctx, settings, activities, streaks);
 
   const main = embed({
     color: 0x5865f2,
@@ -29,6 +30,9 @@ export async function open(ix, _args, ctx, notice = null) {
       { name: '連続記録', value: topStreak(streaks), inline: true },
       { name: '報告できること', value: `${activities.length} 種類`, inline: true },
       { name: '出品中のアイテム', value: `${items} 個`, inline: true },
+      firstTime || activities.length === 0
+        ? null
+        : { name: '📝 今日やること', value: todo.length > 0 ? todo.join('\n') : '今日やることは全部済んでいます 🎉' },
     ],
     footer: { text: 'ボタンで操作できます。このメニューはあなたにだけ見えています' },
   });
@@ -64,6 +68,57 @@ export async function open(ix, _args, ctx, notice = null) {
       ),
     ],
   });
+}
+
+/**
+ * 「今日やること」。開いた瞬間に、次に押すところが分かるように。
+ * ・今日まだ報告していないアクション（途切れそうな連続記録は先頭に）
+ * ・まだ引いていないおみくじ
+ * ・自分宛ての挑戦状、出品者としての受け渡し待ち
+ */
+async function todoList(ix, ctx, settings, activities, streaks) {
+  const since = startOfDay(ctx.calendar);
+  const [doneRows, challenges, deliveries, omikuji] = await Promise.all([
+    ctx.db.all(
+      'SELECT DISTINCT activity FROM activity_logs WHERE guild_id = ?1 AND user_id = ?2 AND created_at >= ?3',
+      ix.guildId,
+      ix.userId,
+      since,
+    ),
+    ctx.db.get(
+      `SELECT (SELECT COUNT(*) FROM rps_matches WHERE guild_id = ?1 AND opponent_id = ?2 AND status = 'pending')
+            + (SELECT COUNT(*) FROM chinchiro_matches WHERE guild_id = ?1 AND opponent_id = ?2 AND status = 'pending')
+            + (SELECT COUNT(*) FROM duels WHERE guild_id = ?1 AND opponent_id = ?2 AND status = 'pending') AS n`,
+      ix.guildId,
+      ix.userId,
+    ),
+    pendingDeliveries(ctx.db, ix.guildId, ix.userId),
+    disabledSet(settings).has('omi')
+      ? true
+      : ctx.db.get(
+          'SELECT 1 AS found FROM omikuji_draws WHERE guild_id = ?1 AND user_id = ?2 AND draw_date = ?3',
+          ix.guildId,
+          ix.userId,
+          dateKey(ctx.calendar),
+        ),
+  ]);
+
+  const done = new Set(doneRows.map((row) => row.activity));
+  const lines = [];
+  // 途切れそうな連続記録（昨日まで続いていて、今日まだ）
+  const atRisk = streaks.filter((streak) => streak.alive && !streak.doneToday && streak.current >= 2 && !done.has(streak.activity));
+  for (const streak of atRisk.slice(0, 2)) {
+    lines.push(`🔥 **${truncate(streak.activity, 20)}** ${streak.current}日連続 — 今日報告すると続きます`);
+  }
+  const left = activities.filter((activity) => !done.has(activity.name) && !atRisk.some((streak) => streak.activity === activity.name));
+  if (left.length > 0) {
+    const names = left.slice(0, 3).map((activity) => `${activity.emoji ?? ''}${truncate(activity.name, 12)}`).join('・');
+    lines.push(`💪 まだの報告：${names}${left.length > 3 ? ` ほか${left.length - 3}件` : ''}`);
+  }
+  if (!omikuji) lines.push('🎋 今日のおみくじがまだです');
+  if (challenges?.n > 0) lines.push(`⚔️ あなた宛ての挑戦状が **${challenges.n}** 件あります（チャンネルで受けられます）`);
+  if (deliveries.length > 0) lines.push(`📬 出品の受け渡し待ちが **${deliveries.length}** 件（🛍️ ショップ → 📦 自分の出品）`);
+  return lines;
 }
 
 /** いちばん続いているアクションを一行で。 */

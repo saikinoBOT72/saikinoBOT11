@@ -40,6 +40,10 @@ export function createRest(token) {
     editMessage(channelId, messageId, payload) {
       return call('PATCH', `/channels/${channelId}/messages/${messageId}`, withSafeMentions(payload));
     },
+    /** Bot 自身が出したメッセージを消す（自分の投稿なので特別な権限は要らない）。 */
+    deleteMessage(channelId, messageId) {
+      return call('DELETE', `/channels/${channelId}/messages/${messageId}`);
+    },
     /**
      * 返事として出したメッセージを後から書き換える。
      * 「回転中…」→「結果」のような演出に使う（トークンは15分間有効）。

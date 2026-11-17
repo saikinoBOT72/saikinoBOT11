@@ -57,6 +57,7 @@ const ACTIONS = {
 const SPECIAL = {
   initial: '初期残高',
   report: '報告',
+  'report:undo': '報告の取り消し',
   pay: '送金',
   streak: '連日ボーナス',
   achievement: '称号のボーナス',

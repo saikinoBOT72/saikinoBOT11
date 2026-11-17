@@ -12,6 +12,7 @@ export function createTestContext() {
   const db = createFakeD1(migrationsDir);
   const sent = [];
   const edited = [];
+  const deleted = [];
   // 演出（回転中→結果）で送られる書き換えを、待ち時間なしで記録する
   const animated = [];
   const settingsCache = new Map();
@@ -26,6 +27,7 @@ export function createTestContext() {
     db,
     sent,
     edited,
+    deleted,
     animated,
     applicationEmojis,
     followups,
@@ -47,6 +49,10 @@ export function createTestContext() {
       async editMessage(channelId, messageId, payload) {
         edited.push({ channelId, messageId, payload });
         return {};
+      },
+      async deleteMessage(channelId, messageId) {
+        deleted.push({ channelId, messageId });
+        return null;
       },
       /** 先に「受け取った」と返したあと、押されたメッセージを書き換えるときに使われる。 */
       async editOriginalResponse(applicationId, token, payload) {
@@ -92,14 +98,15 @@ export function createTestContext() {
       }
     },
     announce(channelId, payload) {
-      if (!channelId) return;
+      if (!channelId) return Promise.resolve(null);
       const ix = this.ix;
-      this.waitUntil(
-        this.rest.createMessage(channelId, payload).catch(async (error) => {
-          await this.reportError(ix?.guildId, 'チャンネルへの投稿', error);
-          await this.rest.createFollowup('app', 'token', { content: `⚠️ <#${channelId}> に投稿できませんでした。` });
-        }),
-      );
+      const posting = this.rest.createMessage(channelId, payload).catch(async (error) => {
+        await this.reportError(ix?.guildId, 'チャンネルへの投稿', error);
+        await this.rest.createFollowup('app', 'token', { content: `⚠️ <#${channelId}> に投稿できませんでした。` });
+        return null;
+      });
+      this.waitUntil(posting);
+      return posting;
     },
     animate(_ix, steps) {
       for (const step of steps) animated.push(step.payload);

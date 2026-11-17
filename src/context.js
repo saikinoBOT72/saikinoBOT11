@@ -94,10 +94,9 @@ export function createContext(env, executionCtx) {
      * 管理用チャンネルにも記録する。黙って消えないように。
      */
     announce(channelId, payload) {
-      if (!channelId) return;
+      if (!channelId) return Promise.resolve(null);
       const ix = this.ix;
-      this.waitUntil(
-        rest.createMessage(channelId, payload).catch(async (error) => {
+      const posting = rest.createMessage(channelId, payload).catch(async (error) => {
           await this.reportError(ix?.guildId, 'チャンネルへの投稿', error);
           if (ix?.raw?.application_id && ix.raw.token) {
             await rest
@@ -108,8 +107,10 @@ export function createContext(env, executionCtx) {
               })
               .catch((followupError) => console.error('お知らせの送信に失敗:', followupError));
           }
-        }),
-      );
+          return null;
+        });
+      this.waitUntil(posting);
+      return posting;
     },
 
     /**

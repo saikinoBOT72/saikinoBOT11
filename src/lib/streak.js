@@ -37,13 +37,16 @@ export async function allStreaks(db, guildId, userId, calendar, now = new Date()
       current: isAlive(row.last_date, today) ? row.current : 0,
       best: row.best,
       alive: isAlive(row.last_date, today),
+      doneToday: row.last_date === today,
     }))
     .sort((a, b) => b.current - a.current || b.best - a.best);
 }
 
 /**
  * そのアクションを報告したので連続日数を進める。
- * @returns {Promise<{current: number, best: number, isNewDay: boolean}>}
+ * isNewDay のときは before に「進める前」の記録を入れる（報告を取り消したときに戻すため。
+ * まだ記録が無かったなら null）。
+ * @returns {Promise<{current: number, best: number, isNewDay: boolean, before?: object|null}>}
  */
 export async function touchStreak(db, guildId, userId, activity, calendar, now = new Date()) {
   const today = dateKey(calendar, now);
@@ -74,7 +77,7 @@ export async function touchStreak(db, guildId, userId, activity, calendar, now =
       activity,
       today,
     );
-    return created.changes === 1 ? { current: 1, best: 1, isNewDay: true } : sameDay();
+    return created.changes === 1 ? { current: 1, best: 1, isNewDay: true, before: null } : sameDay();
   }
   if (row.last_date === today) return { current: row.current, best: row.best, isNewDay: false };
 
@@ -91,7 +94,8 @@ export async function touchStreak(db, guildId, userId, activity, calendar, now =
     today,
     row.last_date,
   );
-  return moved.changes === 1 ? { current, best, isNewDay: true } : sameDay();
+  const before = { current: row.current, best: row.best, last_date: row.last_date };
+  return moved.changes === 1 ? { current, best, isNewDay: true, before } : sameDay();
 }
 
 /**
