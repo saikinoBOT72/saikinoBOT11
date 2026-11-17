@@ -53,6 +53,7 @@ import { EMOJI as em } from '../lib/emoji.js';
 import { chance } from '../lib/random.js';
 import { gameChannelOf, goLive } from '../lib/guild-prefs.js';
 import { linkButton } from '../discord/builders.js';
+import { ANYONE, isOpenChallenge, opponentLabel } from '../lib/open-challenge.js';
 
 /* ------------------------------------------------------------------ ゲーム選択 */
 
@@ -829,6 +830,18 @@ export const cf = { open: cfOpen, bet: cfBet, custom: cfCustom, amount: cfAmount
 
 /* ------------------------------------------------------------------ じゃんけん */
 
+/** 相手を決めずに出す挑戦状のボタン（最初に受けた1人が相手になる）。 */
+function anyoneButton(screen) {
+  return button(id(screen, 'anyone'), 'だれでも受けられる挑戦状', { emoji: '📣', style: ButtonStyle.PRIMARY });
+}
+
+/** 挑戦状を出したあとの一言。 */
+function sentLine(opponentId, what) {
+  return isOpenChallenge(opponentId)
+    ? `だれでも受けられる${what}の挑戦状を出しました。最初に受けた人が相手です。`
+    : `<@${opponentId}> に${what}を申し込みました。`;
+}
+
 async function rpsOpen(ix, _args, _ctx, notice = null) {
   return show(ix, {
     embeds: [
@@ -841,7 +854,7 @@ async function rpsOpen(ix, _args, _ctx, notice = null) {
         notice,
       ),
     ],
-    components: [userSelect(id('rps', 'user'), '対戦相手を選ぶ'), row(backButton('games'), homeButton())],
+    components: [userSelect(id('rps', 'user'), '対戦相手を選ぶ'), row(anyoneButton('rps'), backButton('games'), homeButton())],
   });
 }
 
@@ -869,7 +882,7 @@ async function rpsBetScreen(ix, ctx, opponentId, notice = null) {
         embed({
           color: 0x5865f2,
           title: '✊✌️🖐️ じゃんけん',
-          description: `相手: <@${opponentId}>\n所持金 ${coins(balance, settings)}\n\n賭け金を選んでください。`,
+          description: `相手: ${opponentLabel(opponentId)}\n所持金 ${coins(balance, settings)}\n\n賭け金を選んでください。`,
         }),
         notice,
       ),
@@ -914,7 +927,7 @@ async function rpsGo(ix, [opponentId, rawBet], ctx) {
         color: 0x5865f2,
         title: '✊ 挑戦状を送りました',
         description:
-          `<@${opponentId}> に勝負を申し込みました。\n` +
+          `${sentLine(opponentId, '勝負')}\n` +
           (bet > 0 ? `賭け金 ${coins(bet, settings)}\n` : '') +
           'チャンネルのメッセージで、相手が「受けて立つ」を押すと勝負開始です。',
       }),
@@ -923,7 +936,14 @@ async function rpsGo(ix, [opponentId, rawBet], ctx) {
   });
 }
 
-export const rps = { open: rpsOpen, user: rpsUser, custom: rpsCustom, amount: rpsAmount, go: rpsGo };
+export const rps = {
+  open: rpsOpen,
+  user: rpsUser,
+  anyone: (ix, _args, ctx) => rpsBetScreen(ix, ctx, ANYONE),
+  custom: rpsCustom,
+  amount: rpsAmount,
+  go: rpsGo,
+};
 
 /* ------------------------------------------------------------------ チンチロ */
 
@@ -954,7 +974,7 @@ async function ccOpen(ix, _args, _ctx, notice = null) {
         notice,
       ),
     ],
-    components: [userSelect(id('cc', 'user'), '対戦相手を選ぶ'), row(backButton('games'), homeButton())],
+    components: [userSelect(id('cc', 'user'), '対戦相手を選ぶ'), row(anyoneButton('cc'), backButton('games'), homeButton())],
   });
 }
 
@@ -987,7 +1007,7 @@ async function ccBetScreen(ix, ctx, opponentId, notice = null) {
           color: 0xe67e22,
           title: '🎲 チンチロ',
           description:
-            `相手: <@${opponentId}>\n所持金 ${coins(balance, settings)}\n\n` +
+            `相手: ${opponentLabel(opponentId)}\n所持金 ${coins(balance, settings)}\n\n` +
             `賭け金を選んでください。**その${DICE_MAX}倍を一時的に預かります**（余りは勝負後に返却）。\n` +
             `いまの所持金なら **${affordable.toLocaleString('ja-JP')}** まで賭けられます。`,
         }),
@@ -1040,7 +1060,7 @@ async function ccGo(ix, [opponentId, rawBet], ctx) {
         color: 0xe67e22,
         title: '🎲 挑戦状を送りました',
         description:
-          `<@${opponentId}> にチンチロを申し込みました。\n` +
+          `${sentLine(opponentId, 'チンチロ')}\n` +
           `賭け金 ${coins(bet, settings)}（預かり ${escrowFor(bet).toLocaleString('ja-JP')}）\n` +
           '相手が「受けて立つ」を押すと勝負開始です。',
       }),
@@ -1049,7 +1069,14 @@ async function ccGo(ix, [opponentId, rawBet], ctx) {
   });
 }
 
-export const cc = { open: ccOpen, user: ccUser, custom: ccCustom, amount: ccAmount, go: ccGo };
+export const cc = {
+  open: ccOpen,
+  user: ccUser,
+  anyone: (ix, _args, ctx) => ccBetScreen(ix, ctx, ANYONE),
+  custom: ccCustom,
+  amount: ccAmount,
+  go: ccGo,
+};
 
 /* ------------------------------------------------------------------ 1対1の対戦ゲーム（共通） */
 
@@ -1076,7 +1103,7 @@ function duelScreens(gameKey, { screen, lead, extra = null }) {
       ],
       components: [
         userSelect(id(screen, 'user'), '対戦相手を選ぶ'),
-        row(...(extra ? extra() : []), backButton('games'), homeButton()),
+        row(anyoneButton(screen), ...(extra ? extra() : []), backButton('games'), homeButton()),
       ],
     });
   }
@@ -1104,7 +1131,7 @@ function duelScreens(gameKey, { screen, lead, extra = null }) {
             color: rules.color,
             title: `${em[rules.emojiSlot]} ${rules.title}`,
             description:
-              `相手: <@${opponentId}>\n所持金 ${coins(balance, settings)}\n\n` +
+              `相手: ${opponentLabel(opponentId)}\n所持金 ${coins(balance, settings)}\n\n` +
               '賭け金を選んでください。**勝った方が両方の賭け金を総取り**します。',
           }),
           notice,
@@ -1149,14 +1176,14 @@ function duelScreens(gameKey, { screen, lead, extra = null }) {
         embed({
           color: rules.color,
           title: '挑戦状を送りました',
-          description: `<@${opponentId}> に ${rules.title} を申し込みました。チャンネルの投稿から応答してもらってください。`,
+          description: `${sentLine(opponentId, rules.title)}チャンネルの投稿から応答してもらってください。`,
         }),
       ],
       components: [row(jumpButton(ix.guildId, sent.channel_id ?? gameChannelOf(settings, ix.channelId), sent.id), backButton('games'), homeButton())],
     });
   }
 
-  return { open, user, custom, amount, go };
+  return { open, user, custom, amount, go, anyone: (ix, _args, ctx) => betScreen(ix, ctx, ANYONE) };
 }
 
 export const rr = duelScreens('rr', {

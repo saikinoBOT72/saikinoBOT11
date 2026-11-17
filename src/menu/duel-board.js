@@ -23,6 +23,7 @@ import { coins, relative } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
+import { inviteParts, resolveInvite } from './open-invite.js';
 import { handleRematch } from './rematch.js';
 import * as roulette from './duel-roulette.js';
 import * as charge from './duel-charge.js';
@@ -72,15 +73,16 @@ export async function startChallenge(ctx, { game, guildId, channelId, challenger
     state: {},
   });
 
+  const invite = inviteParts(challengerId, opponentId);
   try {
     const message = await ctx.rest.createMessage(channelId, {
-      content: `<@${opponentId}>`,
+      content: invite.content,
       embeds: [
         embed({
           color: rules.color,
           title: `${em[rules.emojiSlot]} ${rules.title}`,
           description:
-            `<@${challengerId}> が <@${opponentId}> に勝負を挑みました。\n` +
+            `${invite.line}\n` +
             `賭け金は ${coins(bet, settings)}（**勝った方が総取り**）`,
           fields: [
             ...(rules.inviteFields ? rules.inviteFields({ bet, escrow, settings }) : []),
@@ -91,10 +93,10 @@ export async function startChallenge(ctx, { game, guildId, channelId, challenger
       components: [
         row(
           button(`d:accept:${id}`, '受けて立つ', { style: ButtonStyle.SUCCESS }),
-          button(`d:decline:${id}`, 'やめておく', { style: ButtonStyle.SECONDARY }),
+          button(`d:decline:${id}`, invite.declineLabel, { style: ButtonStyle.SECONDARY }),
         ),
       ],
-      allowed_mentions: { users: [opponentId] },
+      allowed_mentions: invite.allowed_mentions,
     });
     await setMessageId(ctx.db, id, message.id);
     return message;
@@ -136,10 +138,16 @@ export async function handleComponent(ix, ctx) {
   return rules.handle(ix, ctx, { duel, rules, role, state: stateOf(duel), action, args });
 }
 
-async function handleInvite(ix, ctx, duel, rules, action) {
-  if (ix.userId !== duel.opponent_id) {
-    return reply({ content: 'この勝負に呼ばれているのはあなたではありません。' });
-  }
+async function handleInvite(ix, ctx, invited, rules, action) {
+  const resolved = await resolveInvite(ix, ctx, {
+    table: 'duels',
+    match: invited,
+    action,
+    need: invited.escrow,
+    cancelled: (text) => cancelEmbed(rules, text),
+  });
+  if (resolved.response) return resolved.response;
+  const { match: duel } = resolved;
 
   if (action === 'decline') {
     await setStatus(ctx.db, duel.id, 'cancelled');

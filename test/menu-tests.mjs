@@ -2204,6 +2204,83 @@ await test('あいこが続いた末の返金も一度だけ', async () => {
 });
 
 
+await test('だれでも受けられる挑戦状は、最初に受けた1人だけが相手になる', async () => {
+  for (const userId of [ME, OTHER, 'u3', 'u4']) await eco.setBalance(db, GUILD, userId, 1000, 'test');
+  await eco.setBalance(db, GUILD, 'u4', 10, 'test');
+
+  const entry = await press('m:rps:open');
+  assert.ok(customIds(entry).includes('m:rps:anyone'));
+  const betScreen = await press('m:rps:anyone');
+  assert.match(firstEmbed(betScreen).description, /だれでも/);
+  assertAllButtonsWork(betScreen, 'だれでもの賭け金');
+
+  const sentBefore = ctx.sent.length;
+  const done = await press('m:rps:go:anyone:100');
+  assert.match(firstEmbed(done).description, /だれでも受けられる/);
+  const post = ctx.sent[sentBefore].payload;
+  assert.equal(post.content, '', '誰も呼び出さない');
+  assert.deepEqual(post.allowed_mentions, { parse: [] });
+  const match = await db.get("SELECT * FROM rps_matches WHERE status = 'pending' ORDER BY created_at DESC");
+  assert.equal(match.opponent_id, 'anyone');
+
+  assert.match(screenText(await pressRps(`rps:accept:${match.id}`, { userId: ME })), /自分で出した/);
+  assert.match(screenText(await pressRps(`rps:accept:${match.id}`, { userId: 'u4' })), /残高が足りません/);
+  assert.match(screenText(await pressRps(`rps:decline:${match.id}`, { userId: 'u3' })), /そのままにしておけば/);
+
+  const [a, b] = await Promise.all([
+    pressRps(`rps:accept:${match.id}`, { userId: OTHER }),
+    pressRps(`rps:accept:${match.id}`, { userId: 'u3' }),
+  ]);
+  assert.equal([a, b].filter((payload) => payload.type === 7).length, 1, '始まるのは1回');
+  assert.ok([a, b].some((payload) => /ひと足早く/.test(screenText(payload))));
+  const started = await db.get('SELECT * FROM rps_matches WHERE id = ?1', match.id);
+  assert.equal(started.status, 'playing');
+  assert.ok([OTHER, 'u3'].includes(started.opponent_id));
+  assert.equal(await eco.getBalance(db, GUILD, started.opponent_id), 900, '受けた人だけ預ける');
+  const bystander = started.opponent_id === OTHER ? 'u3' : OTHER;
+  assert.equal(await eco.getBalance(db, GUILD, bystander), 1000);
+  await pressRps(`rps:hand:${match.id}:rock`, { userId: ME });
+  await pressRps(`rps:hand:${match.id}:scissors`, { userId: started.opponent_id });
+});
+
+await test('だれでも受けられる挑戦状は、出した人が取り下げられる', async () => {
+  await eco.setBalance(db, GUILD, ME, 1000, 'test');
+  await press('m:rps:go:anyone:50');
+  const match = await db.get("SELECT * FROM rps_matches WHERE status = 'pending' ORDER BY created_at DESC");
+  const withdrawn = await pressRps(`rps:decline:${match.id}`, { userId: ME });
+  assert.equal(withdrawn.type, 7);
+  assert.match(screenText(withdrawn), /取り下げました/);
+  assert.equal((await db.get('SELECT status FROM rps_matches WHERE id = ?1', match.id)).status, 'cancelled');
+  assert.equal(await eco.getBalance(db, GUILD, ME), 1000, 'お金は動いていない');
+});
+
+await test('1対1の勝負とチンチロにも「だれでも」がある', async () => {
+  for (const screen of ['cc', 'rr', 'cs', 'mine', 'dd']) {
+    const entry = await press(`m:${screen}:open`);
+    assert.ok(customIds(entry).includes(`m:${screen}:anyone`), `${screen} に「だれでも」`);
+    const bets = await press(`m:${screen}:anyone`);
+    assert.match(firstEmbed(bets).description, /だれでも/, screen);
+  }
+
+  // 受けた人が相手になって、そのまま始まる
+  for (const userId of [ME, OTHER]) await eco.setBalance(db, GUILD, userId, 5000, 'test');
+  await press('m:rr:go:anyone:100');
+  const duel = await db.get("SELECT * FROM duels WHERE status = 'pending' AND opponent_id = 'anyone' ORDER BY created_at DESC");
+  const accepted = await pressDuel(`d:accept:${duel.id}`, { userId: OTHER });
+  assert.equal(accepted.type, 7);
+  const started = await db.get('SELECT * FROM duels WHERE id = ?1', duel.id);
+  assert.equal(started.status, 'playing');
+  assert.equal(started.opponent_id, OTHER);
+
+  const chinchiro = await import(src('menu/chinchiro-match.js'));
+  await press('m:cc:go:anyone:100');
+  const match = await db.get("SELECT * FROM chinchiro_matches WHERE status = 'pending' AND opponent_id = 'anyone' ORDER BY created_at DESC");
+  const response = await chinchiro.handleComponent(new Ix(rawInteraction({ customId: `cc:accept:${match.id}`, userId: OTHER })), ctx);
+  await ctx.settle();
+  assert.equal((await response.json()).type, 7);
+  assert.equal((await db.get('SELECT * FROM chinchiro_matches WHERE id = ?1', match.id)).opponent_id, OTHER);
+});
+
 section('[自分のデータ]');
 
 /** ほかのテストで座ったままの卓を片付ける（本番なら時間切れで閉じる）。 */

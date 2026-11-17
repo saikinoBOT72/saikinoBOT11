@@ -16,6 +16,7 @@ import { coins, relative } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
+import { inviteParts, resolveInvite } from './open-invite.js';
 import { handleRematch, rematchButton } from './rematch.js';
 import { diceFaces } from '../lib/emoji.js';
 import { rollDie } from '../lib/random.js';
@@ -31,15 +32,16 @@ export async function startChallenge(ctx, { guildId, channelId, challengerId, op
   const id = crypto.randomUUID();
   const created = await createMatch(ctx.db, { id, guildId, channelId, challengerId, opponentId, bet });
 
+  const invite = inviteParts(challengerId, opponentId);
   try {
     const message = await ctx.rest.createMessage(channelId, {
-      content: `<@${opponentId}>`,
+      content: invite.content,
       embeds: [
         embed({
           color: 0xe67e22,
           title: '🎲 チンチロ勝負！',
           description:
-            `<@${challengerId}> が <@${opponentId}> に勝負を挑みました。\n` +
+            `${invite.line}\n` +
             `賭け金は ${coins(bet, settings)}。**役によって動く額が変わります。**`,
           fields: [
             { name: '預かる額', value: `${coins(escrowFor(bet), settings)}（最大×${MAX_MULTIPLIER}）`, inline: true },
@@ -52,10 +54,10 @@ export async function startChallenge(ctx, { guildId, channelId, challengerId, op
       components: [
         row(
           button(`cc:accept:${id}`, '受けて立つ', { style: ButtonStyle.SUCCESS }),
-          button(`cc:decline:${id}`, 'やめておく', { style: ButtonStyle.SECONDARY }),
+          button(`cc:decline:${id}`, invite.declineLabel, { style: ButtonStyle.SECONDARY }),
         ),
       ],
-      allowed_mentions: { users: [opponentId] },
+      allowed_mentions: invite.allowed_mentions,
     });
     await setMessageId(ctx.db, id, message.id);
     return message;
@@ -97,10 +99,16 @@ export async function handleComponent(ix, ctx) {
   return reply({ content: '不明な操作です。' });
 }
 
-async function handleInvite(ix, ctx, match, action) {
-  if (ix.userId !== match.opponent_id) {
-    return reply({ content: 'この勝負に呼ばれているのはあなたではありません。' });
-  }
+async function handleInvite(ix, ctx, invited, action) {
+  const resolved = await resolveInvite(ix, ctx, {
+    table: 'chinchiro_matches',
+    match: invited,
+    action,
+    need: invited.escrow,
+    cancelled: cancelEmbed,
+  });
+  if (resolved.response) return resolved.response;
+  const { match } = resolved;
 
   if (action === 'decline') {
     await setStatus(ctx.db, match.id, 'cancelled');

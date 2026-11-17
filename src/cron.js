@@ -5,6 +5,7 @@
  * ひとつが失敗しても残りは動かしたいので、runScheduled で1件ずつ囲ってある。
  */
 import { cancelEmbed } from './menu/rps-challenge.js';
+import { ANYONE } from './lib/open-challenge.js';
 import { cancelExpired } from './lib/rps.js';
 import { cancelEmbed as chinchiroCancelEmbed } from './menu/chinchiro-match.js';
 import { cancelExpired as cancelExpiredChinchiro } from './lib/chinchiro.js';
@@ -102,7 +103,8 @@ export async function nudgeIdlePlayers(ctx, now = Date.now()) {
   for (const kind of kinds) {
     for (const row of await nearDeadline(ctx.db, kind, now)) {
       if (!row.message_id) continue;
-      const waiting = waitingIn(kind, row).filter(Boolean);
+      // だれでも受けられる挑戦状の「相手」はまだいないので、知らせる先から外す
+      const waiting = waitingIn(kind, row).filter((userId) => userId && userId !== ANYONE);
       if (waiting.length === 0) continue;
       if (!(await claimNudge(ctx.db, kind, row.id, row.expires_at, now))) continue;
       await ctx.rest
