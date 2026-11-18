@@ -61,7 +61,6 @@ async function stale(ix, ctx) {
 
 export async function open(ix, _args, ctx, notice = null) {
   const settings = await ctx.settings(ix.guildId);
-  const em = await ctx.emoji();
   const running = await getGame(ctx, ix);
   if (running) return table(ix, ctx, running, '前回の続きです。');
 

@@ -11,14 +11,20 @@
     "deploy": "wrangler deploy",
     "register": "node scripts/register-commands.mjs",
     "migrate": "wrangler d1 migrations apply saikinobot --remote",
-    "usage": "node scripts/usage.mjs"
+    "usage": "node scripts/usage.mjs",
+    "lint": "eslint .",
+    "typecheck": "tsc -p jsconfig.json"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "license": "MIT",
   "devDependencies": {
+    "@eslint/js": "10.0.1",
     "better-sqlite3": "^13.0.3",
-    "wrangler": "^4.127.0"
+    "eslint": "10.15.0",
+    "globals": "17.14.0",
+    "typescript": "6.0.3",
+    "wrangler": "4.157.0"
   }
 }

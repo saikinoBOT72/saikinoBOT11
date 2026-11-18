@@ -59,7 +59,7 @@ export function createTableStore(tableName, { emptyState, joinTimeoutMs, playTim
 
   /**
    * 状態を安全に書き換える。書けなかったら読み直してやり直す。
-   * @returns {Promise<{ok: true, table: object, state: object, extra?: any} | {ok: false, reason: string}>}
+   * @returns {Promise<{ok: boolean, table?: any, state?: any, extra?: any, reason?: string}>} ok が false なら reason
    */
   async function mutate(db, id, apply, { allow = ['joining', 'playing'], attempts = 6 } = {}) {
     for (let attempt = 0; attempt < attempts; attempt++) {

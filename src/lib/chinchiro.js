@@ -47,6 +47,7 @@ export async function setStatus(db, id, status) {
  * 先攻はランダム。あとから振るほうが相手の目を見られて有利なので、固定にしない。
  * @returns {Promise<'challenger'|'opponent'|null>} 取れたら先攻の役、取れなければ null
  */
+/** @param {'challenger'|'opponent'} [first] */
 export async function markPlaying(db, id, first = chance(0.5) ? 'challenger' : 'opponent') {
   const result = await db.run(
     "UPDATE chinchiro_matches SET status = 'playing', turn = ?3, expires_at = ?2 WHERE id = ?1 AND status = 'pending'",

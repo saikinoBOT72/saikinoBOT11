@@ -11,6 +11,9 @@
 #   outcome が exception   … 例外で落ちた（中身も出ます）
 #   outcome が exceededCpu … 計算に時間をかけすぎて打ち切られた
 #   そもそも記録が出ない    … Discord からBotに届いていない
+#
+# 【公開ログに出さないもの】このリポジトリは公開なので、ここに出たものは誰でも読める。
+#   生の記録（リクエストの中身）はそのまま出さず、Discord の ID・URL・トークンを伏せた要約だけを出す。
 name: 本番のログを見る
 
 on:
@@ -21,15 +24,18 @@ on:
         required: false
         default: '120'
 
+permissions:
+  contents: read
+
 jobs:
   tail:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
 
       - name: 依存を入れる
@@ -44,20 +50,23 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SECONDS_TO_RECORD: ${{ inputs.seconds }}
         run: |
+          # 入力は数字だけ受け付ける（コマンドに埋め込むため）
+          case "$SECONDS_TO_RECORD" in ''|*[!0-9]*) SECONDS_TO_RECORD=120 ;; esac
           echo "================================================"
-          echo " ここから ${{ inputs.seconds }} 秒間、記録します"
+          echo " ここから ${SECONDS_TO_RECORD} 秒間、記録します"
           echo " いま Discord で調べたい操作をしてください"
           echo "================================================"
           # tail は繋ぎっぱなしになるので時間で打ち切る（打ち切りは失敗ではない）
-          timeout "${{ inputs.seconds }}" npx wrangler tail saikinobot --format json > tail.jsonl 2> tail.err || true
+          timeout "${SECONDS_TO_RECORD}" npx wrangler tail saikinobot --format json > tail.jsonl 2> tail.err || true
           echo "================================================"
-          echo " 記録おわり"
+          echo " 記録おわり（生の記録は出さず、伏せ字にした要約だけを出します）"
           echo "================================================"
-          # wrangler が何を出したのかを必ず見せる。読めないときの手がかりになる
-          echo "--- wrangler の出力（先頭30行）---"
-          head -n 30 tail.jsonl || true
-          echo "--- wrangler のエラー出力（先頭30行）---"
-          head -n 30 tail.err || true
           echo "--- 行数: $(wc -l < tail.jsonl) ---"
+          # wrangler のエラー出力は手がかりになるが、URL や ID が混ざりうるので伏せてから出す
+          echo "--- wrangler のエラー出力（先頭30行・伏せ字あり）---"
+          head -n 30 tail.err \
+            | sed -E 's#https?://[^ ]+#<url>#g; s/[0-9]{15,}/<id>/g; s/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/<uuid>/g' \
+            || true
           node scripts/read-tail.mjs tail.jsonl | tee -a "$GITHUB_STEP_SUMMARY"

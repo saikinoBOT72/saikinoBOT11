@@ -115,6 +115,11 @@ async function numgo(ix, _args, ctx) {
   return go(ix, ['num', String(value), String(pick)], ctx);
 }
 
+/**
+ * @param {any} ix
+ * @param {string[]} args 張り方・賭け金・（数字1つなら）数字
+ * @param {any} ctx
+ */
 async function go(ix, [key, rawBet, rawPick], ctx) {
   const bet = Number(rawBet);
   const pick = key === 'num' ? Number(rawPick) : null;

@@ -215,7 +215,7 @@ async function pkOpen(ix, _args, ctx, notice = null) {
   });
 }
 
-function pkCustom(ix) {
+function pkCustom(_ix) {
   return openModal(amountModal(id('pk', 'amount'), '簡ポーカーの参加費', '参加費'));
 }
 
@@ -303,7 +303,7 @@ async function pigOpen(ix, _args, ctx, notice = null) {
   });
 }
 
-function pigCustom(ix) {
+function pigCustom(_ix) {
   return openModal(amountModal(id('pig', 'amount'), 'ピッグの参加費', '参加費'));
 }
 
@@ -391,7 +391,7 @@ async function chOpen(ix, _args, ctx, notice = null) {
   });
 }
 
-function chCustom(ix) {
+function chCustom(_ix) {
   return openModal(amountModal(id('ch', 'amount'), '丁半博打の一口', '一口の額'));
 }
 
@@ -484,7 +484,7 @@ async function ytOpen(ix, _args, ctx, notice = null) {
   });
 }
 
-function ytCustom(ix) {
+function ytCustom(_ix) {
   return openModal(amountModal(id('yt', 'amount'), 'ヨットの参加費', '参加費'));
 }
 

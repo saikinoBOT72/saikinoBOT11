@@ -408,6 +408,7 @@ async function announceListing(ix, ctx, item) {
   const tag = titleTag(title);
 
   const meta = ITEM_KINDS[item.kind] ?? ITEM_KINDS.consumable;
+  /** @type {Array<{name: string, value: string, inline?: boolean}>} */
   const fields = [
     { name: '価格', value: coins(item.price, settings), inline: true },
     { name: '在庫', value: item.stock < 0 ? '無制限' : `${item.stock} 個`, inline: true },
@@ -812,6 +813,7 @@ export async function useok(ix, [rawId], ctx) {
   if (!used) return owned(ix, [String(itemId)], ctx, '使えるものがありませんでした。');
 
   const item = await getItem(ctx.db, ix.guildId, itemId);
+  /** @type {Array<{name: string, value: string, inline?: boolean}>} */
   const fields = [{ name: '商品番号', value: `#${itemId}`, inline: true }];
   if (item?.seller_id) fields.push({ name: '出品者', value: `<@${item.seller_id}>`, inline: true });
   if (item?.description) fields.push({ name: '説明', value: truncate(item.description, 400) });

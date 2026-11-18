@@ -112,7 +112,7 @@ export async function tally(db, pollId) {
 /**
  * 賭ける。1人1択で、あとから変更はできない。
  * 先に席を取ってから引き落とすので、二重に賭けることも取られることもない。
- * @returns {Promise<{ok: true} | {ok: false, reason: 'closed'|'already'|'insufficient'}>}
+ * @returns {Promise<{ok: boolean, reason?: 'closed'|'already'|'insufficient'}>}
  */
 export async function placeBet(db, poll, userId, optionIdx, amount) {
   if (poll.status !== 'open') return { ok: false, reason: 'closed' };
@@ -138,7 +138,7 @@ export async function placeBet(db, poll, userId, optionIdx, amount) {
  * 出題者が自腹で賞金を上乗せする。
  * 先にプールへ積んでから引き落とし、払えなければ積んだぶんを戻す。
  * こうしておけば「取られたのに増えていない」が起きない。
- * @returns {Promise<{ok: true, bonus: number} | {ok: false, reason: 'closed'|'insufficient'}>}
+ * @returns {Promise<{ok: boolean, bonus?: number, reason?: 'closed'|'insufficient'}>}
  */
 export async function addBonus(db, poll, amount) {
   const claimed = await db.run(
@@ -166,7 +166,7 @@ async function refundBonus(db, poll) {
  * すでに賭けている人が、同じ選択肢に上乗せする。
  * 選択肢を条件に入れてあるので、別の選択肢へ移すことはできない。
  * 先に増やしてから引き落とし、払えなければ元に戻す。
- * @returns {Promise<{ok: true, total: number} | {ok: false, reason: 'closed'|'other'|'insufficient'}>}
+ * @returns {Promise<{ok: boolean, total?: number, reason?: 'closed'|'other'|'insufficient'}>}
  */
 export async function raiseBet(db, poll, userId, optionIdx, amount) {
   const claimed = await db.run(
@@ -209,7 +209,7 @@ export async function closePoll(db, id, now = Date.now()) {
 
 /**
  * 正解を決めて山分けする。
- * @returns {Promise<{settled: boolean, refunded?: boolean, total?: number, payouts?: Array}>}
+ * @returns {Promise<{settled: boolean, refunded?: boolean, total?: number, staked?: number, bonus?: number, payouts?: Array<any>}>}
  */
 export async function settlePoll(db, poll, answerIdx) {
   const claimed = await db.run(

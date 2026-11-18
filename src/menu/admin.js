@@ -104,6 +104,7 @@ export async function open(ix, _args, ctx, notice = null) {
   const checklist = await setupChecklist(ctx.db, ix.guildId, settings);
   const left = checklist.filter((item) => !item.done);
 
+  /** @type {Array<{name: string, value: string, inline?: boolean}>} */
   const fields = [
     { name: '通貨', value: `${settings.currency_emoji} ${settings.currency_name}`, inline: true },
     { name: '初期残高', value: `${settings.starting_balance}`, inline: true },
@@ -1078,9 +1079,9 @@ export async function cfgsave(ix, _args, ctx) {
   const starting = readInt(ix, 'starting_balance', { min: 0 });
   const minBet = readInt(ix, 'min_bet', { min: 1 });
   const maxBet = readInt(ix, 'max_bet', { min: 0 });
-  for (const value of [starting, minBet, maxBet]) {
-    if (isError(value)) return prefs(ix, [], ctx, value.error);
-  }
+  if (isError(starting)) return prefs(ix, [], ctx, starting.error);
+  if (isError(minBet)) return prefs(ix, [], ctx, minBet.error);
+  if (isError(maxBet)) return prefs(ix, [], ctx, maxBet.error);
   if (maxBet !== null && minBet !== null && maxBet > 0 && maxBet < minBet) {
     return prefs(ix, [], ctx, '最高賭け金は最低賭け金以上にしてください。');
   }
@@ -2112,7 +2113,6 @@ export async function logclear(ix, _args, ctx) {
 
 export async function lot(ix, _args, ctx, notice = null) {
   if (!ix.isAdmin) return denied(ix, ctx);
-  const settings = await ctx.settings(ix.guildId);
   const lottery = await getLottery(ctx.db, ix.guildId);
   const drawKey = drawKeyFor(ctx.calendar);
   const { tickets, pool } = await poolOf(ctx.db, ix.guildId, drawKey);

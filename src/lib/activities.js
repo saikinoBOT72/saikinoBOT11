@@ -50,7 +50,7 @@ export async function upsertActivity(db, guildId, activity) {
  * 報告の記録・連続記録・連日ボーナス・称号の条件・定期発表は、どれもアクションを
  * 名前で指している。名前だけ変えると、全員の連続記録が切れ、称号も発表も
  * 古い名前を見たままになる。なので全部まとめて新しい名前に付け替える（1つの処理で）。
- * @returns {Promise<{ok: true} | {ok: false, reason: 'missing'|'taken'}>}
+ * @returns {Promise<{ok: boolean, reason?: 'missing'|'taken'}>}
  */
 export async function renameActivity(db, guildId, from, to) {
   if (from === to) return { ok: true };
@@ -88,7 +88,7 @@ export async function countToday(db, guildId, userId, name, calendar) {
 
 /**
  * 報告できる状態か判定する。
- * @returns {{ok: true} | {ok: false, reason: 'cooldown', retryAtMs: number} | {ok: false, reason: 'daily', limit: number}}
+ * @returns {Promise<{ok: boolean, reason?: 'cooldown'|'daily', retryAtMs?: number, limit?: number, count?: number}>}
  */
 export async function canReport(db, guildId, userId, activity, calendar) {
   if (activity.daily_limit > 0) {
@@ -154,7 +154,7 @@ export async function claimReport(db, guildId, userId, activity, calendar, note 
  * 全アクションぶんの「報告できるか」をまとめて調べる。
  * canReport をアクションごとに呼ぶと、画面を1つ出すのに 2×アクション数 回の問い合わせになる。
  * ここでは「今日の回数」と「最後に報告した時刻」を1回ずつ、アクションごとにまとめて引く。
- * @returns {Promise<Map<string, ReturnType<typeof canReport> extends Promise<infer T> ? T : never>>}
+ * @returns {Promise<Map<string, {ok: boolean, reason?: 'cooldown'|'daily', retryAtMs?: number, limit?: number, count?: number}>>}
  */
 export async function reportGates(db, guildId, userId, activities, calendar, now = Date.now()) {
   const [todayRows, lastRows] = await Promise.all([

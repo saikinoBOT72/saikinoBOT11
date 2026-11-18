@@ -153,7 +153,7 @@ export async function create(ix, _args, ctx) {
   });
 
   const board = await boardPayload(ctx.db, poll, settings);
-  let posted = null;
+  let posted;
   try {
     posted = await ctx.rest.createMessage(poll.channel_id, board);
     await ctx.db.run('UPDATE polls SET message_id = ?2 WHERE id = ?1', poll.id, posted.id);

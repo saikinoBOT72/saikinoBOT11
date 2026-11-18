@@ -176,7 +176,7 @@ export async function handleComponent(ix, ctx) {
   if (action === 'pick') return handlePick(ix, ctx, poll);
   if (action === 'settle') return handleSettle(ix, ctx, poll, rawOption);
   if (action === 'again') return handleNotifyPick(ix, poll);
-  if (action === 'notify') return handleNotify(ix, ctx, poll, rawOption);
+  if (action === 'notify') return handleNotify(ix, ctx, poll);
   if (action === 'more') return handleAgain(ix);
   return reply({ content: '不明な操作です。' });
 }

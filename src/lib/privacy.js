@@ -66,7 +66,7 @@ export async function activeTables(db, guildId, userId) {
  *   本人が立てた予想大会は中止して全員に返す。
  *
  * 参加中の卓があるときは消さずに { blocked } を返す（終わってからやり直してもらう）。
- * @returns {Promise<{blocked: string[]} | {before: object}>}
+ * @returns {Promise<{blocked?: string[], before?: any}>} 参加中の卓があれば blocked、消せたら before
  */
 export async function deleteUserData(db, guildId, userId) {
   const blocked = await activeTables(db, guildId, userId);

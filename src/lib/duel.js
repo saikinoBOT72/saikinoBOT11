@@ -118,7 +118,7 @@ export async function advance(db, duel, { state, turn = null, status = 'playing'
  *   - { reject: '理由' }                       … 書き込まずに終わる
  *   - { state, turn?, status?, extra? }        … この内容で書き込む
  *
- * @returns {Promise<{ok: true, duel: object, state: object, extra?: any} | {ok: false, reason: string}>}
+ * @returns {Promise<{ok: boolean, duel?: any, state?: any, extra?: any, reason?: string}>}
  */
 export async function mutate(db, id, apply, attempts = 6) {
   for (let attempt = 0; attempt < attempts; attempt++) {
@@ -205,6 +205,11 @@ export async function refundDuel(db, duel, reason = 'duel:refund') {
  *
  * 状態を先に書き換え（版番号つき）、取れた1つだけが払う。二重に払わない。
  * @returns {Promise<Array<{duel: object, outcome: object, refunded: boolean}>>}
+ */
+/**
+ * @param {any} db
+ * @param {number} [now]
+ * @param {(duel: any, state: any) => any} [decide]
  */
 export async function cancelExpired(db, now = Date.now(), decide = () => ({ kind: 'refund' })) {
   const rows = await db.all(

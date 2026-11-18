@@ -57,7 +57,7 @@ export function stayers(state) {
 
 /**
  * 席につく。先に席を取ってから引き落とし、払えなければ席を返す。
- * @returns {Promise<{ok: true, state: object} | {ok: false, reason: string}>}
+ * @returns {Promise<{ok: boolean, table?: any, state?: any, reason?: string}>}
  */
 export async function joinTable(db, table, userId) {
   const claimed = await mutate(

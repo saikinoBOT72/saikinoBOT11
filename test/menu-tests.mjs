@@ -14,7 +14,7 @@ import {
   src,
 } from './harness.mjs';
 
-const { screens, handleComponent, findHandler } = await import(src('menu/router.js'));
+const { handleComponent, findHandler } = await import(src('menu/router.js'));
 const { Ix } = await import(src('discord/interaction.js'));
 const { findCommand, COMMAND_DEFINITIONS } = await import(src('commands.js'));
 const eco = await import(src('lib/economy.js'));
@@ -1308,7 +1308,7 @@ await test('1人プレイ: 当たれば倍率が伸び、持ち帰れる', async
       await press('m:doors:bet:100');
       continue;
     }
-    const payload = await press('m:doors:pick:red');
+    await press('m:doors:pick:red');
     const after = await db.get('SELECT * FROM doors_games WHERE guild_id = ?1 AND user_id = ?2', GUILD, ME);
     if (after && after.steps > 0) {
       won = true;
@@ -3789,7 +3789,7 @@ await test('書き出すと貼り戻せる形で出る', async () => {
   const out = await press('m:admin:streakout', { admin: true });
   const text = screenText(out);
   assert.match(text, /アクション \| 何日目から \| 何日目まで \| 毎日のコイン/, '見出しがある');
-  assert.match(text, /筋トレ \| 7 \|  \| 100/, '「以降ずっと」は空欄で書き出す');
+  assert.match(text, /筋トレ \| 7 \| {2}\| 100/, '「以降ずっと」は空欄で書き出す');
 
   // 書き出したものをそのまま貼り戻しても、全部「上書き」になって壊れない
   const block = text.split('```')[1].split('\n').filter((line) => line && !line.startsWith('アクション |')).join('\n');
@@ -4299,6 +4299,8 @@ const looksLikeEmoji = (value) => {
   if (/^<a?:\w+:\d+>$/.test(value)) return true; // サーバー独自の絵文字
   const chars = [...value];
   if (!/\p{Emoji}/u.test(chars[0])) return false;
+  // 1文字ずつ調べるので、文字クラスに結合文字を入れても取り違えない
+  // eslint-disable-next-line no-misleading-character-class
   return chars.every((char) => /[\p{Emoji}\p{Emoji_Modifier}\uFE0F\u200D\u20E3]/u.test(char));
 };
 

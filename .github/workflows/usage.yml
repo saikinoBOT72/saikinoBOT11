@@ -18,20 +18,24 @@ on:
         required: false
         default: '3'
 
+permissions:
+  contents: read
+
 jobs:
   usage:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
 
       - name: 使用量を調べる
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DAYS_INPUT: ${{ inputs.days }}
         run: |
           set -o pipefail
           # 結果は実行ページの上にも出す（ログを開かなくても読めるように）
@@ -40,7 +44,9 @@ jobs:
             echo ''
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          node scripts/usage.mjs "${{ inputs.days }}" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          DAYS="${DAYS_INPUT}"
+          case "$DAYS" in ''|*[!0-9]*) DAYS=3 ;; esac
+          node scripts/usage.mjs "$DAYS" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
           STATUS=$?
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           exit $STATUS

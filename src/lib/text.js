@@ -16,6 +16,8 @@
  * 幅ゼロの文字・向きを変える制御文字・改行以外の制御文字。
  * 絵文字をつなぐ U+200D（👨‍👩‍👧 など）と、絵文字の見た目を選ぶ U+FE0F は残す。
  */
+// 見えない文字そのものを探すための正規表現なので、制御文字や結合文字の検査は外す
+// eslint-disable-next-line no-control-regex, no-misleading-character-class
 const INVISIBLE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180E\u200B\u200C\u200E\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0E\uFEFF\uFFA0]/g;
 
 /** 見た目のリンク `[見える文字](URL)` を「見える文字（URL）」に直す。 */
@@ -63,6 +65,7 @@ export function realMoneyWord(text) {
     .normalize('NFKC')
     .replace(/[\s　]/g, '')
     .toLowerCase();
+  /** @type {Array<[RegExp, string]>} */
   const patterns = [
     [/\d[\d,]*円/, '「〇〇円」'],
     [/現金|換金|キャッシュバック|送金して|振込|振り込/, '現金'],

@@ -138,7 +138,12 @@ export function amountRows(prefix, balance, { maxBet = 0, extra = [], customId }
   return [row(...buttons), row(button(custom, '金額を入力', { emoji: '⌨️' }), ...extra)];
 }
 
-/** 入力フォームの数値を読む。読めなければ {error} を返す。 */
+/**
+ * 入力フォームの数値を読む。読めなければ {error} を返す。
+ * @param {any} ix
+ * @param {string} field
+ * @param {{min?: number, max?: number, fallback?: number|null}} [options]
+ */
 export function readInt(ix, field, { min = 0, max = Number.MAX_SAFE_INTEGER, fallback = null } = {}) {
   const raw = ix.field(field).trim();
   if (raw === '') return fallback;
@@ -151,6 +156,10 @@ export function readInt(ix, field, { min = 0, max = Number.MAX_SAFE_INTEGER, fal
   return value;
 }
 
+/**
+ * @param {any} value
+ * @returns {value is {error: string}}
+ */
 export function isError(value) {
   return typeof value === 'object' && value !== null && 'error' in value;
 }
@@ -159,6 +168,9 @@ export function isError(value) {
  * 入力フォームの任意テキスト（空欄なら null）。
  * 偽リンク・見えない文字・@everyone をここで整える（lib/text.js）。
  * 名前のように1行で使うものは { line: true } を付ける。
+ * @param {any} ix
+ * @param {string} field
+ * @param {{line?: boolean, max?: number}} [options]
  */
 export function readText(ix, field, { line = false, max } = {}) {
   const raw = ix.field(field);
@@ -181,11 +193,14 @@ export function readText(ix, field, { line = false, max } = {}) {
  *   4. 賭け金・収支・所持金（fields）
  *
  * @param {object} options
- * @param {string} options.art     絵文字だけの行。ここに文字を混ぜない
+ * @param {string} [options.art]   絵文字だけの行。ここに文字を混ぜない
  * @param {string} options.verdict 結果のひとこと。いちばん先に読ませたい言葉
  * @param {number} options.color
  * @param {string} [options.detail] 説明。無くてもよい
  * @param {object[]} [options.fields]
+ * @param {object} [options.footer]
+ * @param {object} [options.author]
+ * @param {string} [options.thumbnail]
  */
 export function resultEmbed({ art, verdict, color, detail, fields, footer, author, thumbnail }) {
   return {

@@ -935,7 +935,7 @@ await test('引き分けなら預かった額がそのまま返る', async () =>
 });
 
 await test('決着は先に取った1つだけ、時間切れは振らなかった人の負け', async () => {
-  const match = await chinchiro.createMatch(db, {
+  await chinchiro.createMatch(db, {
     id: 'cc4', guildId: G, channelId: 'c', challengerId: 'ccE', opponentId: 'ccF', bet: 100,
   });
   assert.ok(['challenger', 'opponent'].includes(await chinchiro.markPlaying(db, 'cc4')), '先攻が決まる');
@@ -1091,7 +1091,6 @@ await test('賭けた額に比例して山分けし、コインの総量は変�
   assert.equal(b, 800 + 467, '端数は一番多く賭けた人に寄せる');
   assert.equal(await eco.getBalance(db, G, 'c'), 900, '外れた人は戻らない');
 
-  const totalAfter = ['a', 'b', 'c', 'd'].reduce((sum, name) => sum + 0, 0);
   const balances = await Promise.all(['a', 'b', 'c', 'd'].map((name) => eco.getBalance(db, G, name)));
   assert.equal(balances.reduce((sum, value) => sum + value, 0), totalBefore + 700, 'コインは増えも減りもしない');
 });
@@ -1800,7 +1799,7 @@ await test('払えなければ席は空いたまま', async () => {
 });
 
 await test('配ると全員2枚、ディーラーも2枚', async () => {
-  const table = await makeTable('bjC');
+  await makeTable('bjC');
   for (const name of ['h1', 'p2']) {
     await eco.setBalance(db, BG, name, 1000, 'test');
     await bjTable.joinTable(db, await bjTable.getTable(db, 'bjC'), name);
@@ -1841,7 +1840,7 @@ await test('ディーラーは全員バーストなら引かない', () => {
 });
 
 await test('精算は一度だけ、勝った人にだけ払う', async () => {
-  const table = await makeTable('bjD');
+  await makeTable('bjD');
   for (const name of ['w1', 'l1']) {
     await eco.setBalance(db, BG, name, 1000, 'test');
     await bjTable.joinTable(db, await bjTable.getTable(db, 'bjD'), name);
@@ -1869,7 +1868,7 @@ await test('精算は一度だけ、勝った人にだけ払う', async () => {
 });
 
 await test('ダブルダウンは賭け金2倍で精算される', async () => {
-  const table = await makeTable('bjE');
+  await makeTable('bjE');
   await eco.setBalance(db, BG, 'd1', 1000, 'test');
   await bjTable.joinTable(db, await bjTable.getTable(db, 'bjE'), 'd1');
   await db.run("UPDATE blackjack_tables SET status = 'playing' WHERE id = 'bjE'");
@@ -1885,7 +1884,7 @@ await test('ダブルダウンは賭け金2倍で精算される', async () => {
 });
 
 await test('時間切れの卓を拾って返金できる', async () => {
-  const table = await makeTable('bjF');
+  await makeTable('bjF');
   await eco.setBalance(db, BG, 'r1', 1000, 'test');
   await bjTable.joinTable(db, await bjTable.getTable(db, 'bjF'), 'r1');
   await db.run('UPDATE blackjack_tables SET expires_at = ?2 WHERE id = ?1', 'bjF', Date.now() - 1000);

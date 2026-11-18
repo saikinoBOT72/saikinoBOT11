@@ -492,7 +492,7 @@ async function afterBetStep(ix, ctx, table, settings, em, content) {
 /* ------------------------------------------------------------------ レイズの提案 */
 
 /** 「好きな額」の入力フォーム。 */
-async function handleRaiseForm(ix, ctx, table, settings) {
+async function handleRaiseForm(ix, ctx, table, _settings) {
   const blocked = raiseBlocked(stateOf(table), ix.userId);
   if (blocked) return reply({ content: blocked });
 
@@ -536,6 +536,7 @@ function raiseBlocked(state, userId) {
  * ここを超えなければ、承認したい人が払えなくて詰まることがない。
  */
 async function capFor(ctx, table, state) {
+  /** @type {Record<string, number>} */
   const balances = {};
   for (const player of stayers(state)) {
     balances[player.userId] = await getBalance(ctx.db, table.guild_id, player.userId);
@@ -648,7 +649,7 @@ async function advanceIfReady(ctx, id, settings, em) {
 }
 
 /** 公開の卓を、いまの状態で描き直す。 */
-async function refreshBoard(ctx, table, settings, em) {
+async function refreshBoard(ctx, table, settings, _em) {
   if (!table?.message_id) return;
   const state = stateOf(table);
   if (state.phase === 'done') return; // 結果は advanceIfReady が出す
@@ -666,7 +667,7 @@ function lobbyPayload(...args) {
   return stampDeadline(payload, args[0]?.expires_at, noteFor(args[0]));
 }
 
-function lobbyPayloadBody(table, state, settings) {
+function lobbyPayloadBody(table, state, _settings) {
   const seats = state.players.map((player) => `　<@${player.userId}>`).join('\n') || '　（まだ誰もいません）';
   return {
     content: '',

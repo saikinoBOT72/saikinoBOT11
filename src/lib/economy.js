@@ -120,6 +120,9 @@ export async function withdraw(db, guildId, userId, amount, reason, detail = nul
  *
  * 「賭け金を引く」と「当たりを足す」を別々にやると、あいだで処理が落ちたときに
  * 賭け金だけが消える。結果は先に決めておき、出入りを1回の処理で済ませる。
+ * @param {any} db
+ * @param {string} guildId
+ * @param {string} userId
  * @param {{bet: number, payout: number, betReason: string, winReason: string, detail?: string|null}} wager
  * @returns {Promise<{ok: boolean, balance: number}>} 残高不足なら ok が false（何も動かない）
  */

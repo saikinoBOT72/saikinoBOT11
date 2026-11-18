@@ -80,6 +80,7 @@ export function compare(challengerHand, opponentHand) {
   if (opponentHifumi) return { winner: 'challenger', multiplier: 2, reason: 'ヒフミは2倍払い' };
 
   const decide = (challengerWins, reason) => {
+    /** @type {'challenger'|'opponent'} */
     const winner = challengerWins ? 'challenger' : 'opponent';
     const hand = challengerWins ? challengerHand : opponentHand;
     return { winner, multiplier: hand.multiplier, reason };

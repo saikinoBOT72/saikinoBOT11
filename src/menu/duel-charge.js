@@ -259,7 +259,7 @@ function resultPayload(duel, entry, state, settings, winner, pot) {
   };
 }
 
-function drawPayload(duel, settings) {
+function drawPayload(_duel, _settings) {
   return {
     content: '',
     embeds: [

@@ -17,7 +17,7 @@ import { claimOpenChallenge, isOpenChallenge, withdrawOpenChallenge } from '../l
  * @param {'accept'|'decline'} options.action
  * @param {number} options.need 受けるのに要る額（預かる額）
  * @param {(text: string) => object} options.cancelled 流れたときの embed
- * @returns {Promise<{match: object} | {response: Response}>}
+ * @returns {Promise<{match?: any, response?: Response}>} 進めてよければ match、止めるなら response
  */
 export async function resolveInvite(ix, ctx, { table, match, action, need, cancelled }) {
   if (!isOpenChallenge(match.opponent_id)) {

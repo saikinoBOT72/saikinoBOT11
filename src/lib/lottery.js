@@ -40,7 +40,7 @@ export function formatNumber(number) {
 
 /**
  * 入力を数字に直す。全角も受け取り、3桁になるまでゼロ埋めして読む。
- * @returns {{ok: true, number: number} | {ok: false, message: string}}
+ * @returns {{ok: boolean, number?: number, message?: string}}
  */
 export function parseNumber(input) {
   const normalized = (input ?? '')
@@ -150,6 +150,11 @@ export async function setChannel(db, guildId, channelId) {
  * 持ち越しと元金を書き換える（管理者用）。
  * undefined を渡した項目は触らない。
  */
+/**
+ * @param {any} db
+ * @param {string} guildId
+ * @param {{carryover?: number, seedPool?: number}} [pool]
+ */
 export async function setPool(db, guildId, { carryover, seedPool } = {}) {
   await getLottery(db, guildId);
   if (Number.isInteger(carryover)) {
@@ -204,7 +209,7 @@ export async function poolOf(db, guildId, drawKey) {
  * 券を1枚買う。
  * 先に席（数字）を取ってから引き落とし、払えなければ席を返す。
  * こうすると「取られたのに買えていない」も「二重に買える」も起きない。
- * @returns {Promise<{ok: true} | {ok: false, reason: 'taken'|'limit'|'insufficient'|'range'}>}
+ * @returns {Promise<{ok: boolean, reason?: 'taken'|'limit'|'insufficient'|'range'}>}
  */
 export async function buyTicket(db, guildId, drawKey, userId, number) {
   if (!Number.isInteger(number) || number < 0 || number > MAX_NUMBER) return { ok: false, reason: 'range' };

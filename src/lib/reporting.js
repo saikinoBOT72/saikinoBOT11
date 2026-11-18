@@ -68,8 +68,10 @@ export function gateMessage(gate, activity) {
 /**
  * 報告を確定してコインを渡す。
  * あわせて連続日数を進め、連日ボーナスと称号の獲得も処理する。
- * @returns {Promise<{ok: true, balance: number, count: number, streak: object,
- *   streakBonus: {days: number, reward: number}|null, unlocked: object[]} | {ok: false, message: string}>}
+ * ok が false なら message に理由。true なら残りが入る。
+ * @returns {Promise<{ok: boolean, message?: string, logId?: number|null, balance?: number, count?: number,
+ *   streak?: any, streakBonus?: {days: number, reward: number}|null, unlocked?: any[], title?: any,
+ *   week?: boolean[], total?: number, nextBonus?: any}>}
  */
 export async function attemptReport(db, { guildId, userId, activity, calendar, note = null }) {
   const gate = await canReport(db, guildId, userId, activity, calendar);
@@ -193,7 +195,7 @@ export async function rememberPost(db, logId, channelId, messageId) {
  * 【同時押し】最初の文で「取り消し中」の印を付ける（コインが足りているときだけ）。
  * 残りの文はすべて「印が付いている」ことを条件にし、最後に記録ごと消す。
  * 2回押されても、印を付けられるのは1回だけ。
- * @returns {Promise<{ok: true, log: object, total: number} | {ok: false, message: string}>}
+ * @returns {Promise<{ok: boolean, log?: any, total?: number, message?: string}>}
  */
 export async function undoReport(db, guildId, userId, logId, now = Date.now()) {
   const log = await db.get(
@@ -261,7 +263,9 @@ export async function undoReport(db, guildId, userId, logId, now = Date.now()) {
 }
 
 /** チャンネルに流す報告の見た目。 */
+/** @param {{user: any, displayName?: string, avatarUrl?: string, activity: any, result: any, settings: any, note?: string}} parts */
 export function reportEmbed({ user, displayName, avatarUrl, activity, result, settings, note }) {
+  /** @type {Array<{name: string, value: string, inline?: boolean}>} */
   const fields = [{ name: '所持金', value: coins(result.balance, settings), inline: true }];
   if (result.streak?.current > 0) {
     fields.push({ name: `${activity.name} の連続`, value: `🔥 **${result.streak.current}** 日`, inline: true });

@@ -48,6 +48,7 @@ const COLOR = 0x1abc9c;
  *
  * solo なら人を待たずにその場で配る。投稿されるメッセージが最初から
  * 「あなたの番」の状態になるので、押すのはヒット／スタンドだけになる。
+ * @returns {Promise<{ok: boolean, reason?: string, message?: any, payload?: any, after?: any, privately?: boolean}>}
  */
 export async function openTable(ctx, { guildId, channelId, hostId, bet, settings, solo = false }) {
   const id = crypto.randomUUID();
