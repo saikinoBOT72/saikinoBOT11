@@ -65,7 +65,12 @@ export function groupEntries(rows) {
 export function groupLine(group) {
   const signed = (n) => `${n >= 0 ? '+' : ''}${n.toLocaleString('ja-JP')}`;
   const time = `<t:${Math.floor(group.created_at / 1000)}:t>`;
-  if (group.rows.length === 1) return `${time}　\`${signed(group.net)}\`　${reasonLabel(group.rows[0])}`;
+  if (group.rows.length === 1) {
+    const row = group.rows[0];
+    // 古い履歴は月ごとにまとめてある（maintenance.js）。何件ぶんかを添える
+    const label = row.compacted ? `${reasonLabel({ reason: row.reason })}（${row.detail}）` : reasonLabel(row);
+    return `${time}　\`${signed(group.net)}\`　${label}`;
+  }
   const parts = [...group.rows].reverse().map((row) => signed(row.amount)).join(' → ');
   const name = reasonLabel({ reason: group.game }) || group.game;
   return `${time}　\`${signed(group.net)}\`　${name}（${parts}）`;

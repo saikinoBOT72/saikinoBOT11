@@ -5,6 +5,7 @@
  * ひとつが失敗しても残りは動かしたいので、runScheduled で1件ずつ囲ってある。
  */
 import { cancelEmbed } from './menu/rps-challenge.js';
+import { claimDaily, compactLedger, pruneFinished } from './lib/maintenance.js';
 import { tidyScratchCards } from './menu/scratch.js';
 import { embedToV2 } from './discord/components-v2.js';
 import { ANYONE } from './lib/open-challenge.js';
@@ -65,12 +66,20 @@ export const STEPS = [
   foldFinished,
   announceNewVersion,
   nudgeIdlePlayers,
-  tidyScratch,
+  dailyMaintenance,
 ];
 
-/** 1日たったスクラッチのカードを片付ける（結果は買った時点で精算済み）。 */
-export async function tidyScratch(ctx) {
-  await tidyScratchCards(ctx.db);
+/**
+ * 1日1回のデータベースの片付け（古い履歴をまとめ、終わった勝負を消す）。
+ * 毎分呼ばれるが、日付が変わって最初の1回だけ動く。
+ */
+export async function dailyMaintenance(ctx, now = Date.now()) {
+  if (!(await claimDaily(ctx.db, 'maintenance', ctx.calendar, now))) return;
+  const merged = await compactLedger(ctx.db, now);
+  await pruneFinished(ctx.db, now);
+  // 1日たったスクラッチのカード（結果は買った時点で精算済み）
+  await tidyScratchCards(ctx.db, now);
+  if (merged > 0) console.log(`古い履歴 ${merged} 行をまとめました`);
 }
 
 /** その勝負で、いま待たせている人。 */

@@ -62,7 +62,7 @@ export async function statsOf(db, guildId, userId) {
     ),
     // ゲームごとの収支は、コインの履歴から数える（1人用のゲームも入る）
     db.all(
-      `SELECT reason, SUM(amount) AS net, SUM(CASE WHEN amount < 0 THEN 1 ELSE 0 END) AS plays
+      `SELECT reason, SUM(amount) AS net, SUM(CASE WHEN amount < 0 THEN entries ELSE 0 END) AS plays
          FROM ledger WHERE guild_id = ?1 AND user_id = ?2 AND reason LIKE '%:%' GROUP BY reason`,
       guildId,
       userId,

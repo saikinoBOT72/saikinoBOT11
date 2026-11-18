@@ -289,7 +289,7 @@ async function collectStats(db, { guildId, userId, calendar }, pending) {
   if (types.has('games_played')) {
     // 賭けた・参加費を払った回数（ショップ・送金・管理者の調整・報告の取り消しは数えない）
     const row = await db.get(
-      `SELECT COUNT(*) AS n FROM ledger
+      `SELECT COALESCE(SUM(entries), 0) AS n FROM ledger
         WHERE guild_id = ?1 AND user_id = ?2 AND amount < 0 AND reason LIKE '%:%'
           AND reason NOT LIKE 'shop:%' AND reason NOT LIKE 'admin:%' AND reason NOT LIKE 'report:%'
           AND reason NOT LIKE 'tip:%' AND reason NOT LIKE 'poll:bonus%'`,

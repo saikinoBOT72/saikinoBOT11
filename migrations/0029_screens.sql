@@ -56,3 +56,9 @@ CREATE TABLE IF NOT EXISTS scratch_cards (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_scratch_created ON scratch_cards (created_at);
+
+-- 【データベースの節約】古い履歴は「月ごと・理由ごと」に1行へまとめる。
+-- entries は「何件ぶんをまとめた行か」（ゲームで遊んだ回数などを数えるときに使う）。
+-- compacted は「まとめた行か」の印。
+ALTER TABLE ledger ADD COLUMN entries INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE ledger ADD COLUMN compacted INTEGER NOT NULL DEFAULT 0;

@@ -222,6 +222,72 @@ await test('同時に全額を2回送金しても、マイナスにならない'
   await assertLedgerMatches(ctx.db, '同時送金');
 });
 
+await test('古い履歴をまとめても、残高・累計・遊んだ回数は変わらない（2回やっても同じ）', async () => {
+  const ctx = fresh();
+  const db = ctx.db;
+  const maintenance = await import(src('lib/maintenance.js'));
+  const DAY = 24 * 3600 * 1000;
+  const now = Date.now();
+  const old = now - (maintenance.LEDGER_KEEP_DAYS + 40) * DAY;
+  await eco.ensureAccount(db, GUILD, ME);
+  // 古い時期にスロットを20回・報告を10回したことにする（残高も同じだけ動かす）
+  let moved = 0;
+  for (let i = 0; i < 20; i++) {
+    await db.run("INSERT INTO ledger (guild_id, user_id, amount, reason, detail, created_at) VALUES (?1, ?2, -10, 'slot:bet', 'x0', ?3)", GUILD, ME, old + i * 1000);
+    moved -= 10;
+  }
+  for (let i = 0; i < 10; i++) {
+    await db.run("INSERT INTO ledger (guild_id, user_id, amount, reason, detail, created_at) VALUES (?1, ?2, 30, 'report', '筋トレ', ?3)", GUILD, ME, old + i * 1000);
+    moved += 30;
+  }
+  await db.run('UPDATE balances SET balance = balance + ?3 WHERE guild_id = ?1 AND user_id = ?2', GUILD, ME, moved);
+  await eco.deposit(db, GUILD, ME, 5, 'report', '最近');
+
+  const before = {
+    balance: await eco.getBalance(db, GUILD, ME),
+    totals: await eco.totals(db, GUILD, ME),
+    rows: (await db.get('SELECT COUNT(*) AS n FROM ledger WHERE user_id = ?1', ME)).n,
+  };
+  const achievements = await import(src('lib/achievements.js'));
+  await achievements.createAchievement(db, GUILD, { name: '常連', condition_type: 'games_played', threshold: 20 });
+
+  const merged = await maintenance.compactLedger(db, now);
+  assert.equal(merged, 30, '古い30行をまとめた');
+  const rows = (await db.get('SELECT COUNT(*) AS n FROM ledger WHERE user_id = ?1', ME)).n;
+  assert.ok(rows < before.rows, `行が減る（${before.rows} → ${rows}）`);
+  assert.equal(await eco.getBalance(db, GUILD, ME), before.balance);
+  assert.deepEqual(await eco.totals(db, GUILD, ME), before.totals, '累計獲得・累計使用は同じ');
+  await assertLedgerMatches(db, 'まとめたあと');
+  const recent = await db.get("SELECT * FROM ledger WHERE user_id = ?1 AND detail = '最近'", ME);
+  assert.equal(recent.compacted, 0, '新しい行はそのまま');
+
+  const unlocked = await achievements.evaluate(db, { guildId: GUILD, userId: ME, calendar: ctx.calendar });
+  assert.ok(unlocked.some((a) => a.name === '常連'), 'まとめても「遊んだ20回」は数えられる');
+
+  assert.equal(await maintenance.compactLedger(db, now), 0, '2回目は何もしない');
+  await assertLedgerMatches(db, '2回目のあと');
+
+  assert.equal(await maintenance.claimDaily(db, 'maintenance', ctx.calendar, now), true);
+  assert.equal(await maintenance.claimDaily(db, 'maintenance', ctx.calendar, now), false, '同じ日は1回だけ');
+});
+
+await test('30日より前に終わった勝負は片付け、進行中のものは残す', async () => {
+  const ctx = fresh();
+  const db = ctx.db;
+  const maintenance = await import(src('lib/maintenance.js'));
+  const old = Date.now() - 40 * 24 * 3600 * 1000;
+  for (const [id, status, created] of [['old-done', 'done', old], ['old-open', 'playing', old], ['new-done', 'done', Date.now()]]) {
+    await db.run(
+      `INSERT INTO rps_matches (id, guild_id, channel_id, challenger_id, opponent_id, bet, status, round, expires_at, created_at)
+       VALUES (?1, ?2, 'c', 'a', 'b', 0, ?3, 1, ?4, ?4)`,
+      id, GUILD, status, created,
+    );
+  }
+  await maintenance.pruneFinished(db);
+  const left = (await db.all('SELECT id FROM rps_matches ORDER BY id')).map((row) => row.id);
+  assert.deepEqual(left, ['new-done', 'old-open']);
+});
+
 section('[乱数]');
 
 await test('randomInt はどの数もだいたい同じ回数出る', () => {
