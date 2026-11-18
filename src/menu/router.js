@@ -87,7 +87,8 @@ export const SLOW_ACTIONS = new Set([
 export async function handleComponent(ix, ctx) {
   const found = findHandler(ix.customId);
   if (!found) {
-    console.warn(`未知のメニュー操作: ${ix.customId}`);
+    // 引数（相手のユーザーIDなど）はログに残さない。画面と操作の名前だけ
+    console.warn(`未知のメニュー操作: ${ix.customId.split(':').slice(0, 3).join(':')}`);
     return home.open(ix, [], ctx, 'その操作は使えなくなっています。メニューを開き直しました。');
   }
 
