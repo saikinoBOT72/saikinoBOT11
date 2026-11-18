@@ -119,6 +119,7 @@ export async function deleteUserData(db, guildId, userId) {
     ['DELETE FROM profiles WHERE guild_id = ?1 AND user_id = ?2', guildId, userId],
     ['DELETE FROM omikuji_draws WHERE guild_id = ?1 AND user_id = ?2', guildId, userId],
     ['DELETE FROM seen_rules WHERE guild_id = ?1 AND user_id = ?2', guildId, userId],
+    ['DELETE FROM scratch_cards WHERE guild_id = ?1 AND user_id = ?2', guildId, userId],
     ['DELETE FROM yacht_records WHERE guild_id = ?1 AND user_id = ?2', guildId, userId],
     ['DELETE FROM highlow_games WHERE guild_id = ?1 AND user_id = ?2', guildId, userId],
     ['DELETE FROM doors_games WHERE guild_id = ?1 AND user_id = ?2', guildId, userId],

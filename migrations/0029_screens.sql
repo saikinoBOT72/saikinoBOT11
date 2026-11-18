@@ -42,3 +42,17 @@ CREATE INDEX IF NOT EXISTS idx_purchase_pending ON purchases (guild_id, seller_i
 -- 【新しい見た目】1 なら、Discord の新しい部品を使う（入力フォームの中の選択リスト・Components V2 の発表）。
 -- 古い Discord アプリでは表示できないことがあるので、はじめはオフ。
 ALTER TABLE guild_settings ADD COLUMN modern_ui INTEGER NOT NULL DEFAULT 0;
+
+-- 【スクラッチくじ】買った時点で当たり外れも精算も済んでいる。ここに置くのは「削って見せる」ための中身だけ。
+-- 1日たったものは定期処理で消す。
+CREATE TABLE IF NOT EXISTS scratch_cards (
+  id         TEXT    PRIMARY KEY,
+  guild_id   TEXT    NOT NULL,
+  user_id    TEXT    NOT NULL,
+  bet        INTEGER NOT NULL,
+  payout     INTEGER NOT NULL,
+  cells      TEXT    NOT NULL,             -- 9マスの絵柄（SYMBOLS の番号を JSON で）
+  revealed   INTEGER NOT NULL DEFAULT 0,   -- 削ったマス（ビット）
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scratch_created ON scratch_cards (created_at);

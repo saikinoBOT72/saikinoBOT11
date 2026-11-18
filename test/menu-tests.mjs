@@ -984,6 +984,84 @@ await test('締切を空欄にすると出題者が締め切るまで受け付�
 
 section('[新しいゲーム]');
 
+await test('「あそぶ」にビンゴ・スクラッチ・ルーレットが出て、入口のボタンが生きている', async () => {
+  const games = await press('m:games:open:solo');
+  for (const key of ['bingo', 'scratch', 'wheel']) {
+    assert.ok(customIds(games).includes(`m:${key}:open`), `${key} の入口`);
+    const entry = await press(`m:${key}:open`);
+    assertAllButtonsWork(entry, key);
+  }
+});
+
+await test('ビンゴは賭けた瞬間に精算し、球を引く様子を見せてから結果を出す', async () => {
+  await eco.setBalance(db, GUILD, ME, 5000, 'test');
+  ctx.animated.length = 0;
+  const first = await press('m:bingo:go:100');
+  assert.match(firstEmbed(first).title, /抽選中/);
+  const last = finalFrame(ctx);
+  const fields = Object.fromEntries(last.embeds[0].fields.map((f) => [f.name, f.value]));
+  const net = Number(fields['収支'].replace(/[+,]/g, ''));
+  assert.equal(await eco.getBalance(db, GUILD, ME), 5000 + net, '表示どおりに精算されている');
+  assert.match(last.embeds[0].description, /```[\s\S]*B {4}I {4}N {4}G {4}O[\s\S]*```/, 'カードを表で見せる');
+  assertVerdictFirst({ data: last }, 'ビンゴ結果');
+  assertAllButtonsWork({ data: last }, 'ビンゴ結果');
+});
+
+await test('スクラッチは1マスずつ削れて、全部削ると結果が出る（お金は買った時点で動く）', async () => {
+  await eco.setBalance(db, GUILD, ME, 5000, 'test');
+  const bought = await press('m:scratch:buy:100');
+  const card = await db.get('SELECT * FROM scratch_cards WHERE user_id = ?1 ORDER BY created_at DESC', ME);
+  assert.equal(await eco.getBalance(db, GUILD, ME), 5000 - 100 + card.payout, '買った時点で精算済み');
+  const digIds = customIds(bought).filter((customId) => customId.startsWith(`m:scratch:dig:${card.id}:`));
+  assert.equal(digIds.length, 9);
+
+  const one = await press(`m:scratch:dig:${card.id}:4`);
+  assert.match(firstEmbed(one).description, /残り 8 マス/);
+  const twice = await press(`m:scratch:dig:${card.id}:4`);
+  assert.match(firstEmbed(twice).description, /残り 8 マス/, '同じマスを2回押しても1マス');
+  assert.equal(await eco.getBalance(db, GUILD, ME), 5000 - 100 + card.payout, '削ってもお金は動かない');
+
+  const done = await press(`m:scratch:all:${card.id}`);
+  assert.match(firstEmbed(done).title, card.payout > 0 ? /3つ/ : /はずれ/);
+  assertAllButtonsWork(done, 'スクラッチ結果');
+
+  // ほかの人のカードは削れない（自分のカードとして見つからない）
+  const stranger = await press(`m:scratch:dig:${card.id}:0`, { userId: OTHER });
+  assert.match(screenText(stranger), /見つかりませんでした/);
+  const outOfRange = await press(`m:scratch:dig:${card.id}:9`);
+  assert.match(screenText(outOfRange), /そのマスはありません/);
+});
+
+await test('ルーレットは張り方→金額→回すの順で、数字1つはフォームで決める', async () => {
+  await eco.setBalance(db, GUILD, ME, 5000, 'test');
+  const kind = await press('m:wheel:kind:red');
+  assert.ok(customIds(kind).includes('m:wheel:go:red:100'));
+  assertAllButtonsWork(kind, 'ルーレットの金額');
+
+  ctx.animated.length = 0;
+  await press('m:wheel:go:red:100');
+  const last = finalFrame(ctx);
+  const fields = Object.fromEntries(last.embeds[0].fields.map((f) => [f.name, f.value]));
+  const net = Number(fields['収支'].replace(/[+,]/g, ''));
+  assert.ok(net === 100 || net === -100);
+  assert.equal(await eco.getBalance(db, GUILD, ME), 5000 + net);
+  assertBigArt({ data: last }, 'ルーレット結果');
+  assertAllButtonsWork({ data: last }, 'ルーレット結果');
+
+  const form = await press('m:wheel:number');
+  assert.equal(form.type, 9);
+  const before = await eco.getBalance(db, GUILD, ME);
+  ctx.animated.length = 0;
+  await press('m:wheel:numgo', { type: 5, fields: { pick: '17', amount: '10' } });
+  const after = await eco.getBalance(db, GUILD, ME);
+  assert.ok(after === before - 10 || after === before + 350, `数字1つは ×36（${before} → ${after}）`);
+  const bad = await press('m:wheel:numgo', { type: 5, fields: { pick: '37', amount: '10' } });
+  assert.match(screenText(bad), /0 〜 36/);
+  const forged = await press('m:wheel:go:num:10:99');
+  assert.match(screenText(forged), /0〜36/, '細工したボタンでも範囲外には張れない');
+});
+
+
 const duelBoard = await import(src('menu/duel-board.js'));
 const duelLib = await import(src('lib/duel.js'));
 

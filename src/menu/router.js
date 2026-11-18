@@ -12,6 +12,9 @@ import * as lottery from './lottery.js';
 import * as poll from './poll.js';
 import * as omikuji from './omikuji.js';
 import * as profile from './profile.js';
+import * as bingo from './bingo.js';
+import * as scratch from './scratch.js';
+import * as wheel from './wheel.js';
 import { MENU_PREFIX } from './common.js';
 import { deferUpdate } from '../discord/respond.js';
 import { gated, gatedAll } from './games.js';
@@ -39,6 +42,9 @@ export const screens = {
   titles: titles.actions,
   profile: profile.actions,
   hl: gated('hl', foldRules('hl', highlow.actions)),
+  bingo: gated('bingo', foldRules('bingo', bingo.actions)),
+  scratch: gated('scratch', foldRules('scratch', scratch.actions)),
+  wheel: gated('wheel', foldRules('wheel', wheel.actions)),
   poll: gated('poll', poll.actions),
   doors: doors.actions,
   lot: gated('lot', lottery.actions),

@@ -2009,6 +2009,87 @@ await test('発表チャンネルを決めるまで抽選しない', async () =>
   assert.equal((await lottery.activeLotteries(db)).some((row) => row.guild_id === 'lot-quiet'), false, '停止中は引かない');
 });
 
+section('[ビンゴ・スクラッチ・ルーレット]');
+
+const bingoLib = await import(src('lib/bingo.js'));
+const scratchLib = await import(src('lib/scratch.js'));
+const wheelLib = await import(src('lib/wheel.js'));
+
+await test('ビンゴのカードは列ごとの数字の範囲に収まり、重ならない', () => {
+  for (let round = 0; round < 200; round++) {
+    const card = bingoLib.newCard();
+    for (let column = 0; column < 5; column++) {
+      for (let row = 0; row < 5; row++) {
+        const value = card[column][row];
+        if (column === 2 && row === 2) {
+          assert.equal(value, bingoLib.FREE);
+          continue;
+        }
+        assert.ok(value >= column * 15 + 1 && value <= column * 15 + 15, `${value} は ${'BINGO'[column]} の範囲外`);
+      }
+    }
+    const numbers = card.flat().filter((value) => value !== bingoLib.FREE);
+    assert.equal(new Set(numbers).size, 24);
+    const balls = bingoLib.drawBalls();
+    assert.equal(new Set(balls).size, bingoLib.BALLS, '同じ球は2度出ない');
+  }
+});
+
+await test('ビンゴの線の数え方：全部当たれば12本、何も当たらなければ0本', () => {
+  const card = bingoLib.newCard();
+  assert.equal(bingoLib.scoreCard(card, card.flat()).lines, 12);
+  assert.equal(bingoLib.scoreCard(card, []).lines, 0);
+  const firstRow = [0, 1, 2, 3, 4].map((column) => card[column][0]);
+  assert.equal(bingoLib.scoreCard(card, firstRow).lines, 1);
+  const middleRowButOne = [0, 1, 3].map((column) => card[column][2]);
+  assert.equal(bingoLib.scoreCard(card, middleRowButOne).reaches >= 1, true, '真ん中の空きを数えてリーチになる');
+});
+
+await test('ビンゴの還元率はおよそ9割（2万回）', () => {
+  let paid = 0;
+  const N = 20000;
+  for (let i = 0; i < N; i++) paid += bingoLib.playBingo().multiplier;
+  const rtp = paid / N;
+  assert.ok(rtp > 0.8 && rtp < 1.0, `還元率 ${rtp.toFixed(3)}`);
+});
+
+await test('スクラッチ：当たりのカードは3つそろいが1組だけ、外れのカードはどの絵柄も2つまで', () => {
+  for (let i = 0; i < 3000; i++) {
+    const ticket = scratchLib.newTicket();
+    assert.equal(ticket.cells.length, 9);
+    const counts = scratchLib.SYMBOLS.map((_, symbol) => ticket.cells.filter((cell) => cell === symbol).length);
+    if (ticket.multiplier > 0) {
+      assert.equal(counts.filter((n) => n >= 3).length, 1);
+      assert.equal(counts[ticket.symbol], 3);
+      assert.equal(scratchLib.winnerOf(ticket.cells), ticket.symbol);
+    } else {
+      assert.ok(counts.every((n) => n <= 2), `外れなのに3つある: ${ticket.cells}`);
+      assert.equal(scratchLib.winnerOf(ticket.cells), null);
+    }
+  }
+  // 確率の表どおりの還元率（90%）
+  const expected = scratchLib.TIERS.reduce((sum, tier) => sum + tier.chance * tier.multiplier, 0);
+  assert.ok(Math.abs(expected - 0.9) < 1e-9);
+  assert.equal(scratchLib.newTicket(0).multiplier, 50, 'いちばん小さい乱数は最高の当たり');
+  assert.equal(scratchLib.newTicket(0.999).multiplier, 0, '大きい乱数は外れ');
+});
+
+await test('ルーレット：どの張り方も還元率は 36/37', () => {
+  for (const kind of Object.keys(wheelLib.BETS)) {
+    let total = 0;
+    for (let number = 0; number <= 36; number++) total += wheelLib.multiplierOf(kind, number);
+    assert.equal(total, 36, `${kind}`);
+  }
+  for (const pick of [0, 17, 36]) {
+    let total = 0;
+    for (let number = 0; number <= 36; number++) total += wheelLib.multiplierOf('num', number, pick);
+    assert.equal(total, 36);
+  }
+  assert.equal(wheelLib.multiplierOf('red', 0), 0, '0 は赤ではない');
+  assert.equal(wheelLib.multiplierOf('even', 0), 0, '0 は偶数に入れない');
+  assert.equal(wheelLib.RED.size, 18);
+});
+
 section('[定期処理（1分ごと）]');
 
 const cron = await import(src('cron.js'));

@@ -39,6 +39,9 @@ export const GAMES = [
   { key: 'slot', category: 'solo', name: 'スロット', emoji: em.slot, hint: '3つ揃いで最大 x3000', style: 'PRIMARY' },
   { key: 'cf', category: 'solo', name: 'コイントス', emoji: em.coinflip, hint: '当たれば2倍', style: 'PRIMARY' },
   { key: 'hl', category: 'solo', name: 'ハイ&ロー', emoji: em.highlow, hint: '連勝で倍率上昇。降り際が勝負', style: 'PRIMARY' },
+  { key: 'bingo', category: 'solo', name: 'ビンゴ', emoji: '🎱', hint: '35個の球で何ラインそろうか。最大 ×50', style: 'PRIMARY' },
+  { key: 'scratch', category: 'solo', name: 'スクラッチ', emoji: '🎫', hint: '9マスを削って同じ絵柄3つで当たり。最大 ×50', style: 'PRIMARY' },
+  { key: 'wheel', category: 'solo', name: 'ルーレット', emoji: '🎡', hint: '赤黒・偶奇・数字に張る。数字1つなら ×36', style: 'PRIMARY' },
   {
     key: 'bj', category: 'group',
     name: 'ブラックジャック',

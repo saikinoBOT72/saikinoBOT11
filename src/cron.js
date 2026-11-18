@@ -5,6 +5,7 @@
  * ひとつが失敗しても残りは動かしたいので、runScheduled で1件ずつ囲ってある。
  */
 import { cancelEmbed } from './menu/rps-challenge.js';
+import { tidyScratchCards } from './menu/scratch.js';
 import { embedToV2 } from './discord/components-v2.js';
 import { ANYONE } from './lib/open-challenge.js';
 import { cancelExpired } from './lib/rps.js';
@@ -64,7 +65,13 @@ export const STEPS = [
   foldFinished,
   announceNewVersion,
   nudgeIdlePlayers,
+  tidyScratch,
 ];
+
+/** 1日たったスクラッチのカードを片付ける（結果は買った時点で精算済み）。 */
+export async function tidyScratch(ctx) {
+  await tidyScratchCards(ctx.db);
+}
 
 /** その勝負で、いま待たせている人。 */
 function waitingIn(kind, row) {
