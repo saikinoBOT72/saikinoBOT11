@@ -14,9 +14,11 @@ import {
   MAX_PLAYERS,
   MIN_PLAYERS,
   TURNS,
+  close,
   createTable,
   current,
   everyoneDone,
+  forfeitCurrent,
   getTable,
   hold,
   isTurn,
@@ -38,7 +40,10 @@ import { diceFaces } from '../lib/emoji.js';
 import { coins } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
+import { handleDisband, handleLeave, lobbyButtons } from './lobby.js';
 import { reply, update } from '../discord/respond.js';
+import { noteFor, stampDeadline } from './deadline.js';
+import { foldLater } from '../lib/guild-prefs.js';
 
 /** 公開メッセージのボタンは `pg:` 始まり。 */
 export const namespace = 'pg';
@@ -92,6 +97,8 @@ export async function handleComponent(ix, ctx) {
   // 出目を出す操作のときだけ絵文字を読む
   const em = await ctx.emoji();
   if (action === 'start') return handleStart(ix, ctx, table, settings, em);
+  if (action === 'leave') return handleLeave(ix, ctx, table, { mutate, lobby: (t, s) => lobbyPayload(t, s, settings), refundReason: 'pig:refund' });
+  if (action === 'disband') return handleDisband(ix, ctx, table, { close, stateOf, refundReason: 'pig:refund' });
   if (action === 'roll') return handleRoll(ix, ctx, table, settings, em);
   if (action === 'hold') return handleHold(ix, ctx, table, settings, em);
   return reply({ content: '不明な操作です。' });
@@ -188,12 +195,20 @@ async function handleHold(ix, ctx, table, settings, em) {
 /** 全員が終わった。場を配って結果を出す。 */
 async function finish(ctx, table, state, settings, em) {
   const result = await payWinners(ctx.db, table, state);
-  return update(resultPayload(table, state, result, settings, em));
+  const final = resultPayload(table, state, result, settings, em);
+  ctx.waitUntil(foldLater(ctx, table, final, '🐷 ピッグ'));
+  return update(final);
 }
 
 /* ------------------------------------------------------------------ 表示 */
 
-function lobbyPayload(table, state, settings) {
+/** 掲示に残り時間を添える（中身は lobbyPayloadBody が作る）。 */
+function lobbyPayload(...args) {
+  const payload = lobbyPayloadBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, noteFor(args[0]));
+}
+
+function lobbyPayloadBody(table, state, settings) {
   const seats = state.players.map((player) => `　<@${player.userId}>`).join('\n') || '　（まだ誰もいません）';
   return {
     content: '',
@@ -219,6 +234,7 @@ function lobbyPayload(table, state, settings) {
           style: ButtonStyle.PRIMARY,
           disabled: state.players.length < MIN_PLAYERS,
         }),
+        ...lobbyButtons('pg', table.id),
       ),
     ],
   };
@@ -232,8 +248,14 @@ function playerLine(state, player, index) {
   return `${mark}<@${player.userId}>　${turns}　**${player.score}点**`;
 }
 
+/** 掲示に残り時間を添える（中身は boardPayloadBody が作る）。 */
+function boardPayload(...args) {
+  const payload = boardPayloadBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, noteFor(args[0]));
+}
+
 /** いまの状態にあった掲示。 */
-function boardPayload(table, state, settings, em) {
+function boardPayloadBody(table, state, settings, em) {
   if (table.status === 'joining') return lobbyPayload(table, state, settings);
 
   const faces = diceFaces(em);
@@ -277,13 +299,14 @@ function boardPayload(table, state, settings, em) {
   };
 }
 
-function resultPayload(table, state, result, settings, em) {
+function resultPayload(table, state, result, settings, em, note = null) {
   const faces = diceFaces(em);
   const winners = new Set(result.winners.map((winner) => winner.userId));
   const ranked = [...state.players].sort((a, b) => b.score - a.score);
-  const lines = ranked.map(
-    (player) => `　<@${player.userId}>　**${player.score}点**${winners.has(player.userId) ? '　👑' : ''}`,
-  );
+  const lines = ranked.map((player) => {
+    const mark = player.out ? '　⏰ 脱落' : winners.has(player.userId) ? '　👑' : '';
+    return `　<@${player.userId}>　**${player.score}点**${mark}`;
+  });
 
   const share = Math.floor(result.pot / result.winners.length);
   const verdict =
@@ -298,7 +321,7 @@ function resultPayload(table, state, result, settings, em) {
       embed({
         color: 0xf1c40f,
         title: '🏆 勝負あり',
-        description: `${verdict}\n\n${lines.join('\n')}`,
+        description: `${note ? `${note}\n\n` : ''}${verdict}\n\n${lines.join('\n')}`,
         footer: { text: `参加費 ${table.bet}・1人${TURNS}ターン` },
       }),
     ],
@@ -334,10 +357,25 @@ async function handleAgain(ix, ctx, table) {
 
 /* ------------------------------------------------------------------ 時間切れ */
 
-/** 1分ごとの見回りから呼ばれる。預かったぶんを返して流す。 */
+/**
+ * 1分ごとの見回りから呼ばれる。
+ * 始まる前なら全員に返す。始まっていたら、手番のまま動かなかった人を脱落させて
+ * いまの持ち点で決着させる（負けそうな人が放置して返金を待つ、を許さないため）。
+ */
 export async function timeOut(ctx, table) {
-  await refundTable(ctx.db, table, stateOf(table));
-  await setStatus(ctx.db, table.id, 'cancelled');
+  const state = stateOf(table);
+  if (table.status === 'playing' && state.players.length >= MIN_PLAYERS) {
+    const final = forfeitCurrent(state);
+    if (!(await close(ctx.db, table, { status: 'done', state: final }))) return null;
+    const result = await payWinners(ctx.db, table, final);
+    const settings = await getSettings(ctx.db, table.guild_id);
+    const idle = current(state);
+    const note = `⏰ 時間切れ。<@${idle?.userId}> が振らなかったので脱落にしました。`;
+    return { payload: resultPayload(table, final, result, settings, await ctx.emoji(), note) };
+  }
+
+  if (!(await close(ctx.db, table, { status: 'cancelled' }))) return null;
+  await refundTable(ctx.db, table, state);
   return {
     payload: {
       content: '',

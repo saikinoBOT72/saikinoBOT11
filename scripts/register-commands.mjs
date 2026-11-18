@@ -28,6 +28,7 @@ if (!response.ok) {
 
 const registered = await response.json();
 console.log(
-  `${registered.length} 件のコマンドを登録しました（${guildId ? `サーバー ${guildId}` : 'グローバル：反映に最大1時間'}）`,
+  // サーバーIDは公開ログに出さない（このリポジトリは公開なので、Actions のログも誰でも読める）
+  `${registered.length} 件のコマンドを登録しました（${guildId ? '指定したサーバーだけ・すぐ反映' : 'グローバル：反映に最大1時間'}）`,
 );
-for (const command of registered) console.log(` - /${command.name}`);
+for (const command of registered) console.log(command.type === 2 ? ` - （右クリック）${command.name}` : ` - /${command.name}`);

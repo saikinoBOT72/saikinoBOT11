@@ -14,7 +14,7 @@ import {
   src,
 } from './harness.mjs';
 
-const { screens, handleComponent, findHandler } = await import(src('menu/router.js'));
+const { handleComponent, findHandler } = await import(src('menu/router.js'));
 const { Ix } = await import(src('discord/interaction.js'));
 const { findCommand, COMMAND_DEFINITIONS } = await import(src('commands.js'));
 const eco = await import(src('lib/economy.js'));
@@ -82,8 +82,10 @@ async function press(customId, options = {}) {
   return response.json();
 }
 
-async function runCommand(name, options = {}) {
-  const ix = new Ix(rawInteraction({ type: 2, commandName: name, fromMessage: false, ...options }));
+async function runCommand(name, { data: extra, ...options } = {}) {
+  const raw = rawInteraction({ type: 2, commandName: name, fromMessage: false, ...options });
+  if (extra) Object.assign(raw.data, extra);
+  const ix = new Ix(raw);
   const response = await findCommand(name)(ix, ctx);
   await ctx.settle();
   return response.json();
@@ -137,8 +139,34 @@ await test('/help が使い方を出す', async () => {
 });
 
 await test('登録するコマンドはサーバー内限定', () => {
-  assert.deepEqual(COMMAND_DEFINITIONS.map((c) => c.name).sort(), ['help', 'menu']);
+  const slash = COMMAND_DEFINITIONS.filter((c) => (c.type ?? 1) === 1);
+  assert.deepEqual(slash.map((c) => c.name).sort(), ['help', 'menu']);
   for (const command of COMMAND_DEFINITIONS) assert.deepEqual(command.contexts, [0]);
+  // 右クリックの項目は説明文を付けてはいけない決まり（付けると登録が失敗する）
+  const menus = COMMAND_DEFINITIONS.filter((c) => c.type === 2);
+  assert.equal(menus.length, 2);
+  for (const command of menus) {
+    assert.equal(command.description, undefined, `${command.name} に説明文がある`);
+    assert.ok([...command.name].length <= 32);
+    assert.ok(findCommand(command.name), `${command.name} の処理がある`);
+  }
+});
+
+await test('メンバーを右クリック →「プロフィールを見る」「コインを送る」', async () => {
+  const { PROFILE_COMMAND, PAY_COMMAND } = await import(src('commands.js'));
+  const context = (name, targetId, target = {}) =>
+    runCommand(name, { data: { type: 2, target_id: targetId, resolved: { users: { [targetId]: { id: targetId, username: 'u', ...target } } } } });
+
+  const profile = await context(PROFILE_COMMAND, OTHER);
+  assert.equal(profile.type, 4);
+  assert.equal(profile.data.flags, 64, '押した人にだけ見える');
+  assert.match(firstEmbed(profile).description, new RegExp(`<@${OTHER}>`));
+
+  const payForm = await context(PAY_COMMAND, OTHER);
+  assert.equal(payForm.type, 9, '金額のフォームがすぐ開く');
+  assert.equal(payForm.data.custom_id, `m:wallet:paydo:${OTHER}`);
+  assert.match(screenText(await context(PAY_COMMAND, ME)), /自分自身には送金できません/);
+  assert.match(screenText(await context(PAY_COMMAND, 'bot-1', { bot: true })), /Botには送金できません/);
 });
 
 section('[画面遷移]');
@@ -167,6 +195,27 @@ await test('主要画面のボタンがすべて生きている', async () => {
     assert.ok(payload.data, `${customId} が何も返さなかった`);
     assertAllButtonsWork(payload, customId);
   }
+});
+
+await test('ホームに「今日やること」が出て、途切れそうな連続記録を先に知らせる', async () => {
+  const cal = await import(src('lib/calendar.js'));
+  const yesterday = cal.previousDay(cal.dateKey(ctx.calendar));
+  await db.run(
+    "INSERT OR REPLACE INTO streaks (guild_id, user_id, activity, current, best, last_date) VALUES (?1, ?2, 'ホーム確認', 5, 5, ?3)",
+    GUILD,
+    ME,
+    yesterday,
+  );
+  await act.upsertActivity(db, GUILD, { name: 'ホーム確認', reward: 1, cooldown_sec: 0, daily_limit: 0 });
+  const todo = (await press('m:home:open')).data.embeds.at(-1).fields.find((field) => field.name === '📝 今日やること');
+  assert.ok(todo, '今日やることが出る');
+  assert.match(todo.value.split('\n')[0], /ホーム確認\*\* 5日連続/, '途切れそうなものが先頭');
+  assert.match(todo.value, /おみくじがまだ/);
+
+  await press('m:report:pick', { values: ['ホーム確認'] });
+  const after = (await press('m:home:open')).data.embeds.at(-1).fields.find((field) => field.name === '📝 今日やること');
+  assert.doesNotMatch(after.value, /ホーム確認/, '報告したら消える');
+  await act.removeActivity(db, GUILD, 'ホーム確認');
 });
 
 await test('未知のボタンでもメニューに戻すだけで落ちない', async () => {
@@ -199,6 +248,28 @@ await test('選ぶだけで報告が成立し、チャンネルにも投稿さ�
   assert.match(firstEmbed(payload).title, /早起き/);
 });
 
+await test('報告には7日のカレンダーが付き、押し間違いは取り消せて投稿も消える', async () => {
+  await act.upsertActivity(db, GUILD, { name: '取り消し確認', emoji: '🧪', reward: 70, cooldown_sec: 0, daily_limit: 0 });
+  const before = await eco.getBalance(db, GUILD, ME);
+  const done = await press('m:report:pick', { values: ['取り消し確認'] });
+  const posted = ctx.sent.at(-1);
+  const week = posted.payload.embeds[0].fields.find((field) => field.name === 'この7日');
+  assert.match(week.value, /^(⬜){6}🟩　1\/7 日$/, '今日だけ塗られる');
+
+  const undoId = customIds(done).find((customId) => customId.startsWith('m:report:undo:'));
+  assert.ok(undoId, '取り消しボタンがある');
+  const log = await db.get('SELECT * FROM activity_logs WHERE id = ?1', Number(undoId.split(':')[3]));
+  assert.ok(log.post_message_id, '投稿した場所を控えている');
+
+  const undone = await press(undoId);
+  assert.match(screenText(undone), /取り消しました/);
+  assert.equal(await eco.getBalance(db, GUILD, ME), before);
+  assert.deepEqual(ctx.deleted.at(-1), { channelId: log.post_channel_id, messageId: log.post_message_id }, 'チャンネルの報告も消す');
+
+  const twice = await press(undoId);
+  assert.match(screenText(twice), /もう取り消してある/);
+});
+
 await test('1日の上限に達すると理由が画面に出て残高が動かない', async () => {
   const before = await eco.getBalance(db, GUILD, ME);
   const payload = await press('m:report:pick', { values: ['早起き'] });
@@ -229,6 +300,49 @@ await test('スロットはまず回転中を出し、少しずつ結果が現�
   assertBigArt({ data: last }, 'スロット結果');
   assertVerdictFirst({ data: last }, 'スロット結果');
   assertAllButtonsWork({ data: last }, 'スロット結果');
+});
+
+await test('スロットは左2つがそろうと「リーチ」でじらしてから止まる', async () => {
+  await eco.setBalance(db, GUILD, ME, 100000, 'test');
+  let reached = null;
+  for (let attempt = 0; attempt < 200 && !reached; attempt++) {
+    ctx.animated.length = 0;
+    await press('m:slot:bet:10');
+    const second = ctx.animated[1];
+    if (/リーチ/.test(second.embeds[0].title)) reached = second;
+    else assert.match(second.embeds[0].title, /回転中/, 'そろっていなければふつうの回転中');
+  }
+  assert.ok(reached, '200回のうち一度はリーチになる');
+  await eco.setBalance(db, GUILD, ME, 5000, 'test');
+});
+
+await test('スロットを10回まとめて回すと、10回ぶんを1回で精算して一覧で見せる', async () => {
+  await eco.setBalance(db, GUILD, ME, 5000, 'test');
+  const pick = await press('m:slot:tens');
+  assert.ok(customIds(pick).includes('m:slot:ten:10'));
+  assertAllButtonsWork(pick, '10回まとめての賭け金');
+
+  ctx.animated.length = 0;
+  const ledgerBefore = (await db.get('SELECT COUNT(*) AS n FROM ledger WHERE user_id = ?1', ME)).n;
+  const spinning = await press('m:slot:ten:10');
+  assert.match(firstEmbed(spinning).title, /10回まとめて/);
+  const last = finalFrame(ctx);
+  const lines = last.embeds[0].description.split('\n');
+  assert.equal(lines.length, 10, '10回ぶんの出目');
+  const fields = Object.fromEntries(last.embeds[0].fields.map((f) => [f.name, f.value]));
+  assert.equal(fields['賭け金'], '100');
+  const net = Number(fields['収支'].replace(/[+,]/g, ''));
+  assert.equal(await eco.getBalance(db, GUILD, ME), 5000 + net);
+  const added = (await db.get('SELECT COUNT(*) AS n FROM ledger WHERE user_id = ?1', ME)).n - ledgerBefore;
+  assert.ok(added === 1 || added === 2, '賭けと払い戻しをまとめて記録する');
+  assertBigArt({ data: last }, '10回まとめて');
+  assertAllButtonsWork({ data: last }, '10回まとめての結果');
+
+  await eco.setBalance(db, GUILD, ME, 50, 'test');
+  const short = await press('m:slot:ten:10');
+  assert.match(firstEmbed(short).description, /足りません/);
+  assert.equal(await eco.getBalance(db, GUILD, ME), 50);
+  await eco.setBalance(db, GUILD, ME, 5000, 'test');
 });
 
 await test('所持金を超える賭け金は弾かれる', async () => {
@@ -639,6 +753,25 @@ await test('正解を決められるのも出題者だけ', async () => {
   const picker = await pressPoll(`pl:answer:${globalThis.__pollId}`, { userId: ME });
   const options = picker.data.components[0].components[0].options;
   assert.equal(options.length, 3);
+  assert.equal(picker.type, 4, 'みんなの掲示板は書き換えず、出題者にだけ出す');
+  assert.equal(picker.data.flags, 64);
+});
+
+await test('正解を選んだだけでは確定せず、確定ボタンを押してはじめて山分けされる', async () => {
+  const pollId = globalThis.__pollId;
+  const confirm = await pressPoll(`pl:pick:${pollId}`, { userId: ME, values: ['1'] });
+  assert.match(screenText(confirm), /取り消せません/);
+  assert.ok(customIds(confirm).includes(`pl:settle:${pollId}:1`), '確定ボタンが出る');
+  assert.equal((await pollLib.getPollById(db, pollId)).status, 'closed', 'まだ確定していない');
+
+  const denied = await pressPoll(`pl:pick:${pollId}`, { userId: OTHER, values: ['0'] });
+  assert.match(screenText(denied), /出題者だけ/);
+});
+
+await test('掲示板に、誰がどれにいくら賭けたかが出る', async () => {
+  const poll = await pollLib.getPollById(db, globalThis.__pollId);
+  const board = await (await import(src('menu/poll-board.js'))).boardPayload(db, poll, await ctx.settings(GUILD));
+  assert.match(board.embeds[0].description, new RegExp(`<@${OTHER}> 500`));
 });
 
 await test('正解を選ぶと山分けされ、コインの総量は変わらない', async () => {
@@ -729,6 +862,54 @@ await test('正解者がいなければ上乗せも出題者に戻る', async ()
   assert.equal(await eco.getBalance(db, GUILD, 'u9'), 1000);
 });
 
+await test('予想大会の掲示板に「当たれば何倍か」が出る', async () => {
+  await press('m:poll:create', { type: 5, fields: { question: '倍率のお題', options: 'A\nB', minutes: '60', stake: '' } });
+  const pollId = (await db.get('SELECT * FROM polls ORDER BY id DESC')).id;
+  await eco.setBalance(db, GUILD, ME, 2000, 'test');
+  await eco.setBalance(db, GUILD, OTHER, 2000, 'test');
+  await pressPoll(`pl:amount:${pollId}:0`, { type: 5, userId: ME, fields: { amount: '300' } });
+  const board = await pressPoll(`pl:amount:${pollId}:1`, { type: 5, userId: OTHER, fields: { amount: '100' } });
+  const text = firstEmbed(board).description;
+  assert.match(text, /🇦 \*\*A\*\*[^\n]*当たれば ×1\.3/, '400 ÷ 300');
+  assert.match(text, /🇧 \*\*B\*\*[^\n]*当たれば ×4\.0/, '400 ÷ 100');
+  assert.match(text, /出題者もこの大会に賭けています/, '出題者が賭けたら見えるようにする');
+});
+
+await test('正解を管理者に任せた大会は、賭けていない管理者だけが決められる', async () => {
+  await press('m:poll:create', {
+    type: 5,
+    fields: { question: '管理者が決めるお題', options: 'はい\nいいえ', minutes: '60', stake: '', judge: '管理者' },
+  });
+  const poll = await db.get('SELECT * FROM polls ORDER BY id DESC');
+  assert.equal(poll.judge, 'admin');
+  await eco.setBalance(db, GUILD, ME, 2000, 'test');
+  await eco.setBalance(db, GUILD, OTHER, 2000, 'test');
+  await eco.setBalance(db, GUILD, 'u3', 2000, 'test');
+  await pressPoll(`pl:amount:${poll.id}:0`, { type: 5, userId: ME, fields: { amount: '200' } });
+  const board = await pressPoll(`pl:amount:${poll.id}:1`, { type: 5, userId: OTHER, fields: { amount: '200' } });
+  assert.doesNotMatch(firstEmbed(board).description, /出題者もこの大会に賭けています/, '管理者に任せていれば警告は要らない');
+  assert.match(JSON.stringify(firstEmbed(board).fields), /サーバー管理者/);
+  await pressPoll(`pl:close:${poll.id}`, { userId: ME });
+
+  assert.match(screenText(await pressPoll(`pl:answer:${poll.id}`, { userId: ME })), /サーバー管理者が正解を決めます/, '出題者でも管理者でなければ決められない');
+  assert.match(screenText(await pressPoll(`pl:answer:${poll.id}`, { userId: OTHER, admin: true })), /自分が賭けている/, '賭けた管理者は決められない');
+  const asking = await pressPoll(`pl:answer:${poll.id}`, { userId: 'u3', admin: true });
+  assert.equal(asking.data.flags, 64, '決める人にだけ見える');
+  await pressPoll(`pl:settle:${poll.id}:0`, { userId: 'u3', admin: true });
+  assert.equal((await db.get('SELECT status FROM polls WHERE id = ?1', poll.id)).status, 'settled');
+  assert.equal(await eco.getBalance(db, GUILD, ME), 2200, '出題者も正解なら受け取れる');
+});
+
+await test('管理者は、ほかの人の予想大会も中止できる', async () => {
+  await press('m:poll:create', { type: 5, userId: OTHER, fields: { question: '止めるお題', options: 'A\nB', minutes: '60', stake: '' } });
+  const pollId = (await db.get('SELECT * FROM polls ORDER BY id DESC')).id;
+  const asking = await pressPoll(`pl:cancel:${pollId}`, { userId: 'u3', admin: true });
+  assert.match(screenText(asking), /中止しますか/);
+  await pressPoll(`pl:cancelok:${pollId}`, { userId: 'u3', admin: true });
+  assert.equal((await db.get('SELECT status FROM polls WHERE id = ?1', pollId)).status, 'cancelled');
+  assert.match(JSON.stringify(ctx.edited.at(-1).payload), /管理者が中止しました/);
+});
+
 await test('出題者は中止でき、賭け金も上乗せも全部戻る', async () => {
   await press('m:poll:create', {
     type: 5,
@@ -742,7 +923,7 @@ await test('出題者は中止でき、賭け金も上乗せも全部戻る', as
   await pressPoll(`pl:amount:${pollId}:0`, { type: 5, userId: OTHER, fields: { amount: '300' } });
 
   const denied = await pressPoll(`pl:cancel:${pollId}`, { userId: OTHER });
-  assert.match(screenText(denied), /出題者だけ/);
+  assert.match(screenText(denied), /出題者とサーバー管理者だけ/);
 
   const confirm = await pressPoll(`pl:cancel:${pollId}`, { userId: ME });
   assert.match(screenText(confirm), /中止しますか/);
@@ -802,6 +983,84 @@ await test('締切を空欄にすると出題者が締め切るまで受け付�
 });
 
 section('[新しいゲーム]');
+
+await test('「あそぶ」にビンゴ・スクラッチ・ルーレットが出て、入口のボタンが生きている', async () => {
+  const games = await press('m:games:open:solo');
+  for (const key of ['bingo', 'scratch', 'wheel']) {
+    assert.ok(customIds(games).includes(`m:${key}:open`), `${key} の入口`);
+    const entry = await press(`m:${key}:open`);
+    assertAllButtonsWork(entry, key);
+  }
+});
+
+await test('ビンゴは賭けた瞬間に精算し、球を引く様子を見せてから結果を出す', async () => {
+  await eco.setBalance(db, GUILD, ME, 5000, 'test');
+  ctx.animated.length = 0;
+  const first = await press('m:bingo:go:100');
+  assert.match(firstEmbed(first).title, /抽選中/);
+  const last = finalFrame(ctx);
+  const fields = Object.fromEntries(last.embeds[0].fields.map((f) => [f.name, f.value]));
+  const net = Number(fields['収支'].replace(/[+,]/g, ''));
+  assert.equal(await eco.getBalance(db, GUILD, ME), 5000 + net, '表示どおりに精算されている');
+  assert.match(last.embeds[0].description, /```[\s\S]*B {4}I {4}N {4}G {4}O[\s\S]*```/, 'カードを表で見せる');
+  assertVerdictFirst({ data: last }, 'ビンゴ結果');
+  assertAllButtonsWork({ data: last }, 'ビンゴ結果');
+});
+
+await test('スクラッチは1マスずつ削れて、全部削ると結果が出る（お金は買った時点で動く）', async () => {
+  await eco.setBalance(db, GUILD, ME, 5000, 'test');
+  const bought = await press('m:scratch:buy:100');
+  const card = await db.get('SELECT * FROM scratch_cards WHERE user_id = ?1 ORDER BY created_at DESC', ME);
+  assert.equal(await eco.getBalance(db, GUILD, ME), 5000 - 100 + card.payout, '買った時点で精算済み');
+  const digIds = customIds(bought).filter((customId) => customId.startsWith(`m:scratch:dig:${card.id}:`));
+  assert.equal(digIds.length, 9);
+
+  const one = await press(`m:scratch:dig:${card.id}:4`);
+  assert.match(firstEmbed(one).description, /残り 8 マス/);
+  const twice = await press(`m:scratch:dig:${card.id}:4`);
+  assert.match(firstEmbed(twice).description, /残り 8 マス/, '同じマスを2回押しても1マス');
+  assert.equal(await eco.getBalance(db, GUILD, ME), 5000 - 100 + card.payout, '削ってもお金は動かない');
+
+  const done = await press(`m:scratch:all:${card.id}`);
+  assert.match(firstEmbed(done).title, card.payout > 0 ? /3つ/ : /はずれ/);
+  assertAllButtonsWork(done, 'スクラッチ結果');
+
+  // ほかの人のカードは削れない（自分のカードとして見つからない）
+  const stranger = await press(`m:scratch:dig:${card.id}:0`, { userId: OTHER });
+  assert.match(screenText(stranger), /見つかりませんでした/);
+  const outOfRange = await press(`m:scratch:dig:${card.id}:9`);
+  assert.match(screenText(outOfRange), /そのマスはありません/);
+});
+
+await test('ルーレットは張り方→金額→回すの順で、数字1つはフォームで決める', async () => {
+  await eco.setBalance(db, GUILD, ME, 5000, 'test');
+  const kind = await press('m:wheel:kind:red');
+  assert.ok(customIds(kind).includes('m:wheel:go:red:100'));
+  assertAllButtonsWork(kind, 'ルーレットの金額');
+
+  ctx.animated.length = 0;
+  await press('m:wheel:go:red:100');
+  const last = finalFrame(ctx);
+  const fields = Object.fromEntries(last.embeds[0].fields.map((f) => [f.name, f.value]));
+  const net = Number(fields['収支'].replace(/[+,]/g, ''));
+  assert.ok(net === 100 || net === -100);
+  assert.equal(await eco.getBalance(db, GUILD, ME), 5000 + net);
+  assertBigArt({ data: last }, 'ルーレット結果');
+  assertAllButtonsWork({ data: last }, 'ルーレット結果');
+
+  const form = await press('m:wheel:number');
+  assert.equal(form.type, 9);
+  const before = await eco.getBalance(db, GUILD, ME);
+  ctx.animated.length = 0;
+  await press('m:wheel:numgo', { type: 5, fields: { pick: '17', amount: '10' } });
+  const after = await eco.getBalance(db, GUILD, ME);
+  assert.ok(after === before - 10 || after === before + 350, `数字1つは ×36（${before} → ${after}）`);
+  const bad = await press('m:wheel:numgo', { type: 5, fields: { pick: '37', amount: '10' } });
+  assert.match(screenText(bad), /0 〜 36/);
+  const forged = await press('m:wheel:go:num:10:99');
+  assert.match(screenText(forged), /0〜36/, '細工したボタンでも範囲外には張れない');
+});
+
 
 const duelBoard = await import(src('menu/duel-board.js'));
 const duelLib = await import(src('lib/duel.js'));
@@ -1049,7 +1308,7 @@ await test('1人プレイ: 当たれば倍率が伸び、持ち帰れる', async
       await press('m:doors:bet:100');
       continue;
     }
-    const payload = await press('m:doors:pick:red');
+    await press('m:doors:pick:red');
     const after = await db.get('SELECT * FROM doors_games WHERE guild_id = ?1 AND user_id = ?2', GUILD, ME);
     if (after && after.steps > 0) {
       won = true;
@@ -1648,7 +1907,10 @@ await test('使い切りは買うと持ち物から使えて、みんなに知�
   assert.ok(customIds(detail).includes(`m:shop:use:${listed.id}`));
 
   const sentBefore = ctx.sent.length;
-  const afterUse = await press(`m:shop:use:${listed.id}`, { userId: OTHER });
+  const asking = await press(`m:shop:use:${listed.id}`, { userId: OTHER });
+  assert.match(screenText(asking), /取り消す/, '使う前に確かめる');
+  assert.equal(ctx.sent.length, sentBefore, '確かめる段階ではまだ流さない');
+  const afterUse = await press(`m:shop:useok:${listed.id}`, { userId: OTHER });
   assert.equal(ctx.sent.length, sentBefore + 1, '使用のお知らせが1件');
   const announced = ctx.sent.at(-1).payload.embeds[0];
   assert.match(announced.title, /肩たたき券/);
@@ -1667,15 +1929,118 @@ await test('使い切りは買うと持ち物から使えて、みんなに知�
 
 await test('使い切ると使うボタンが押せなくなる', async () => {
   const itemId = globalThis.__consumableId;
-  await press(`m:shop:use:${itemId}`, { userId: OTHER });
+  await press(`m:shop:useok:${itemId}`, { userId: OTHER });
   const payload = await press('m:shop:owned', { userId: OTHER, values: [String(itemId)] });
   const useButton = payload.data.components[0].components.find((c) => c.custom_id === `m:shop:use:${itemId}`);
   assert.equal(useButton.disabled, true);
 
   const sentBefore = ctx.sent.length;
-  const again = await press(`m:shop:use:${itemId}`, { userId: OTHER });
+  const again = await press(`m:shop:useok:${itemId}`, { userId: OTHER });
   assert.equal(ctx.sent.length, sentBefore, '無いものは使えないので知らせない');
   assert.match(firstEmbed(again).description, /使えるものがありません/);
+});
+
+await test('ショップは並べ替えられ、いま選んでいる並べ方は押せない', async () => {
+  const cheap = await press('m:shop:open:0:cheap');
+  assert.match(firstEmbed(cheap).footer.text, /安い順/);
+  const sortRow = cheap.data.components.find((r) => r.components?.some((c) => c.custom_id === 'm:shop:open:0:cheap'));
+  assert.equal(sortRow.components.find((c) => c.custom_id === 'm:shop:open:0:cheap').disabled, true);
+  assert.ok(!sortRow.components.find((c) => c.custom_id === 'm:shop:open:0:new').disabled);
+  const prices = [...firstEmbed(cheap).description.matchAll(/— \S*?([\d,]+)　/g)].map((m) => Number(m[1].replace(/,/g, '')));
+  assert.deepEqual(prices, [...prices].sort((a, b) => a - b), '安い順に並ぶ');
+  assertAllButtonsWork(cheap, '安い順');
+});
+
+await test('ショップで名前を探せて、% や _ はただの文字として扱う', async () => {
+  const opened = await press('m:shop:search');
+  assert.equal(opened.type, 9, '入力フォームを開く');
+  const found = await press('m:shop:find', { type: 5, fields: { q: 'テスト' } });
+  assert.match(firstEmbed(found).description, /テスト商品/);
+  assert.match(firstEmbed(found).footer.text, /「テスト」で/);
+  assertAllButtonsWork(found, '探した結果');
+
+  const none = await press('m:shop:find', { type: 5, fields: { q: '%' } });
+  assert.match(firstEmbed(none).description, /当てはまる出品はありませんでした/);
+});
+
+const shopPublic = await import(src('menu/shop-public.js'));
+async function pressPublic(customId, options = {}) {
+  const ix = new Ix(rawInteraction({ customId, ...options }));
+  const response = await shopPublic.handleComponent(ix, ctx);
+  await ctx.settle();
+  return response.json();
+}
+
+await test('出品のお知らせの「見る・買う」は、押した人にだけ商品ページを開く', async () => {
+  await press('m:shop:create', { type: 5, fields: { name: 'お知らせ確認用', price: '10' } });
+  const announced = ctx.sent.at(-1).payload;
+  const listed = (await shop.listItems(db, GUILD, { sellerId: ME })).find((row) => row.name === 'お知らせ確認用');
+  assert.ok(customIds({ data: announced }).includes(`sp:buy:${listed.id}`), 'お知らせに買うボタン');
+
+  const page = await pressPublic(`sp:buy:${listed.id}`, { userId: OTHER });
+  assert.equal(page.type, 4, 'お知らせは書き換えず、新しいメッセージで返す');
+  assert.equal(page.data.flags, 64, '押した人にだけ見える');
+  assert.match(firstEmbed(page).title, /お知らせ確認用/);
+  assert.ok(customIds(page).includes(`m:shop:confirm:${listed.id}`), 'そこから買える');
+});
+
+await test('使われたら出品者の「対応待ち」に載り、出品者だけが「対応した」を押せる', async () => {
+  const itemId = globalThis.__consumableId;
+  const used = await db.all('SELECT * FROM purchases WHERE item_id = ?1 AND used_at IS NOT NULL ORDER BY id', itemId);
+  assert.equal(used.length, 2);
+
+  const mine = await press('m:shop:mine');
+  assert.ok(customIds(mine).includes('m:shop:pending'));
+  const pendingScreen = await press('m:shop:pending');
+  assert.match(firstEmbed(pendingScreen).description, /肩たたき券/);
+
+  // お知らせのボタン：買った人が押しても何も変わらない
+  const announcement = { embeds: [{ title: '✨ 肩たたき券 を使いました！', fields: [{ name: '商品番号', value: `#${itemId}` }] }] };
+  const byBuyer = await pressPublic(`sp:done:${used[0].id}`, { userId: OTHER, message: announcement });
+  assert.equal(byBuyer.type, 4);
+  assert.match(byBuyer.data.content, /出品者だけ/);
+  assert.equal((await db.get('SELECT delivered_at FROM purchases WHERE id = ?1', used[0].id)).delivered_at, null);
+
+  // 出品者が押すと、お知らせに印が付いてボタンが外れる
+  const bySeller = await pressPublic(`sp:done:${used[0].id}`, { userId: ME, message: announcement });
+  assert.equal(bySeller.type, 7, 'お知らせを書き換える');
+  assert.deepEqual(bySeller.data.components, []);
+  assert.match(JSON.stringify(bySeller.data.embeds), /対応済み/);
+  assert.ok((await db.get('SELECT delivered_at FROM purchases WHERE id = ?1', used[0].id)).delivered_at);
+
+  // メニューからも押せる
+  const marked = await press('m:shop:deliver', { values: [String(used[1].id)] });
+  assert.match(screenText(marked), /対応した/);
+  assert.equal((await shop.pendingDeliveries(db, GUILD, ME)).length, 0);
+});
+
+await test('管理者が取り下げた出品は、出品者が再開も編集での復活もできない', async () => {
+  const target = await shop.createItem(db, { guildId: GUILD, sellerId: ME, name: '取り下げ確認用', price: 50, stock: -1 });
+
+  const notAdmin = await press(`m:admin:itemdown:${target.id}`, { admin: false });
+  assert.match(screenText(notAdmin), /権限が必要/);
+  assert.equal((await shop.getItem(db, GUILD, target.id)).active, 1);
+
+  const list = await press('m:admin:items', { admin: true });
+  assert.match(firstEmbed(list).description, /取り下げ確認用/);
+  assertAllButtonsWork(list, '取り下げ一覧');
+  await press(`m:admin:itemdown:${target.id}`, { admin: true });
+  let row = await shop.getItem(db, GUILD, target.id);
+  assert.equal(row.active, 0);
+  assert.equal(row.taken_down, 1);
+
+  const resume = await press(`m:shop:remove:${target.id}`);
+  assert.match(screenText(resume), /自分では再開できません/);
+  await press(`m:shop:update:${target.id}`, { type: 5, fields: { name: '取り下げ確認用', price: '50' } });
+  assert.equal((await shop.getItem(db, GUILD, target.id)).active, 0, '編集しても売り場に戻らない');
+  assert.doesNotMatch(firstEmbed(await press('m:shop:open')).description ?? '', /取り下げ確認用/);
+
+  await press(`m:admin:itemup:${target.id}`, { admin: true });
+  row = await shop.getItem(db, GUILD, target.id);
+  assert.equal(row.taken_down, 0);
+  assert.equal(row.active, 0, '解いても、再開は出品者が決める');
+  await press(`m:shop:remove:${target.id}`);
+  assert.equal((await shop.getItem(db, GUILD, target.id)).active, 1);
 });
 
 await test('ずっと残るアイテムには使うボタンが無い', async () => {
@@ -1739,7 +2104,35 @@ await test('残高を超える送金は失敗する', async () => {
 
 await test('履歴が日本語のラベルで出る', async () => {
   const payload = await press('m:wallet:history');
-  assert.match(firstEmbed(payload).description, /送金|報告|スロット/);
+  assert.match(screenText(payload), /送金|報告|スロット/);
+  assertAllButtonsWork(payload, '履歴');
+});
+
+await test('履歴は日ごとに合計が出て、同じ勝負の賭けと払い戻しは1行にまとまる', async () => {
+  const G = 'g-history';
+  const U = 'history-user';
+  await eco.setBalance(db, G, U, 1000, 'test');
+  await eco.settleWager(db, G, U, { bet: 100, payout: 300, betReason: 'slot:bet', winReason: 'slot:win', detail: 'x3' });
+  await eco.deposit(db, G, U, 50, 'report', '筋トレ');
+  const payload = await press('m:wallet:history', { guildId: G, userId: U });
+  const fields = firstEmbed(payload).fields;
+  assert.match(fields[0].name, /その日の合計 \+1,250/, "初期の1000＋スロット200＋報告50");
+  assert.match(fields[0].value, /`\+200`　スロット（-100 → \+300）/, '賭けと払い戻しが1行');
+  assert.match(fields[0].value, /`\+50`　報告（筋トレ）/);
+
+  const games = await press('m:wallet:history:game:0', { guildId: G, userId: U });
+  assert.doesNotMatch(screenText(games), /報告/, 'ゲームだけに絞れる');
+  assert.match(screenText(games), /スロット/);
+  const earn = await press('m:wallet:history:earn:0', { guildId: G, userId: U });
+  assert.doesNotMatch(screenText(earn), /スロット/);
+
+  const reasons = await import(src('lib/history.js'));
+  for (let i = 0; i < reasons.HISTORY_PAGE + 3; i++) await eco.deposit(db, G, U, 1, 'report', '連打');
+  const first = await press('m:wallet:history', { guildId: G, userId: U });
+  const next = first.data.components[1].components.find((c) => c.custom_id === 'm:wallet:history:all:1');
+  assert.ok(next && !next.disabled, '次のページへ進める');
+  const second = await press('m:wallet:history:all:1', { guildId: G, userId: U });
+  assert.match(screenText(second), /2 ページ目/);
 });
 
 section('[管理メニュー]');
@@ -1882,8 +2275,11 @@ await test('フォームからアクションを追加・改名できる', async
   assert.equal((await act.getActivity(db, GUILD, '大掃除')).reward, 99);
 });
 
-await test('アクションを削除できる', async () => {
-  await press('m:admin:actdel:大掃除', { admin: true });
+await test('アクションを削除できる（確かめてから）', async () => {
+  const asking = await press('m:admin:actdel:大掃除', { admin: true });
+  assert.ok(customIds(asking).includes('m:admin:actdelok:大掃除'));
+  assert.ok(await act.getActivity(db, GUILD, '大掃除'), '確かめる段階ではまだ消えない');
+  await press('m:admin:actdelok:大掃除', { admin: true });
   assert.equal(await act.getActivity(db, GUILD, '大掃除'), null);
 });
 
@@ -2033,12 +2429,310 @@ await test('あいこが続いた末の返金も一度だけ', async () => {
 });
 
 
+await test('だれでも受けられる挑戦状は、最初に受けた1人だけが相手になる', async () => {
+  for (const userId of [ME, OTHER, 'u3', 'u4']) await eco.setBalance(db, GUILD, userId, 1000, 'test');
+  await eco.setBalance(db, GUILD, 'u4', 10, 'test');
+
+  const entry = await press('m:rps:open');
+  assert.ok(customIds(entry).includes('m:rps:anyone'));
+  const betScreen = await press('m:rps:anyone');
+  assert.match(firstEmbed(betScreen).description, /だれでも/);
+  assertAllButtonsWork(betScreen, 'だれでもの賭け金');
+
+  const sentBefore = ctx.sent.length;
+  const done = await press('m:rps:go:anyone:100');
+  assert.match(firstEmbed(done).description, /だれでも受けられる/);
+  const post = ctx.sent[sentBefore].payload;
+  assert.equal(post.content, '', '誰も呼び出さない');
+  assert.deepEqual(post.allowed_mentions, { parse: [] });
+  const match = await db.get("SELECT * FROM rps_matches WHERE status = 'pending' ORDER BY created_at DESC");
+  assert.equal(match.opponent_id, 'anyone');
+
+  assert.match(screenText(await pressRps(`rps:accept:${match.id}`, { userId: ME })), /自分で出した/);
+  assert.match(screenText(await pressRps(`rps:accept:${match.id}`, { userId: 'u4' })), /残高が足りません/);
+  assert.match(screenText(await pressRps(`rps:decline:${match.id}`, { userId: 'u3' })), /そのままにしておけば/);
+
+  const [a, b] = await Promise.all([
+    pressRps(`rps:accept:${match.id}`, { userId: OTHER }),
+    pressRps(`rps:accept:${match.id}`, { userId: 'u3' }),
+  ]);
+  assert.equal([a, b].filter((payload) => payload.type === 7).length, 1, '始まるのは1回');
+  assert.ok([a, b].some((payload) => /ひと足早く/.test(screenText(payload))));
+  const started = await db.get('SELECT * FROM rps_matches WHERE id = ?1', match.id);
+  assert.equal(started.status, 'playing');
+  assert.ok([OTHER, 'u3'].includes(started.opponent_id));
+  assert.equal(await eco.getBalance(db, GUILD, started.opponent_id), 900, '受けた人だけ預ける');
+  const bystander = started.opponent_id === OTHER ? 'u3' : OTHER;
+  assert.equal(await eco.getBalance(db, GUILD, bystander), 1000);
+  await pressRps(`rps:hand:${match.id}:rock`, { userId: ME });
+  await pressRps(`rps:hand:${match.id}:scissors`, { userId: started.opponent_id });
+});
+
+await test('だれでも受けられる挑戦状は、出した人が取り下げられる', async () => {
+  await eco.setBalance(db, GUILD, ME, 1000, 'test');
+  await press('m:rps:go:anyone:50');
+  const match = await db.get("SELECT * FROM rps_matches WHERE status = 'pending' ORDER BY created_at DESC");
+  const withdrawn = await pressRps(`rps:decline:${match.id}`, { userId: ME });
+  assert.equal(withdrawn.type, 7);
+  assert.match(screenText(withdrawn), /取り下げました/);
+  assert.equal((await db.get('SELECT status FROM rps_matches WHERE id = ?1', match.id)).status, 'cancelled');
+  assert.equal(await eco.getBalance(db, GUILD, ME), 1000, 'お金は動いていない');
+});
+
+await test('1対1の勝負とチンチロにも「だれでも」がある', async () => {
+  for (const screen of ['cc', 'rr', 'cs', 'mine', 'dd']) {
+    const entry = await press(`m:${screen}:open`);
+    assert.ok(customIds(entry).includes(`m:${screen}:anyone`), `${screen} に「だれでも」`);
+    const bets = await press(`m:${screen}:anyone`);
+    assert.match(firstEmbed(bets).description, /だれでも/, screen);
+  }
+
+  // 受けた人が相手になって、そのまま始まる
+  for (const userId of [ME, OTHER]) await eco.setBalance(db, GUILD, userId, 5000, 'test');
+  await press('m:rr:go:anyone:100');
+  const duel = await db.get("SELECT * FROM duels WHERE status = 'pending' AND opponent_id = 'anyone' ORDER BY created_at DESC");
+  const accepted = await pressDuel(`d:accept:${duel.id}`, { userId: OTHER });
+  assert.equal(accepted.type, 7);
+  const started = await db.get('SELECT * FROM duels WHERE id = ?1', duel.id);
+  assert.equal(started.status, 'playing');
+  assert.equal(started.opponent_id, OTHER);
+
+  const chinchiro = await import(src('menu/chinchiro-match.js'));
+  await press('m:cc:go:anyone:100');
+  const match = await db.get("SELECT * FROM chinchiro_matches WHERE status = 'pending' AND opponent_id = 'anyone' ORDER BY created_at DESC");
+  const response = await chinchiro.handleComponent(new Ix(rawInteraction({ customId: `cc:accept:${match.id}`, userId: OTHER })), ctx);
+  await ctx.settle();
+  assert.equal((await response.json()).type, 7);
+  assert.equal((await db.get('SELECT * FROM chinchiro_matches WHERE id = ?1', match.id)).opponent_id, OTHER);
+});
+
+await test('1対1の勝ち負けが記録され、お財布の「戦績」に相手ごとに出る', async () => {
+  const recorded = await db.all("SELECT * FROM match_results WHERE game = 'rps' AND (winner_id = ?1 OR loser_id = ?1)", ME);
+  assert.ok(recorded.length > 0, 'じゃんけんの勝ち負けが残っている');
+  const wallet = await press('m:wallet:open');
+  assert.ok(customIds(wallet).includes('m:wallet:stats'));
+  const stats = await press('m:wallet:stats');
+  const text = screenText(stats);
+  assert.match(text, /1対1の勝ち負け/);
+  assert.match(text, /じゃんけん \d+勝\d+敗/);
+  assert.match(text, /ゲームごとの収支/);
+  assert.match(text, /スロット/);
+  assertAllButtonsWork(stats, '戦績');
+});
+
+await test('プロフィールはほかの人も見られ、本人が「見せない」にすると中身が隠れる', async () => {
+  const mine = await press('m:profile:open');
+  assert.match(firstEmbed(mine).title, /プロフィール/);
+  assert.ok(firstEmbed(mine).fields.some((field) => field.name === '所持金'));
+  assertAllButtonsWork(mine, 'プロフィール');
+
+  const seen = await press('m:profile:pick', { userId: OTHER, values: [ME] });
+  assert.ok(firstEmbed(seen).fields.some((field) => field.name === '所持金'), 'ほかの人から見える');
+  assert.ok(!customIds(seen).includes('m:profile:hide'), 'ほかの人の画面に切り替えボタンは出さない');
+
+  const hidden = await press('m:profile:hide');
+  assert.match(screenText(hidden), /見せない/);
+  const blocked = await press('m:profile:pick', { userId: OTHER, values: [ME] });
+  assert.match(firstEmbed(blocked).description, /見せない設定/);
+  assert.equal(firstEmbed(blocked).fields, undefined, '中身は出さない');
+  assert.ok(firstEmbed(await press('m:profile:open')).fields, '本人には見える');
+
+  await press('m:profile:hide');
+  assert.ok(firstEmbed(await press('m:profile:pick', { userId: OTHER, values: [ME] })).fields, '戻すとまた見える');
+});
+
+await test('管理メニューは4つのまとまりに分かれ、はじめの準備が残っていれば一覧で出る', async () => {
+  const G = 'g-setup';
+  const fresh = await press('m:admin:open', { admin: true, guildId: G });
+  const setup = firstEmbed(fresh).fields.find((field) => /はじめの準備/.test(field.name));
+  assert.ok(setup, '準備リストが出る');
+  assert.match(setup.value, /⬜ 報告のアクションを登録する/);
+  assertAllButtonsWork(fresh, '管理メニュー');
+  assert.equal(fresh.data.components.length, 5);
+
+  // 全部済んでいるサーバーでは出さない
+  const ready = await press('m:admin:open', { admin: true });
+  const settings = await eco.getSettings(db, GUILD);
+  const allDone = settings.game_channel_id && settings.log_channel_id;
+  if (allDone) assert.ok(!firstEmbed(ready).fields.some((field) => /はじめの準備/.test(field.name)));
+});
+
+await test('経済の様子が見られる（管理者だけ）', async () => {
+  assert.match(screenText(await press('m:admin:eco')), /権限が必要/);
+  const payload = await press('m:admin:eco', { admin: true });
+  assert.match(firstEmbed(payload).title, /経済の様子/);
+  const names = firstEmbed(payload).fields.map((field) => field.name);
+  for (const name of ['出回っている合計', '上位1割の持ち分', '7日で生まれた量']) assert.ok(names.includes(name), name);
+  assertAllButtonsWork(payload, '経済の様子');
+});
+
+await test('設定を書き出して、別のサーバーにそのまま読み込める（チャンネルは写さない）', async () => {
+  const before = await eco.getSettings(db, GUILD);
+  await eco.updateSettings(db, GUILD, { currency_name: 'テスト円', min_bet: 7, game_channel_id: 'chan-1' });
+  ctx.forgetSettings(GUILD);
+  const out = await press('m:admin:backup', { admin: true });
+  const json = /```json\n([\s\S]+?)\n```/.exec(firstEmbed(out).description)[1];
+  assert.doesNotMatch(json, /chan-1/, 'チャンネルは入れない');
+  assert.doesNotMatch(json, /"balance"/, '個人のデータは入れない');
+
+  const G = 'g-copy';
+  const opened = await press('m:admin:backupin', { admin: true, guildId: G });
+  assert.equal(opened.type, 9);
+  const done = await press('m:admin:backupsave', { type: 5, admin: true, guildId: G, fields: { backup: json } });
+  assert.match(screenText(done), /読み込みました/);
+  ctx.forgetSettings(G);
+  const copied = await eco.getSettings(db, G);
+  assert.equal(copied.currency_name, 'テスト円');
+  assert.equal(copied.min_bet, 7);
+  assert.equal(copied.game_channel_id, null);
+  const original = await act.listActivities(db, GUILD);
+  assert.equal((await act.listActivities(db, G)).length, original.length, 'アクションも写る');
+
+  const broken = await press('m:admin:backupsave', { type: 5, admin: true, guildId: G, fields: { backup: 'こわれた文字' } });
+  assert.match(screenText(broken), /読み取れませんでした/);
+  const denied = await press('m:admin:backupsave', { type: 5, guildId: G, fields: { backup: json } });
+  assert.match(screenText(denied), /権限が必要/);
+  await db.run(
+    'UPDATE guild_settings SET currency_name = ?2, min_bet = ?3, game_channel_id = ?4 WHERE guild_id = ?1',
+    GUILD,
+    before.currency_name,
+    before.min_bet,
+    before.game_channel_id,
+  );
+  ctx.forgetSettings(GUILD);
+});
+
+await test('定期発表は時刻・人数・賞金を変えられ、中身の下見と試し投稿ができる（試しでは賞金を贈らない）', async () => {
+  await reportLib.attemptReport(db, { guildId: GUILD, userId: ME, activity: await act.getActivity(db, GUILD, '取り消し確認') ?? (await act.listActivities(db, GUILD))[0], calendar: ctx.calendar });
+  const created = await annLib.createAnnouncement(db, GUILD, {
+    channelId: 'c-ann', metric: 'balance', frequency: 'daily', hour: 9, topN: 3, prize: 500,
+  });
+  const view = await press(`m:admin:annview:${created.id}`, { admin: true });
+  assertAllButtonsWork(view, '発表の設定');
+
+  const form = await press(`m:admin:annedit:${created.id}`, { admin: true });
+  assert.equal(form.type, 9);
+  const saved = await press(`m:admin:annupdate:${created.id}`, { type: 5, admin: true, fields: { hour: '21', top_n: '5', prize: '0' } });
+  assert.match(screenText(saved), /上位5人に変えました/);
+  const updated = await annLib.getAnnouncement(db, GUILD, created.id);
+  assert.equal(updated.hour, 21);
+  assert.equal(updated.prize, 0);
+  await db.run('UPDATE announcements SET prize = 500 WHERE id = ?1', created.id);
+
+  const balances = await db.all('SELECT user_id, balance FROM balances WHERE guild_id = ?1 ORDER BY user_id', GUILD);
+  const peek = await press(`m:admin:annpeek:${created.id}`, { admin: true });
+  assert.match(screenText(peek), /いま発表すると/);
+  assert.match(screenText(peek), /まだ贈っていません/);
+  const sentBefore = ctx.sent.length;
+  const tried = await press(`m:admin:anntry:${created.id}`, { admin: true });
+  assert.match(screenText(tried), /試しの投稿をしました/);
+  assert.equal(ctx.sent.length, sentBefore + 1);
+  assert.equal(ctx.sent.at(-1).channelId, 'c-ann');
+  assert.match(ctx.sent.at(-1).payload.content, /試しの投稿/);
+  assert.deepEqual(await db.all('SELECT user_id, balance FROM balances WHERE guild_id = ?1 ORDER BY user_id', GUILD), balances, '賞金は動かない');
+  assert.equal((await annLib.getAnnouncement(db, GUILD, created.id)).last_run_date, null, '本番の発表済みにはしない');
+  await annLib.removeAnnouncement(db, GUILD, created.id);
+});
+
+await test('「新しい見た目」をオンにすると、送金と予想大会のフォームで相手や決める人を選べる', async () => {
+  const toggled = await press('m:admin:prefmodern', { admin: true });
+  assert.match(screenText(toggled), /新しい見た目をオンにしました/);
+  try {
+    // 新しい形のフォームを送ったときの中身（Label の中に部品が入る）
+    const submit = async (customId, parts, options = {}) => {
+      const raw = rawInteraction({ type: 5, customId, ...options });
+      raw.data.components = parts.map((component) => ({ type: 18, id: 1, component }));
+      const response = await handleComponent(new Ix(raw), ctx);
+      await ctx.settle();
+      return response.json();
+    };
+
+    const form = await press('m:wallet:pay');
+    assert.equal(form.type, 9, 'すぐフォームが開く');
+    assert.deepEqual(form.data.components.map((c) => c.type), [18, 18, 18], 'すべて Label の形');
+    assert.equal(form.data.components[0].component.type, 5, '相手はメンバー選択');
+    assert.equal(form.data.components[1].component.label, undefined, 'Label の中の入力欄には label を付けない');
+
+    await eco.setBalance(db, GUILD, ME, 1000, 'test');
+    await eco.ensureAccount(db, GUILD, OTHER);
+    const otherBefore = await eco.getBalance(db, GUILD, OTHER);
+    const sent = await submit('m:wallet:payform', [
+      { type: 5, custom_id: 'to', values: [OTHER], resolved: { users: { [OTHER]: { id: OTHER, username: 'other' } } } },
+      { type: 4, custom_id: 'amount', value: '120' },
+      { type: 4, custom_id: 'memo', value: 'ありがとう' },
+    ]);
+    assert.match(screenText(sent), /送金しました/);
+    assert.equal(await eco.getBalance(db, GUILD, OTHER), otherBefore + 120);
+    const self = await submit('m:wallet:payform', [
+      { type: 5, custom_id: 'to', values: [ME], resolved: { users: { [ME]: { id: ME } } } },
+      { type: 4, custom_id: 'amount', value: '1' },
+    ]);
+    assert.match(screenText(self), /自分自身には送金できません/);
+
+    const pollForm = await press('m:poll:new');
+    const judge = pollForm.data.components.find((c) => c.component?.custom_id === 'judge');
+    assert.equal(judge.component.type, 3, '決める人はリストから選ぶ');
+    await submit('m:poll:create', [
+      { type: 4, custom_id: 'question', value: '新しいフォームのお題' },
+      { type: 4, custom_id: 'options', value: 'A\nB' },
+      { type: 4, custom_id: 'minutes', value: '' },
+      { type: 4, custom_id: 'stake', value: '' },
+      { type: 3, custom_id: 'judge', values: ['admin'] },
+    ]);
+    assert.equal((await db.get('SELECT judge FROM polls ORDER BY id DESC')).judge, 'admin');
+  } finally {
+    await press('m:admin:prefmodern', { admin: true });
+  }
+  assert.equal((await press('m:wallet:pay')).type, 7, 'オフに戻すと、これまでの画面');
+});
+
+await test('「新しい見た目」では定期発表を V2 で出し、名前が出ただけの人には通知を鳴らさない', async () => {
+  const { embedToV2 } = await import(src('discord/components-v2.js'));
+  const v2 = embedToV2(
+    { color: 0xf1c40f, title: '📢 ランキング', description: `🥇 <@${ME}> — 100\n🥈 <@${OTHER}> — 50`, footer: { text: '毎日9時' } },
+    { mentions: [ME] },
+  );
+  assert.equal(v2.flags, 1 << 15);
+  assert.equal(v2.embeds, undefined, 'V2 では embed を使わない');
+  assert.equal(v2.components[0].type, 17, '色つきの枠');
+  assert.equal(v2.components[0].accent_color, 0xf1c40f);
+  assert.deepEqual(v2.allowed_mentions, { users: [ME] }, '鳴らすのは賞金の人だけ');
+  assert.deepEqual(embedToV2({ description: `<@${ME}>` }).allowed_mentions, { parse: [] }, '既定では誰も鳴らさない');
+  const long = embedToV2({ description: 'あ'.repeat(5000) });
+  assert.ok(long.components[0].components[0].content.length <= 4000, '文字数の上限に収める');
+
+  await db.run('UPDATE guild_settings SET modern_ui = 1 WHERE guild_id = ?1', GUILD);
+  ctx.forgetSettings(GUILD);
+  try {
+    const created = await annLib.createAnnouncement(db, GUILD, { channelId: 'c-v2', metric: 'balance', frequency: 'daily', hour: 9, topN: 3, prize: 0 });
+    await press(`m:admin:anntry:${created.id}`, { admin: true });
+    const posted = ctx.sent.at(-1);
+    assert.equal(posted.channelId, 'c-v2');
+    assert.equal(posted.payload.flags, 1 << 15);
+    assert.deepEqual(posted.payload.allowed_mentions, { parse: [] }, '試しの投稿は誰も鳴らさない');
+    assert.match(JSON.stringify(posted.payload.components), /試しの投稿/);
+    await annLib.removeAnnouncement(db, GUILD, created.id);
+  } finally {
+    await db.run('UPDATE guild_settings SET modern_ui = 0 WHERE guild_id = ?1', GUILD);
+    ctx.forgetSettings(GUILD);
+  }
+});
+
 section('[自分のデータ]');
+
+/** ほかのテストで座ったままの卓を片付ける（本番なら時間切れで閉じる）。 */
+async function closeLeftoverTables() {
+  for (const table of ['blackjack_tables', 'poker_tables', 'pig_tables', 'chohan_tables', 'yacht_tables']) {
+    await db.run(`UPDATE ${table} SET status = 'cancelled' WHERE status IN ('joining', 'playing')`);
+  }
+}
 
 await test('保存されている内容を本人が確認できる', async () => {
   const payload = await press('m:privacy:open');
   const fields = firstEmbed(payload).fields.map((field) => field.name);
-  assert.deepEqual(fields, ['所持金', 'コインの増減記録', '報告の記録', '出品', '購入履歴']);
+  for (const name of ['所持金', 'コインの増減記録', '報告の記録', '出品', '購入履歴', '連続記録', '称号', 'おみくじ', '宝くじの券']) {
+    assert.ok(fields.includes(name), `${name} が出ていない`);
+  }
   assertAllButtonsWork(payload, '自分のデータ');
 });
 
@@ -2054,6 +2748,7 @@ await test('削除すると自分の記録が消え、他人の記録は残る',
   await eco.setBalance(db, GUILD, OTHER, 100, 'test');
   await shop.purchase(db, GUILD, sellItem.id, OTHER);
 
+  await closeLeftoverTables();
   await press('m:privacy:purge');
 
   assert.equal(await db.get('SELECT * FROM balances WHERE guild_id = ?1 AND user_id = ?2', GUILD, ME), null);
@@ -2078,10 +2773,57 @@ await test('進行中のじゃんけんがあれば相手に返金してから�
   await pressRps(`rps:accept:${match.id}`, { userId: OTHER });
   assert.equal(await eco.getBalance(db, GUILD, OTHER), 300, '賭け金を預けた状態');
 
+  await closeLeftoverTables();
   await press('m:privacy:purge');
 
   assert.equal(await eco.getBalance(db, GUILD, OTHER), 500, '相手には返金される');
   assert.equal(await db.get('SELECT * FROM rps_matches WHERE id = ?1', match.id), null);
+});
+
+await test('連続記録・称号・おみくじ・宝くじ・予想大会の賭けも消える', async () => {
+  const streakLib2 = await import(src('lib/streak.js'));
+  const omikujiLib = await import(src('lib/omikuji.js'));
+  const lotteryLib2 = await import(src('lib/lottery.js'));
+  await eco.setBalance(db, GUILD, ME, 5000, 'test');
+  await streakLib2.touchStreak(db, GUILD, ME, '筋トレ', ctx.calendar);
+  await omikujiLib.drawToday(db, GUILD, ME, ctx.calendar);
+  await lotteryLib2.buyTicket(db, GUILD, '2099-01-04', ME, 321);
+  const ach = await achLib.createAchievement(db, GUILD, { name: '消える称号', condition_type: 'balance', threshold: 1 });
+  await achLib.evaluate(db, { guildId: GUILD, userId: ME, calendar: ctx.calendar });
+  await achLib.equipTitle(db, GUILD, ME, ach.id);
+
+  await closeLeftoverTables();
+  await press('m:privacy:purge');
+  for (const table of ['streaks', 'omikuji_draws', 'lottery_tickets', 'user_achievements', 'profiles']) {
+    const left = await db.get(`SELECT COUNT(*) AS n FROM ${table} WHERE guild_id = ?1 AND user_id = ?2`, GUILD, ME);
+    assert.equal(left.n, 0, `${table} に残っている`);
+  }
+});
+
+await test('参加中の卓があると消さずに、終わってからと案内する', async () => {
+  await eco.setBalance(db, GUILD, ME, 5000, 'test');
+  await press('m:pk:go:100', { userId: ME });
+  const before = await eco.getBalance(db, GUILD, ME);
+  const payload = await press('m:privacy:purge');
+  assert.match(screenText(payload), /終わってから/);
+  assert.equal(await eco.getBalance(db, GUILD, ME), before, '何も消えていない');
+  // 卓が終わったあとなら消せる
+  await db.run("UPDATE poker_tables SET status = 'cancelled' WHERE host_id = ?1", ME);
+  await press('m:privacy:purge');
+  assert.equal(await db.get('SELECT * FROM balances WHERE guild_id = ?1 AND user_id = ?2', GUILD, ME), null);
+});
+
+await test('ユーザーIDを持つ列は、どれも削除の対象になっている', async () => {
+  // テーブルや列を足したときに、削除の漏れが出ないように機械的に見張る
+  const fs = await import('node:fs');
+  const privacySource = fs.readFileSync(new URL('../src/lib/privacy.js', import.meta.url), 'utf8');
+  const tables = await db.all("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'");
+  const ID_COLUMNS = /^(user_id|seller_id|buyer_id|owner_id|host_id|challenger_id|opponent_id|winner_id)$/;
+  for (const { name } of tables) {
+    const columns = (await db.all(`PRAGMA table_info(${name})`)).map((column) => column.name);
+    if (!columns.some((column) => ID_COLUMNS.test(column))) continue;
+    assert.match(privacySource, new RegExp(`\\b${name}\\b`), `${name} はユーザーIDを持つのに、削除で触っていない`);
+  }
 });
 
 await test('削除後にまた遊ぶと初期残高から始まる', async () => {
@@ -2090,6 +2832,23 @@ await test('削除後にまた遊ぶと初期残高から始まる', async () =>
 });
 
 section('[ホーム画面の整理]');
+
+await test('はじめて開いた人には、最初の一度だけ案内が出る', async () => {
+  const first = await press('m:home:open', { userId: 'newcomer' });
+  assert.match(screenText(first), /ようこそ/);
+  assert.match(screenText(first), /交換できません/, '現金と交換できないことも最初に伝える');
+  assert.ok(customIds(first).includes('m:home:help'));
+  const second = await press('m:home:open', { userId: 'newcomer' });
+  assert.doesNotMatch(screenText(second), /ようこそ/, '2回目からは出ない');
+});
+
+await test('ヘルプは名簿から作るので、どのゲームも載っている', async () => {
+  const help = await runCommand('help');
+  const text = screenText(help);
+  const { GAMES } = await import(src('lib/game-catalog.js'));
+  for (const game of GAMES) assert.ok(text.includes(game.name), `${game.name} がヘルプに無い`);
+  assert.match(text, /自分のデータ/);
+});
 
 await test('ホームは6つのボタンだけ（ランキング・持ち物・使い方は置かない）', async () => {
   const payload = await press('m:home:open', { admin: true });
@@ -2200,10 +2959,13 @@ await test('権限が無ければボーナスを作れない', async () => {
   assert.equal((await streakLib.listStreakRewards(db, GUILD, '筋トレ')).some((r) => r.from_days === 99), false);
 });
 
-await test('選ぶと削除できる', async () => {
-  await press('m:admin:streakdel:筋トレ', { admin: true, values: ['3'] });
+await test('選んで、確かめてから削除できる', async () => {
+  const asking = await press('m:admin:streakdel:筋トレ', { admin: true, values: ['3'] });
+  assert.ok(customIds(asking).includes('m:admin:streakdelok:3:筋トレ'));
+  assert.equal((await streakLib.listStreakRewards(db, GUILD, '筋トレ')).some((r) => r.from_days === 3), true, 'まだ消えない');
+  await press('m:admin:streakdelok:3:筋トレ', { admin: true });
   assert.equal((await streakLib.listStreakRewards(db, GUILD, '筋トレ')).some((r) => r.from_days === 3), false);
-  await press('m:admin:streakdel:筋トレ', { admin: true, values: ['14'] });
+  await press('m:admin:streakdelok:14:筋トレ', { admin: true });
   assert.equal((await streakLib.listStreakRewards(db, GUILD, '筋トレ')).length, 0);
 });
 
@@ -2212,7 +2974,8 @@ section('[称号（管理者が作る）]');
 await test('条件の種類を選ぶ画面が出る', async () => {
   const payload = await press('m:admin:achnew', { admin: true });
   const options = payload.data.components[0].components[0].options.map((option) => option.value);
-  assert.deepEqual(options.sort(), ['activity_count', 'activity_streak', 'balance', 'total_reports']);
+  assert.deepEqual(options.sort(), Object.keys(achLib.CONDITION_TYPES).sort());
+  for (const type of ['match_wins', 'games_played', 'shop_sales', 'omikuji_count', 'total_earned']) assert.ok(options.includes(type), type);
 });
 
 await test('フォームから称号を作れる', async () => {
@@ -2787,10 +3550,61 @@ await test('貼り付け形式を読める', () => {
   assert.equal(errors.length, 0);
   assert.deepEqual(entries[0], {
     line: 3, name: '日記魔', emoji: '📔', condition_type: 'activity_count',
-    threshold: 100, activity_name: '日記', reward: 500,
+    threshold: 100, activity_name: '日記', reward: 500, hidden: 0,
   });
   assert.equal(entries[1].threshold, 10000, '全角と桁区切りも読む');
   assert.equal(entries[1].activity_name, null, 'balance に対象は不要');
+  const hidden = achLib.parseAchievementLines('秘密 | 🤫 | match_wins | 3 | | 0 | 隠す').entries[0];
+  assert.equal(hidden.hidden, 1, '7列目に「隠す」で隠し称号');
+  assert.match(achLib.formatAchievementLines([{ ...hidden, reward: 0 }]), /\| 隠す$/, '書き出しても隠すが残る');
+});
+
+await test('新しい条件の称号：1対1の勝利数・ゲーム回数・売れた数・おみくじ・受け取った合計', async () => {
+  const G = 'g-ach';
+  const U = 'ach-user';
+  await eco.setBalance(db, G, U, 0, 'test');
+  for (const [name, type, threshold] of [
+    ['勝負師', 'match_wins', 2], ['常連', 'games_played', 1], ['名店主', 'shop_sales', 1],
+    ['信心深い', 'omikuji_count', 1], ['稼ぎ頭', 'total_earned', 500],
+  ]) {
+    await achLib.createAchievement(db, G, { name, condition_type: type, threshold, hidden: name === '勝負師' ? 1 : 0 });
+  }
+  const { recordMatch } = await import(src('lib/match-results.js'));
+  await recordMatch(db, { guildId: G, game: 'rps', winnerId: U, loserId: 'x', amount: 100 });
+  let unlocked = await achLib.evaluate(db, { guildId: G, userId: U, calendar: ctx.calendar });
+  assert.deepEqual(unlocked.map((a) => a.name), [], 'まだ届かない');
+
+  await recordMatch(db, { guildId: G, game: 'cc', winnerId: U, loserId: 'x', amount: 100 });
+  await eco.deposit(db, G, U, 600, 'slot:win', 'x6');
+  await eco.withdraw(db, G, U, 10, 'slot:bet', 'x0');
+  const item = await shop.createItem(db, { guildId: G, sellerId: U, name: '確認用', price: 1, stock: -1 });
+  await eco.setBalance(db, G, 'buyer', 100, 'test');
+  await shop.purchase(db, G, item.id, 'buyer');
+  await db.run("INSERT INTO omikuji_draws (guild_id, user_id, draw_date, rank, picks, number, item_index, color_index, created_at) VALUES (?1, ?2, '2026-01-01', '大吉', '[]', 1, 0, 0, 0)", G, U);
+
+  unlocked = await achLib.evaluate(db, { guildId: G, userId: U, calendar: ctx.calendar });
+  assert.deepEqual(unlocked.map((a) => a.name).sort(), ['信心深い', '勝負師', '名店主', '常連', '稼ぎ頭'].sort());
+});
+
+await test('報告以外で条件を満たした称号も、ホームを開いたときに拾って知らせる', async () => {
+  await achLib.createAchievement(db, GUILD, { name: 'ホームで拾う', emoji: '🎯', condition_type: 'balance', threshold: 1 });
+  const home = await press('m:home:open');
+  assert.match(screenText(home), /新しい称号を獲得しました：🎯ホームで拾う/);
+  const target = await db.get("SELECT id FROM achievements WHERE guild_id = ?1 AND name = 'ホームで拾う'", GUILD);
+  await achLib.removeAchievement(db, GUILD, target.id);
+});
+
+await test('隠し称号は、まだの人には「？？？」と出る', async () => {
+  await achLib.createAchievement(db, GUILD, { name: 'ひみつの称号', emoji: '🤫', condition_type: 'match_wins', threshold: 999, hidden: 1 });
+  const text = screenText(await press('m:titles:open'));
+  assert.match(text, /？？？/);
+  assert.doesNotMatch(text, /ひみつの称号/);
+  const admin = screenText(await press('m:admin:ach', { admin: true }));
+  assert.match(admin, /🙈🤫 \*\*ひみつの称号/, '管理者には見える');
+  const target = await db.get("SELECT id FROM achievements WHERE guild_id = ?1 AND name = 'ひみつの称号'", GUILD);
+  await press('m:admin:achhide', { admin: true, values: [String(target.id)] });
+  assert.match(screenText(await press('m:titles:open')), /ひみつの称号/, '戻すと見える');
+  await achLib.removeAchievement(db, GUILD, target.id);
 });
 
 await test('おかしな行は理由つきで飛ばす', () => {
@@ -2975,7 +3789,7 @@ await test('書き出すと貼り戻せる形で出る', async () => {
   const out = await press('m:admin:streakout', { admin: true });
   const text = screenText(out);
   assert.match(text, /アクション \| 何日目から \| 何日目まで \| 毎日のコイン/, '見出しがある');
-  assert.match(text, /筋トレ \| 7 \|  \| 100/, '「以降ずっと」は空欄で書き出す');
+  assert.match(text, /筋トレ \| 7 \| {2}\| 100/, '「以降ずっと」は空欄で書き出す');
 
   // 書き出したものをそのまま貼り戻しても、全部「上書き」になって壊れない
   const block = text.split('```')[1].split('\n').filter((line) => line && !line.startsWith('アクション |')).join('\n');
@@ -3297,7 +4111,122 @@ await test('全部オフにしても画面は壊れない', async () => {
   const empty = await press('m:games:open');
   assert.match(screenText(empty), /遊べるゲームがありません/);
   for (const game of catalog.GAMES) await press(`m:admin:gmtoggle:${game.key}`, { admin: true });
-  assert.equal(customIds(await press('m:games:open')).length, catalog.GAMES.length + 1, '全部戻る（＋戻るボタン）');
+  const ids = customIds(await press('m:games:open'));
+  for (const game of catalog.GAMES) assert.ok(ids.includes(`m:${game.key}:open`), `${game.name} が戻っていない`);
+});
+
+await test('ルールの説明は、はじめてだけ全文、2回目からは畳んで「遊び方」ボタンに入れる', async () => {
+  const first = await press('m:pk:open', { userId: 'rules-reader' });
+  assert.ok(firstEmbed(first).fields.length >= 3, 'はじめては全文');
+  assert.match(firstEmbed(first).author.name, /簡ポーカー/, '今どこにいるかが分かる');
+  const second = await press('m:pk:open', { userId: 'rules-reader' });
+  assert.equal(firstEmbed(second).fields.length, 0, '2回目は畳む');
+  assert.ok(customIds(second).includes('m:pk:open:rules'), '遊び方ボタンがある');
+  assert.ok(customIds(second).includes('m:pk:custom'), '金額のボタンはそのまま');
+  const rules = await press('m:pk:open:rules', { userId: 'rules-reader' });
+  assert.ok(firstEmbed(rules).fields.length >= 3, '遊び方を押せば全文');
+});
+
+await test('あそぶは「ひとりで／1対1／みんなで」で分けて見られる', async () => {
+  const solo = await press('m:games:open:solo');
+  const soloIds = customIds(solo);
+  assert.ok(soloIds.includes('m:slot:open'));
+  assert.ok(!soloIds.includes('m:rps:open'), '1対1のゲームは出ない');
+  const duel = customIds(await press('m:games:open:duel'));
+  assert.ok(duel.includes('m:rps:open') && !duel.includes('m:slot:open'));
+  for (const game of catalog.GAMES) assert.ok(catalog.CATEGORIES[game.category], `${game.name} に分類が無い`);
+  assert.match(firstEmbed(solo).author.name, /ひとりで/, '今どこにいるかが分かる');
+});
+
+section('[Botの設定]');
+
+await test('Botの設定は管理者だけが開け、ボタンはどれも生きている', async () => {
+  const denied = await press('m:admin:prefs', { admin: false });
+  assert.match(screenText(denied), /権限/);
+  const payload = await press('m:admin:prefs', { admin: true });
+  assert.match(firstEmbed(payload).title, /Botの設定/);
+  assertAllButtonsWork(payload, 'Botの設定');
+});
+
+await test('1日の区切りを Bot の中で変えられ、ファイルどおりにも戻せる', async () => {
+  await press('m:admin:prefhour', { admin: true, values: ['5'] });
+  assert.equal((await eco.getSettings(db, GUILD)).day_start_hour, 5);
+  assert.equal((await ctx.calendarFor(GUILD)).dayStartHour, 5);
+  await press('m:admin:prefhour', { admin: true, values: ['file'] });
+  assert.equal((await eco.getSettings(db, GUILD)).day_start_hour, null);
+  ctx.forgetSettings(GUILD);
+});
+
+await test('卓や挑戦状を出す場所を決めると、そこに出る', async () => {
+  await press('m:admin:prefgame', { admin: true, values: ['game-room'] });
+  ctx.forgetSettings(GUILD);
+  await eco.setBalance(db, GUILD, ME, 5000, 'test');
+  const before = ctx.sent.length;
+  const confirm = await press('m:pig:go:100', { userId: ME, channelId: 'somewhere' });
+  assert.equal(ctx.sent.at(-1).channelId, 'game-room', '設定した場所に出る');
+  assert.ok(ctx.sent.length > before);
+  const link = confirm.data.components.flatMap((r) => r.components).find((c) => c.style === 5);
+  assert.ok(link?.url?.includes('/game-room/'), '投稿へ移動するボタンがある');
+
+  await press('m:admin:prefreset', { admin: true });
+  ctx.forgetSettings(GUILD);
+  assert.equal((await eco.getSettings(db, GUILD)).game_channel_id, null);
+  await db.run("UPDATE pig_tables SET status = 'cancelled' WHERE status = 'joining'");
+});
+
+await test('1人用を自分の画面だけにすると、ブラックジャックはチャンネルに出ない', async () => {
+  await press('m:admin:prefsolo', { admin: true });
+  ctx.forgetSettings(GUILD);
+  assert.equal((await eco.getSettings(db, GUILD)).solo_private, 1);
+  await eco.setBalance(db, GUILD, ME, 5000, 'test');
+  const before = ctx.sent.length;
+  const payload = await press('m:bj:solo:100', { userId: ME });
+  assert.equal(ctx.sent.length, before, 'チャンネルには何も出ない');
+  assert.ok(customIds(payload).some((cid) => cid.startsWith('bj:')) || /ブラックジャック|ディーラー/.test(screenText(payload)), '自分の画面に卓が出る');
+
+  await press('m:admin:prefsolo', { admin: true });
+  ctx.forgetSettings(GUILD);
+  await db.run("UPDATE blackjack_tables SET status = 'cancelled' WHERE status IN ('joining', 'playing')");
+});
+
+await test('実況の基準を決めると、それ以上の勝ち負けだけが実況される', async () => {
+  await press('m:admin:preflivesave', { type: 5, admin: true, fields: { threshold: '50' } });
+  ctx.forgetSettings(GUILD);
+  assert.equal((await eco.getSettings(db, GUILD)).live_threshold, 50);
+  await eco.setBalance(db, GUILD, ME, 5000, 'test');
+  const before = ctx.sent.length;
+  await press('m:cf:go:100:heads', { userId: ME });
+  assert.equal(ctx.sent.length, before + 1, '100の勝ち負けは50以上なので出る');
+  const small = ctx.sent.length;
+  await press('m:cf:go:10:heads', { userId: ME });
+  assert.equal(ctx.sent.length, small, '10の勝ち負けは出ない');
+
+  await press('m:admin:preflivesave', { type: 5, admin: true, fields: { threshold: '0' } });
+  ctx.forgetSettings(GUILD);
+});
+
+await test('終わった卓を畳む設定なら、決着から5分後に1行へ縮める', async () => {
+  const prefs = await import(src('lib/guild-prefs.js'));
+  const cronLib = await import(src('cron.js'));
+  await press('m:admin:preffold', { admin: true });
+  ctx.forgetSettings(GUILD);
+  const settings = await eco.getSettings(db, GUILD);
+  assert.equal(settings.fold_finished, 1);
+
+  const payload = { embeds: [{ title: '🏆 勝負あり', description: '**<@u1> の勝ち！**\n細かい説明' }] };
+  assert.equal(prefs.summaryOf(payload, '✊ じゃんけん'), '✊ じゃんけん　🏆 勝負あり　**<@u1> の勝ち！**');
+  await prefs.queueFold(db, settings, { guildId: GUILD, channelId: 'c1', messageId: 'fold-me', summary: 'まとめ' }, Date.now() - prefs.FOLD_AFTER_MS);
+
+  const before = ctx.edited.length;
+  await cronLib.foldFinished(ctx);
+  const folded = ctx.edited.slice(before).find((entry) => entry.messageId === 'fold-me');
+  assert.ok(folded, '畳む');
+  assert.deepEqual(folded.payload.components, [], 'ボタンは外す');
+  await cronLib.foldFinished(ctx);
+  assert.equal(ctx.edited.slice(before).filter((entry) => entry.messageId === 'fold-me').length, 1, '二度は畳まない');
+
+  await press('m:admin:preffold', { admin: true });
+  ctx.forgetSettings(GUILD);
 });
 
 section('[デトックス]');
@@ -3370,6 +4299,8 @@ const looksLikeEmoji = (value) => {
   if (/^<a?:\w+:\d+>$/.test(value)) return true; // サーバー独自の絵文字
   const chars = [...value];
   if (!/\p{Emoji}/u.test(chars[0])) return false;
+  // 1文字ずつ調べるので、文字クラスに結合文字を入れても取り違えない
+  // eslint-disable-next-line no-misleading-character-class
   return chars.every((char) => /[\p{Emoji}\p{Emoji_Modifier}\uFE0F\u200D\u20E3]/u.test(char));
 };
 

@@ -1,9 +1,27 @@
 import { button as makeButton, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { modalResponse, reply, update } from '../discord/respond.js';
+import { cleanLine, cleanText } from '../lib/text.js';
 
 /** メニューの customId は `m:<画面>:<操作>:<引数...>`。 */
 export const MENU_PREFIX = 'm';
+
+/**
+ * 色のルール。どの画面にいるかが色で分かるよう、場所ごとに1色にそろえる。
+ * 結果は「勝ち＝緑・負け＝灰・大当たり＝金・中止や失敗＝赤」。
+ */
+export const COLORS = {
+  home: 0x5865f2,
+  earn: 0x2ecc71,
+  play: 0xe67e22,
+  shop: 0x1abc9c,
+  wallet: 0xf1c40f,
+  admin: 0x9b59b6,
+  win: 0x2ecc71,
+  lose: 0x95a5a6,
+  jackpot: 0xf1c40f,
+  stop: 0xe74c3c,
+};
 
 export function id(...parts) {
   return [MENU_PREFIX, ...parts].join(':');
@@ -15,7 +33,8 @@ export function id(...parts) {
  * スラッシュコマンドからは新しく本人だけに見えるメッセージを出す。
  */
 export function show(ix, payload) {
-  const data = { content: '', embeds: [], components: [], ...payload };
+  // 条件によって出さない行は null で渡してよい（ここで落とす）
+  const data = { content: '', embeds: [], ...payload, components: (payload.components ?? []).filter(Boolean) };
   if (ix.isComponent || (ix.isModalSubmit && ix.fromMessage)) return update(data);
   return reply(data);
 }
@@ -25,11 +44,29 @@ export function openModal(data) {
   return modalResponse(data);
 }
 
-/** 画面の先頭に一言お知らせを差し込む。 */
+/**
+ * お知らせの種類。成功したのに ⚠️ が付くと「何か失敗した？」と読めてしまうので、
+ * うまくいった・注意・できなかった、を見分けて印を変える。
+ */
+export const NOTICE_MARKS = { ok: '✅', info: 'ℹ️', warn: '⚠️' };
+
+/**
+ * 文字だけで渡されたお知らせの種類を、言い回しから決める。
+ * 「〜ません」「〜ください」は注意、「〜しました」は成功、それ以外は案内。
+ */
+export function noticeKind(text) {
+  if (/ません|ください|できな|使えな|足りな|失敗|不明|もう終わって|先に入りました/.test(text)) return 'warn';
+  if (/ました|ています/.test(text)) return 'ok';
+  return 'info';
+}
+
+/** 画面の先頭に一言お知らせを差し込む。文字でも {kind, text} でも受け取る。 */
 export function withNotice(embedObject, notice) {
   if (!notice) return embedObject;
+  const { kind, text } = typeof notice === 'string' ? { kind: noticeKind(notice), text: notice } : notice;
+  if (!text) return embedObject;
   const body = embedObject.description ? `\n\n${embedObject.description}` : '';
-  return { ...embedObject, description: `⚠️ ${notice}${body}` };
+  return { ...embedObject, description: `${NOTICE_MARKS[kind] ?? NOTICE_MARKS.info} ${text}${body}` };
 }
 
 export const button = makeButton;
@@ -37,6 +74,43 @@ export { row, embed };
 
 export function backButton(target = 'home', label = '戻る') {
   return button(id(target, 'open'), label, { emoji: '◀️' });
+}
+
+/**
+ * 自分だけに見えている結果を、チャンネルのみんなに見せるボタン（home.share が受ける）。
+ * 押された画面そのものを出すので、どの画面にもそのまま付けられる。
+ */
+/**
+ * 押されたメッセージの embed を、送り直せる形に整える。
+ * Discord から返ってきた embed には、こちらから送れない項目（proxy_url など）が混ざるため。
+ */
+export function plainEmbed(source) {
+  return embed({
+    color: source.color,
+    author: source.author?.name ? { name: source.author.name, icon_url: source.author.icon_url } : undefined,
+    title: source.title,
+    description: source.description,
+    fields: (source.fields ?? []).map((field) => ({ name: field.name, value: field.value, inline: field.inline })),
+    footer: source.footer?.text ? { text: source.footer.text } : undefined,
+    image: source.image?.url,
+    thumbnail: source.thumbnail?.url,
+  });
+}
+
+/**
+ * 公開メッセージのボタンから、押した人にだけ見える新しい画面を開く。
+ * 押されたメッセージ（みんなに見えている案内など）は書き換えない。
+ */
+export function asNewMessage(ix) {
+  return Object.create(ix, {
+    isComponent: { value: false },
+    isModalSubmit: { value: false },
+    fromMessage: { value: false },
+  });
+}
+
+export function shareButton() {
+  return button(id('home', 'share'), 'みんなに見せる', { emoji: '📣' });
 }
 
 export function homeButton() {
@@ -64,7 +138,12 @@ export function amountRows(prefix, balance, { maxBet = 0, extra = [], customId }
   return [row(...buttons), row(button(custom, '金額を入力', { emoji: '⌨️' }), ...extra)];
 }
 
-/** 入力フォームの数値を読む。読めなければ {error} を返す。 */
+/**
+ * 入力フォームの数値を読む。読めなければ {error} を返す。
+ * @param {any} ix
+ * @param {string} field
+ * @param {{min?: number, max?: number, fallback?: number|null}} [options]
+ */
 export function readInt(ix, field, { min = 0, max = Number.MAX_SAFE_INTEGER, fallback = null } = {}) {
   const raw = ix.field(field).trim();
   if (raw === '') return fallback;
@@ -77,14 +156,25 @@ export function readInt(ix, field, { min = 0, max = Number.MAX_SAFE_INTEGER, fal
   return value;
 }
 
+/**
+ * @param {any} value
+ * @returns {value is {error: string}}
+ */
 export function isError(value) {
   return typeof value === 'object' && value !== null && 'error' in value;
 }
 
-/** 入力フォームの任意テキスト（空欄なら null）。 */
-export function readText(ix, field) {
-  const value = ix.field(field).trim();
-  return value === '' ? null : value;
+/**
+ * 入力フォームの任意テキスト（空欄なら null）。
+ * 偽リンク・見えない文字・@everyone をここで整える（lib/text.js）。
+ * 名前のように1行で使うものは { line: true } を付ける。
+ * @param {any} ix
+ * @param {string} field
+ * @param {{line?: boolean, max?: number}} [options]
+ */
+export function readText(ix, field, { line = false, max } = {}) {
+  const raw = ix.field(field);
+  return line ? cleanLine(raw, { max: max ?? 100 }) : cleanText(raw, { max: max ?? 4000 });
 }
 
 /**
@@ -103,11 +193,14 @@ export function readText(ix, field) {
  *   4. 賭け金・収支・所持金（fields）
  *
  * @param {object} options
- * @param {string} options.art     絵文字だけの行。ここに文字を混ぜない
+ * @param {string} [options.art]   絵文字だけの行。ここに文字を混ぜない
  * @param {string} options.verdict 結果のひとこと。いちばん先に読ませたい言葉
  * @param {number} options.color
  * @param {string} [options.detail] 説明。無くてもよい
  * @param {object[]} [options.fields]
+ * @param {object} [options.footer]
+ * @param {object} [options.author]
+ * @param {string} [options.thumbnail]
  */
 export function resultEmbed({ art, verdict, color, detail, fields, footer, author, thumbnail }) {
   return {

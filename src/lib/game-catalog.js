@@ -19,55 +19,73 @@ import { MAX_PLAYERS as PG_MAX_PLAYERS, MIN_PLAYERS as PG_MIN_PLAYERS } from './
 import { TURNS as PIG_TURNS } from './pig.js';
 import { MAX_PLAYERS as YT_MAX_PLAYERS, MIN_PLAYERS as YT_MIN_PLAYERS } from './yacht-table.js';
 
+/**
+ * 遊び方の分け方。「🎮 あそぶ」の見出しとヘルプはこの順に並ぶ。
+ * category: solo＝ひとりで / duel＝1対1 / group＝みんなで（1人でも遊べるものを含む）
+ */
+export const CATEGORIES = {
+  solo: { label: 'ひとりで', emoji: '👤' },
+  duel: { label: '1対1', emoji: '⚔️' },
+  group: { label: 'みんなで', emoji: '👥' },
+};
+
+/** その分類のゲーム（オフのものも含む。オフを除くときは enabledGames と組み合わせる）。 */
+export function gamesIn(games, category) {
+  return games.filter((game) => game.category === category);
+}
+
 /** style は数字ではなく名前で持ち、画面側で ButtonStyle に直す。 */
 export const GAMES = [
-  { key: 'slot', name: 'スロット', emoji: em.slot, hint: '3つ揃いで最大 x3000', style: 'PRIMARY' },
-  { key: 'cf', name: 'コイントス', emoji: em.coinflip, hint: '当たれば2倍', style: 'PRIMARY' },
-  { key: 'hl', name: 'ハイ&ロー', emoji: em.highlow, hint: '連勝で倍率上昇。降り際が勝負', style: 'PRIMARY' },
+  { key: 'slot', category: 'solo', name: 'スロット', emoji: em.slot, hint: '3つ揃いで最大 x3000', style: 'PRIMARY' },
+  { key: 'cf', category: 'solo', name: 'コイントス', emoji: em.coinflip, hint: '当たれば2倍', style: 'PRIMARY' },
+  { key: 'hl', category: 'solo', name: 'ハイ&ロー', emoji: em.highlow, hint: '連勝で倍率上昇。降り際が勝負', style: 'PRIMARY' },
+  { key: 'bingo', category: 'solo', name: 'ビンゴ', emoji: '🎱', hint: '35個の球で何ラインそろうか。最大 ×50', style: 'PRIMARY' },
+  { key: 'scratch', category: 'solo', name: 'スクラッチ', emoji: '🎫', hint: '9マスを削って同じ絵柄3つで当たり。最大 ×50', style: 'PRIMARY' },
+  { key: 'wheel', category: 'solo', name: 'ルーレット', emoji: '🎡', hint: '赤黒・偶奇・数字に張る。数字1つなら ×36', style: 'PRIMARY' },
   {
-    key: 'bj',
+    key: 'bj', category: 'group',
     name: 'ブラックジャック',
     emoji: em.joker,
     hint: `対ディーラー。1人でも、${BJ_MAX_PLAYERS}人で同じ卓でも遊べる`,
     style: 'PRIMARY',
   },
-  { key: 'lot', name: '宝くじ', emoji: em.lottery, hint: '毎週日曜に抽選。当たれば持ち越しごと総取り', style: 'PRIMARY' },
+  { key: 'lot', category: 'group', name: '宝くじ', emoji: em.lottery, hint: '毎週日曜に抽選。当たれば持ち越しごと総取り', style: 'PRIMARY' },
   {
-    key: 'pk',
+    key: 'pk', category: 'group',
     name: '簡ポーカー',
     emoji: '♠️',
     hint: `2〜4人。5枚配って${PK_MAX_DRAWS}回まで引き直し、勝負か降りるか`,
     style: 'PRIMARY',
   },
   {
-    key: 'pig',
+    key: 'pig', category: 'group',
     name: 'ピッグ',
     emoji: '🐷',
     hint: `${PG_MIN_PLAYERS}〜${PG_MAX_PLAYERS}人。1人${PIG_TURNS}ターン、1が出たら持ち点ごと0`,
     style: 'PRIMARY',
   },
-  { key: 'ch', name: '丁半博打', emoji: '🏺', hint: '何人でも。丁（偶数）か半（奇数）に張る', style: 'PRIMARY' },
+  { key: 'ch', category: 'group', name: '丁半博打', emoji: '🏺', hint: '何人でも。丁（偶数）か半（奇数）に張る', style: 'PRIMARY' },
   {
-    key: 'yt',
+    key: 'yt', category: 'group',
     name: 'ヨット',
     emoji: '🎲',
     hint: `${YT_MIN_PLAYERS}〜${YT_MAX_PLAYERS}人。5個を3回振って13欄を埋める。ひとり練習もできる`,
     style: 'PRIMARY',
   },
-  { key: 'omi', name: 'おみくじ', emoji: '🎋', hint: '1日1回。コインは動かない、読んで楽しむだけ', style: 'PRIMARY' },
-  { key: 'poll', name: '予想大会', emoji: em.poll, hint: 'みんなで賭けて、正解者で山分け', style: 'SUCCESS' },
+  { key: 'omi', category: 'solo', name: 'おみくじ', emoji: '🎋', hint: '1日1回。コインは動かない、読んで楽しむだけ', style: 'PRIMARY' },
+  { key: 'poll', category: 'group', name: '予想大会', emoji: em.poll, hint: 'みんなで賭けて、正解者で山分け', style: 'SUCCESS' },
   {
-    key: 'dd',
+    key: 'dd', category: 'duel',
     name: '運命の扉',
     emoji: em.doors,
     hint: '**2人用**。当て続けて倍率を伸ばし、最後は山分けか裏切りか（1人でも可）',
     style: 'SUCCESS',
   },
-  { key: 'rps', name: 'じゃんけん', emoji: em.rps, hint: '1対1。勝てば総取り', style: 'SUCCESS' },
-  { key: 'cc', name: 'チンチロ', emoji: em.chinchiro, hint: '1対1。役で倍率が変わる', style: 'SUCCESS' },
-  { key: 'rr', name: 'ロシアンルーレット', emoji: em.roulette, hint: '1対1。引くほど当たる確率が上がる', style: 'SUCCESS' },
-  { key: 'cs', name: 'チャージ＆シュート', emoji: em.charge, hint: '1対1。ためて撃つ読み合い', style: 'SUCCESS' },
-  { key: 'mine', name: '地雷＆陣取り', emoji: em.mines, hint: '1対1。3×3のマスを取り合う', style: 'SUCCESS' },
+  { key: 'rps', category: 'duel', name: 'じゃんけん', emoji: em.rps, hint: '1対1。勝てば総取り', style: 'SUCCESS' },
+  { key: 'cc', category: 'duel', name: 'チンチロ', emoji: em.chinchiro, hint: '1対1。役で倍率が変わる', style: 'SUCCESS' },
+  { key: 'rr', category: 'duel', name: 'ロシアンルーレット', emoji: em.roulette, hint: '1対1。引くほど当たる確率が上がる', style: 'SUCCESS' },
+  { key: 'cs', category: 'duel', name: 'チャージ＆シュート', emoji: em.charge, hint: '1対1。ためて撃つ読み合い', style: 'SUCCESS' },
+  { key: 'mine', category: 'duel', name: '地雷＆陣取り', emoji: em.mines, hint: '1対1。3×3のマスを取り合う', style: 'SUCCESS' },
 ];
 
 export const GAME_BY_KEY = new Map(GAMES.map((game) => [game.key, game]));

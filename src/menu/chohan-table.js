@@ -13,6 +13,7 @@ import {
   CHO,
   HAN,
   betOf,
+  close,
   createTable,
   getTable,
   openPot,
@@ -31,6 +32,8 @@ import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
 import { diceFaces } from '../lib/emoji.js';
+import { stampDeadline } from './deadline.js';
+import { foldLater } from '../lib/guild-prefs.js';
 
 /** 公開メッセージのボタンは `ch:` 始まり。 */
 export const namespace = 'ch';
@@ -107,7 +110,9 @@ async function handleOpen(ix, ctx, table, settings, em) {
   if (opened.kind === 'late') return reply({ content: 'もう開いています。' });
 
   if (opened.kind === 'unmatched') return update(unmatchedPayload(table));
-  return update(resultPayload(opened.table, opened.state, opened, settings, em));
+  const final = resultPayload(opened.table, opened.state, opened, settings, em);
+  ctx.waitUntil(foldLater(ctx, opened.table, final, '🏺 丁半'));
+  return update(final);
 }
 
 /** 掲示を、いまの張り具合で描き直す。 */
@@ -129,7 +134,13 @@ function sideLines(state, side) {
   return bets.map((bet) => `　<@${bet.userId}>　${bet.amount}`).join('\n');
 }
 
-function boardPayload(table, state, settings) {
+/** 掲示に残り時間を添える（中身は boardPayloadBody が作る）。 */
+function boardPayload(...args) {
+  const payload = boardPayloadBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, '時間になると、コマがそろっていれば開きます');
+}
+
+function boardPayloadBody(table, state, settings) {
   const cho = totalOn(state.bets, CHO);
   const han = totalOn(state.bets, HAN);
   const matched = ready(state.bets);
@@ -147,7 +158,6 @@ function boardPayload(table, state, settings) {
           `**${SIDES[CHO].emoji} 丁（偶数）　計 ${cho}**\n${sideLines(state, CHO)}\n\n` +
           `**${SIDES[HAN].emoji} 半（奇数）　計 ${han}**\n${sideLines(state, HAN)}\n\n` +
           (matched ? '両方にコマが入りました。親は壺を開けられます。' : '**片方にコマが無いと開けません**（不成立なら全額返ります）。'),
-        footer: { text: '3分で自動的に開きます' },
       }),
     ],
     components: [
@@ -254,7 +264,7 @@ export async function timeOut(ctx, table) {
     }
   }
 
+  if (!(await close(ctx.db, table, { status: 'cancelled' }))) return null;
   await refundTable(ctx.db, table, state);
-  await setStatus(ctx.db, table.id, 'cancelled');
   return { payload: unmatchedPayload(table) };
 }

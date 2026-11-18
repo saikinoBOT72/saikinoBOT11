@@ -1,3 +1,4 @@
+import { winsOf } from './match-results.js';
 import { deposit, getBalance } from './economy.js';
 import { toWholeNumber } from './format.js';
 import { getStreak } from './streak.js';
@@ -8,6 +9,11 @@ export const CONDITION_TYPES = {
   activity_streak: { label: 'アクションの連続日数', unit: '日', needsActivity: true },
   total_reports: { label: '報告の合計回数（全アクション）', unit: '回', needsActivity: false },
   balance: { label: '所持金', unit: '', needsActivity: false },
+  match_wins: { label: '1対1の勝負で勝った回数', unit: '勝', needsActivity: false },
+  games_played: { label: 'ゲームで遊んだ回数', unit: '回', needsActivity: false },
+  shop_sales: { label: 'ショップで売れた数', unit: '個', needsActivity: false },
+  omikuji_count: { label: 'おみくじを引いた回数', unit: '回', needsActivity: false },
+  total_earned: { label: 'これまでに受け取ったコインの合計', unit: '', needsActivity: false },
 };
 
 export const CONDITION_EXAMPLES = {
@@ -15,6 +21,11 @@ export const CONDITION_EXAMPLES = {
   activity_streak: '例: 筋トレ30日連続で「鉄の意志」',
   total_reports: '例: 合計100回で「継続の鬼」',
   balance: '例: 所持金10000で「富豪」',
+  match_wins: '例: 1対1で10勝して「勝負師」',
+  games_played: '例: ゲームを100回遊んで「常連」',
+  shop_sales: '例: ショップで10個売れて「名店主」',
+  omikuji_count: '例: おみくじ30回で「信心深い」',
+  total_earned: '例: 合計50000受け取って「稼ぎ頭」',
 };
 
 export function describeCondition(achievement, settings) {
@@ -27,9 +38,25 @@ export function describeCondition(achievement, settings) {
       return `報告の合計 ${achievement.threshold} 回`;
     case 'balance':
       return `所持金 ${settings ? settings.currency_emoji : ''}${achievement.threshold} 以上`;
+    case 'match_wins':
+      return `1対1の勝負で ${achievement.threshold} 勝`;
+    case 'games_played':
+      return `ゲームで ${achievement.threshold} 回遊ぶ`;
+    case 'shop_sales':
+      return `ショップで ${achievement.threshold} 個売れる`;
+    case 'omikuji_count':
+      return `おみくじを ${achievement.threshold} 回引く`;
+    case 'total_earned':
+      return `これまでに ${settings ? settings.currency_emoji : ''}${achievement.threshold} 受け取る`;
     default:
       return '不明な条件';
   }
+}
+
+/** まだ持っていない人に見せる条件。隠し称号は名前も条件も伏せる。 */
+export function lockedLabel(achievement, settings) {
+  if (achievement.hidden) return { emoji: '❔', name: '？？？', condition: '条件はひみつ' };
+  return { emoji: achievement.emoji ?? '🔒', name: achievement.name, condition: describeCondition(achievement, settings) };
 }
 
 /* ------------------------------------------------------- コピペで一括設定 */
@@ -46,7 +73,7 @@ export function describeCondition(achievement, settings) {
  * ・# で始まる行と空行は読み飛ばす
  * ・名前が同じものは上書きされる（createAchievement が upsert なので貼り直し自由）
  */
-export const BULK_COLUMNS = '名前 | 絵文字 | 条件 | 数 | 対象アクション | ボーナス';
+export const BULK_COLUMNS = '名前 | 絵文字 | 条件 | 数 | 対象アクション | ボーナス | 隠す';
 
 const BULK_SEPARATOR = /[|｜]/;
 
@@ -67,7 +94,7 @@ export function parseAchievementLines(text) {
     if (trimmed === '' || trimmed.startsWith('#')) continue;
 
     const columns = trimmed.split(BULK_SEPARATOR).map((column) => column.trim());
-    const [name, emoji, type, threshold, activity, reward] = columns;
+    const [name, emoji, type, threshold, activity, reward, hide] = columns;
 
     if (columns.length < 4) {
       errors.push({ line, text: trimmed, reason: `列が ${columns.length} 個しかありません（${BULK_COLUMNS}）` });
@@ -114,6 +141,7 @@ export function parseAchievementLines(text) {
       threshold: count,
       activity_name: meta.needsActivity ? activity : null,
       reward: bonus,
+      hidden: /^(1|隠す|はい|yes|true)$/i.test(hide ?? '') ? 1 : 0,
     });
   }
 
@@ -131,7 +159,10 @@ export function formatAchievementLines(achievements) {
         achievement.threshold,
         achievement.activity_name ?? '',
         achievement.reward || 0,
-      ].join(' | '),
+        achievement.hidden ? '隠す' : '',
+      ]
+        .join(' | ')
+        .replace(/ \| $/, ''),
     )
     .join('\n');
 }
@@ -143,11 +174,12 @@ export async function listAchievements(db, guildId) {
 
 export async function createAchievement(db, guildId, achievement) {
   await db.run(
-    `INSERT INTO achievements (guild_id, name, emoji, description, condition_type, threshold, activity_name, reward, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+    `INSERT INTO achievements (guild_id, name, emoji, description, condition_type, threshold, activity_name, reward, created_at, hidden)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
      ON CONFLICT(guild_id, name) DO UPDATE SET
        emoji = excluded.emoji, description = excluded.description, condition_type = excluded.condition_type,
-       threshold = excluded.threshold, activity_name = excluded.activity_name, reward = excluded.reward`,
+       threshold = excluded.threshold, activity_name = excluded.activity_name, reward = excluded.reward,
+       hidden = excluded.hidden`,
     guildId,
     achievement.name,
     achievement.emoji ?? null,
@@ -157,8 +189,15 @@ export async function createAchievement(db, guildId, achievement) {
     achievement.activity_name ?? null,
     achievement.reward ?? 0,
     Date.now(),
+    achievement.hidden ? 1 : 0,
   );
   return db.get('SELECT * FROM achievements WHERE guild_id = ?1 AND name = ?2', guildId, achievement.name);
+}
+
+/** 隠し称号にする／戻す。 */
+export async function toggleHidden(db, guildId, id) {
+  await db.run('UPDATE achievements SET hidden = 1 - hidden WHERE guild_id = ?1 AND id = ?2', guildId, id);
+  return db.get('SELECT * FROM achievements WHERE guild_id = ?1 AND id = ?2', guildId, id);
 }
 
 export async function removeAchievement(db, guildId, id) {
@@ -246,6 +285,38 @@ async function collectStats(db, { guildId, userId, calendar }, pending) {
   if (types.has('balance')) {
     stats.balance = await getBalance(db, guildId, userId);
   }
+  if (types.has('match_wins')) stats.matchWins = await winsOf(db, guildId, userId);
+  if (types.has('games_played')) {
+    // 賭けた・参加費を払った回数（ショップ・送金・管理者の調整・報告の取り消しは数えない）
+    const row = await db.get(
+      `SELECT COALESCE(SUM(entries), 0) AS n FROM ledger
+        WHERE guild_id = ?1 AND user_id = ?2 AND amount < 0 AND reason LIKE '%:%'
+          AND reason NOT LIKE 'shop:%' AND reason NOT LIKE 'admin:%' AND reason NOT LIKE 'report:%'
+          AND reason NOT LIKE 'tip:%' AND reason NOT LIKE 'poll:bonus%'`,
+      guildId,
+      userId,
+    );
+    stats.gamesPlayed = row?.n ?? 0;
+  }
+  if (types.has('shop_sales')) {
+    const row = await db.get('SELECT COUNT(*) AS n FROM purchases WHERE guild_id = ?1 AND seller_id = ?2', guildId, userId);
+    stats.shopSales = row?.n ?? 0;
+  }
+  if (types.has('omikuji_count')) {
+    const row = await db.get('SELECT COUNT(*) AS n FROM omikuji_draws WHERE guild_id = ?1 AND user_id = ?2', guildId, userId);
+    stats.omikuji = row?.n ?? 0;
+  }
+  if (types.has('total_earned')) {
+    // 受け取った合計。返金・払い戻しのように「自分のお金が戻っただけ」のものは数えない
+    const row = await db.get(
+      `SELECT COALESCE(SUM(amount), 0) AS n FROM ledger
+        WHERE guild_id = ?1 AND user_id = ?2 AND amount > 0
+          AND reason NOT LIKE '%:refund' AND reason NOT IN ('initial', 'admin:set')`,
+      guildId,
+      userId,
+    );
+    stats.totalEarned = row?.n ?? 0;
+  }
   for (const achievement of pending) {
     const name = achievement.activity_name;
     if (!name) continue;
@@ -275,6 +346,16 @@ function meets(achievement, stats) {
       return (stats.totalReports ?? 0) >= achievement.threshold;
     case 'balance':
       return (stats.balance ?? 0) >= achievement.threshold;
+    case 'match_wins':
+      return (stats.matchWins ?? 0) >= achievement.threshold;
+    case 'games_played':
+      return (stats.gamesPlayed ?? 0) >= achievement.threshold;
+    case 'shop_sales':
+      return (stats.shopSales ?? 0) >= achievement.threshold;
+    case 'omikuji_count':
+      return (stats.omikuji ?? 0) >= achievement.threshold;
+    case 'total_earned':
+      return (stats.totalEarned ?? 0) >= achievement.threshold;
     default:
       return false;
   }

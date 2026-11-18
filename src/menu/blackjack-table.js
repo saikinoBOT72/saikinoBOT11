@@ -11,6 +11,7 @@ import {
 } from '../lib/blackjack.js';
 import {
   JOIN_TIMEOUT_MS,
+  close,
   createTable,
   deal,
   getTable,
@@ -31,8 +32,11 @@ import { getSettings, withdraw } from '../lib/economy.js';
 import { coins } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
+import { handleDisband, handleLeave, lobbyButtons } from './lobby.js';
 import { reply, update } from '../discord/respond.js';
 import { rematchButton } from './rematch.js';
+import { noteFor, stampDeadline } from './deadline.js';
+import { foldLater } from '../lib/guild-prefs.js';
 
 /** 公開メッセージのボタンは `bj:` 始まり。 */
 export const namespace = 'bj';
@@ -44,6 +48,7 @@ const COLOR = 0x1abc9c;
  *
  * solo なら人を待たずにその場で配る。投稿されるメッセージが最初から
  * 「あなたの番」の状態になるので、押すのはヒット／スタンドだけになる。
+ * @returns {Promise<{ok: boolean, reason?: string, message?: any, payload?: any, after?: any, privately?: boolean}>}
  */
 export async function openTable(ctx, { guildId, channelId, hostId, bet, settings, solo = false }) {
   const id = crypto.randomUUID();
@@ -59,6 +64,10 @@ export async function openTable(ctx, { guildId, channelId, hostId, bet, settings
   const first = solo
     ? await dealSolo(ctx, id, settings, em)
     : { payload: lobbyPayload(await getTable(ctx.db, id), joined.state, settings, em) };
+
+  // 1人で遊ぶときは、設定によってはチャンネルに出さず、押した人の画面だけで進める。
+  // 卓は保存してあるので、画面のボタンからそのまま続けられる
+  if (solo && settings?.solo_private) return { ok: true, privately: true, ...first };
 
   try {
     const message = await ctx.rest.createMessage(channelId, first.payload);
@@ -126,6 +135,8 @@ export async function handleComponent(ix, ctx) {
 
   if (action === 'join') return handleJoin(ix, ctx, table, settings, em);
   if (action === 'start') return handleStart(ix, ctx, table, settings, em);
+  if (action === 'leave') return handleLeave(ix, ctx, table, { mutate, lobby: (t, s) => lobbyPayload(t, s, settings, em), refundReason: 'blackjack:refund' });
+  if (action === 'disband') return handleDisband(ix, ctx, table, { close, stateOf, refundReason: 'blackjack:refund' });
   if (action === 'hit' || action === 'stand' || action === 'double') {
     return handleMove(ix, ctx, table, action, settings, em);
   }
@@ -152,6 +163,10 @@ async function handleAgain(ix, ctx, table) {
     settings,
     solo: seated.length === 1,
   });
+  if (opened.ok && opened.privately) {
+    if (opened.after) ctx.animate(ix, [{ after: 1200, payload: opened.after }]);
+    return update(opened.payload);
+  }
   if (!opened.ok) {
     const messages = {
       insufficient: `参加費 ${coins(table.bet, settings)} が払えません。`,
@@ -291,10 +306,12 @@ async function finish(ix, ctx, table, state, settings, em) {
   const results = await settleTable(ctx.db, table, played);
   if (!results) return reply({ content: 'この卓はもう精算済みです。' });
 
+  const final = resultPayload(table, played, results, settings, em);
   ctx.animate(ix, [
     { after: 900, payload: revealPayload(table, played, settings, em) },
-    { after: 1100, payload: resultPayload(table, played, results, settings, em) },
+    { after: 1100, payload: final },
   ]);
+  ctx.waitUntil(foldLater(ctx, table, final, '🃏 ブラックジャック'));
   return update(tablePayload(table, played, settings, em, { hideDealer: true, frozen: true }));
 }
 
@@ -305,7 +322,8 @@ export async function timeOut(ctx, table) {
   const settings = await getSettings(ctx.db, table.guild_id);
 
   if (table.status === 'joining') {
-    await setStatus(ctx.db, table.id, 'cancelled');
+    // 先に閉じてから返す。取れなかったら（誰かが同時に始めた等）何もしない
+    if (!(await close(ctx.db, table, { status: 'cancelled' }))) return null;
     await refundTable(ctx.db, table, state);
     return {
       payload: {
@@ -336,7 +354,13 @@ export async function timeOut(ctx, table) {
 
 /* ------------------------------------------------------------------ 表示 */
 
-function lobbyPayload(table, state, settings, em) {
+/** 掲示に残り時間を添える（中身は lobbyPayloadBody が作る）。 */
+function lobbyPayload(...args) {
+  const payload = lobbyPayloadBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, noteFor(args[0]));
+}
+
+function lobbyPayloadBody(table, state, settings, em) {
   const seats = state.players.map((player, index) => `${index + 1}. <@${player.userId}>`).join('\n');
   return {
     content: '',
@@ -349,13 +373,13 @@ function lobbyPayload(table, state, settings, em) {
           `**${MAX_PLAYERS}人まで**座れます。全員がディーラー（Bot）と勝負します。\n\n` +
           `**座っている人（${state.players.length}/${MAX_PLAYERS}）**\n${seats}`,
         fields: [{ name: 'ルール', value: RULES }],
-        footer: { text: '2分たつと自動で閉じます（参加費は返ります）' },
       }),
     ],
     components: [
       row(
         button(`bj:join:${table.id}`, '座る', { emoji: '🪑', style: ButtonStyle.SUCCESS }),
         button(`bj:start:${table.id}`, '始める（卓主）', { emoji: '▶️', style: ButtonStyle.PRIMARY }),
+        ...lobbyButtons('bj', table.id),
       ),
     ],
   };
@@ -381,7 +405,13 @@ function dealingPayload(em) {
   };
 }
 
-function tablePayload(table, state, settings, em, { hideDealer = true, frozen = false } = {}) {
+/** 掲示に残り時間を添える（中身は tablePayloadBody が作る）。 */
+function tablePayload(...args) {
+  const payload = tablePayloadBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, noteFor(args[0]));
+}
+
+function tablePayloadBody(table, state, settings, em, { hideDealer = true, frozen = false } = {}) {
   const turnPlayer = state.turn >= 0 ? state.players[state.turn] : null;
   const lines = state.players.map((player, index) => {
     const mark = index === state.turn ? '▶️' : statusMark(player.status);

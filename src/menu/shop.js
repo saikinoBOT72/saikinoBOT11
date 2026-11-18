@@ -3,14 +3,18 @@ import { equippedTitle, titleTag } from '../lib/achievements.js';
 import { coins, truncate } from '../lib/format.js';
 import {
   ITEM_KINDS,
+  SORTS,
   ShopError,
+  browseItems,
   countItems,
   createItem,
   getItem,
   inventoryOf,
   isConsumable,
   listItems,
+  markDelivered,
   ownedItem,
+  pendingDeliveries,
   purchase,
   salesOf,
   setActive,
@@ -18,8 +22,10 @@ import {
   useItem,
 } from '../lib/shop.js';
 import { modal, stringSelect, textInput } from '../discord/builders.js';
+import { realMoneyWord } from '../lib/text.js';
 import { ButtonStyle, TextInputStyle } from '../discord/constants.js';
 import {
+  COLORS,
   backButton,
   button,
   embed,
@@ -36,6 +42,17 @@ import {
 
 const PAGE_SIZE = 25;
 
+/**
+ * コインを現金や電子マネーと交換する出品は受け付けない。
+ * コインに現実のお金の価値を持たせると、遊びのポイントではなく賭博の道具になってしまうため。
+ */
+function realMoneyMessage(word) {
+  return (
+    `${word}とのやり取りに見える出品は受け付けていません。` +
+    'コインは現金・電子マネー・ギフト券などと交換できない決まりです（「肩たたき券」「1回おごり」のような身内のやり取りは大丈夫です）。'
+  );
+}
+
 function isImageUrl(url) {
   return /^https?:\/\/\S+$/i.test(url);
 }
@@ -49,31 +66,68 @@ function otherKind(value) {
   return isConsumable(value) ? ITEM_KINDS.permanent : ITEM_KINDS.consumable;
 }
 
+function stateLabel(item) {
+  if (item.taken_down) return '🚫 管理者が取り下げ';
+  if (!item.active) return '停止中';
+  return item.stock < 0 ? '在庫∞' : `残り${item.stock}`;
+}
+
 function usableCount(entry) {
   return isConsumable(entry.kind) ? entry.usable : entry.count;
 }
 
 /* ------------------------------------------------------------------ 一覧 */
 
-export async function open(ix, [rawPage = '0'] = [], ctx, notice = null) {
-  const settings = await ctx.settings(ix.guildId);
-  const page = Math.max(0, Number(rawPage) || 0);
-  const [total, items, balance] = await Promise.all([
-    countItems(ctx.db, ix.guildId),
-    listItems(ctx.db, ix.guildId, { limit: PAGE_SIZE, offset: page * PAGE_SIZE }),
-    getBalance(ctx.db, ix.guildId, ix.userId),
-  ]);
+/** 公開メッセージに付ける、押した人にだけ商品ページを開くボタン。 */
+export const PUBLIC_PREFIX = 'sp';
 
-  const description =
-    items.length === 0
-      ? 'まだ出品がありません。**🆕 出品する** から、値段を決めて出品できます。'
-      : `所持金 ${coins(balance, settings)}\n\n` +
-        items
-          .map((item) => {
-            const stock = item.stock < 0 ? '在庫∞' : `残り${item.stock}`;
-            return `**#${item.id} ${truncate(item.name, 40)}** — ${settings.currency_emoji}${item.price.toLocaleString('ja-JP')}　*(${stock}・<@${item.seller_id}>)*`;
-          })
-          .join('\n');
+export async function open(ix, [rawPage = '0', rawSort = 'new'] = [], ctx, notice = null) {
+  const sort = SORTS[rawSort] ? rawSort : 'new';
+  const page = Math.max(0, Number(rawPage) || 0);
+  const [total, items] = await Promise.all([
+    countItems(ctx.db, ix.guildId),
+    browseItems(ctx.db, ix.guildId, { sort, limit: PAGE_SIZE, offset: page * PAGE_SIZE }),
+  ]);
+  return listing(ix, ctx, { items, total, page, sort, notice });
+}
+
+/** 🔍 探す：名前か説明に含まれる言葉で絞り込む。 */
+export function search() {
+  return openModal(
+    modal(id('shop', 'find'), 'ショップで探す', [
+      textInput('q', '探す言葉（名前・説明から探します）', { placeholder: '例: 券', required: true, max: 40 }),
+    ]),
+  );
+}
+
+export async function find(ix, _args, ctx) {
+  const query = readText(ix, 'q', { line: true, max: 40 });
+  if (!query) return open(ix, [], ctx, '探す言葉を入れてください。');
+  const items = await browseItems(ctx.db, ix.guildId, { query, limit: PAGE_SIZE });
+  return listing(ix, ctx, { items, total: items.length, page: 0, sort: 'new', query });
+}
+
+/** 一覧の画面（ふつうの一覧と、探した結果で共通）。 */
+async function listing(ix, ctx, { items, total, page, sort, query = null, notice = null }) {
+  const settings = await ctx.settings(ix.guildId);
+  const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
+
+  let description;
+  if (items.length === 0) {
+    description = query
+      ? `「${truncate(query, 40)}」に当てはまる出品はありませんでした。`
+      : 'まだ出品がありません。**🆕 出品する** から、値段を決めて出品できます。';
+  } else {
+    description =
+      `所持金 ${coins(balance, settings)}\n\n` +
+      items
+        .map((item) => {
+          const stock = item.stock < 0 ? '在庫∞' : `残り${item.stock}`;
+          const sold = sort === 'popular' && item.sold > 0 ? `・${item.sold}個売れた` : '';
+          return `**#${item.id} ${truncate(item.name, 40)}** — ${settings.currency_emoji}${item.price.toLocaleString('ja-JP')}　*(${stock}${sold}・<@${item.seller_id}>)*`;
+        })
+        .join('\n');
+  }
 
   const components = [];
   if (items.length > 0) {
@@ -92,35 +146,57 @@ export async function open(ix, [rawPage = '0'] = [], ctx, notice = null) {
       ),
     );
   }
-  if (total > PAGE_SIZE) {
+
+  if (query) {
     components.push(
       row(
-        button(id('shop', 'open', String(page - 1)), '前のページ', { emoji: '⬅️', disabled: page === 0 }),
-        button(id('shop', 'open', String(page + 1)), '次のページ', {
-          emoji: '➡️',
-          disabled: (page + 1) * PAGE_SIZE >= total,
-        }),
+        button(id('shop', 'search'), 'ほかの言葉で探す', { emoji: '🔍', style: ButtonStyle.PRIMARY }),
+        button(id('shop', 'open'), '探すのをやめる', { emoji: '↩️' }),
       ),
     );
+  } else {
+    // 並べ方（いま選んでいるものは押せない＝目印）と、探すボタン
+    components.push(
+      row(
+        ...Object.entries(SORTS).map(([key, meta]) =>
+          button(id('shop', 'open', '0', key), meta.label, {
+            emoji: meta.emoji,
+            style: key === sort ? ButtonStyle.PRIMARY : ButtonStyle.SECONDARY,
+            disabled: key === sort,
+          }),
+        ),
+        button(id('shop', 'search'), '探す', { emoji: '🔍' }),
+      ),
+    );
+    if (total > PAGE_SIZE) {
+      components.push(
+        row(
+          button(id('shop', 'open', String(page - 1), sort), '前のページ', { emoji: '⬅️', disabled: page === 0 }),
+          button(id('shop', 'open', String(page + 1), sort), '次のページ', {
+            emoji: '➡️',
+            disabled: (page + 1) * PAGE_SIZE >= total,
+          }),
+        ),
+      );
+    }
   }
   components.push(
     row(
       button(id('shop', 'sell'), '出品する', { emoji: '🆕', style: ButtonStyle.SUCCESS }),
       button(id('shop', 'mine'), '自分の出品', { emoji: '📦' }),
       button(id('shop', 'inventory'), '持ち物', { emoji: '🎒' }),
+      backButton(),
     ),
-    row(backButton()),
   );
+
+  const footer = query
+    ? `「${truncate(query, 30)}」で ${items.length} 件${items.length >= PAGE_SIZE ? '（多いので先頭の25件）' : ''}`
+    : `${SORTS[sort].label}・全 ${total} 件${total > PAGE_SIZE ? `／${page + 1} ページ目` : ''}`;
 
   return show(ix, {
     embeds: [
       withNotice(
-        embed({
-          color: 0x1abc9c,
-          title: '🛍️ ショップ',
-          description,
-          footer: { text: `全 ${total} 件${total > PAGE_SIZE ? `／${page + 1} ページ目` : ''}` },
-        }),
+        embed({ color: COLORS.shop, title: query ? '🔍 ショップで探す' : '🛍️ ショップ', description, footer: { text: footer } }),
         notice,
       ),
     ],
@@ -225,8 +301,11 @@ export async function buy(ix, [rawId], ctx) {
   }
 
   const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
+  // 出品者にだけ通知を鳴らす（名前を本文に書かないと、allowed_mentions に入れても鳴らない）
   ctx.announce(ix.channelId, {
-    content: `🧾 <@${ix.userId}> が **${truncate(item.name, 60)}** を ${coins(item.price, settings)} で購入しました。`,
+    content:
+      `🧾 <@${ix.userId}> が **${truncate(item.name, 60)}** を ${coins(item.price, settings)} で購入しました。` +
+      `\n出品者: <@${item.seller_id}>`,
     allowed_mentions: { users: [item.seller_id] },
   });
 
@@ -295,12 +374,14 @@ export function sellform(ix, [kind]) {
 }
 
 export async function create(ix, [kind = 'consumable'] = [], ctx) {
-  const name = readText(ix, 'name');
+  const name = readText(ix, 'name', { line: true, max: 60 });
   const price = readInt(ix, 'price', { min: 0 });
   const stock = readInt(ix, 'stock', { min: 1, fallback: -1 });
   const imageUrl = readText(ix, 'image_url');
 
   if (!name) return open(ix, [], ctx, 'アイテム名を入力してください。');
+  const money = realMoneyWord(`${name} ${readText(ix, 'description') ?? ''}`);
+  if (money) return open(ix, [], ctx, realMoneyMessage(money));
   if (isError(price)) return open(ix, [], ctx, price.error);
   if (isError(stock)) return open(ix, [], ctx, stock.error);
   if (imageUrl && !isImageUrl(imageUrl)) return open(ix, [], ctx, '画像URLは http(s) から始まるURLを入力してください。');
@@ -327,6 +408,7 @@ async function announceListing(ix, ctx, item) {
   const tag = titleTag(title);
 
   const meta = ITEM_KINDS[item.kind] ?? ITEM_KINDS.consumable;
+  /** @type {Array<{name: string, value: string, inline?: boolean}>} */
   const fields = [
     { name: '価格', value: coins(item.price, settings), inline: true },
     { name: '在庫', value: item.stock < 0 ? '無制限' : `${item.stock} 個`, inline: true },
@@ -344,8 +426,13 @@ async function announceListing(ix, ctx, item) {
         description: `<@${ix.userId}> が出品しました。`,
         image: item.image_url ?? undefined,
         fields,
-        footer: { text: '/menu → 🛍️ ショップ から買えます' },
+        footer: { text: '「見る・買う」を押すと、押した人にだけ商品ページが開きます' },
       }),
+    ],
+    components: [
+      row(
+        button(`${PUBLIC_PREFIX}:buy:${item.id}`, '見る・買う', { emoji: '🛒', style: ButtonStyle.SUCCESS }),
+      ),
     ],
     allowed_mentions: { parse: [] },
   });
@@ -358,6 +445,7 @@ export async function mine(ix, _args, ctx, notice = null) {
   const items = await listItems(ctx.db, ix.guildId, { sellerId: ix.userId, includeInactive: true, limit: 25 });
   const sales = await salesOf(ctx.db, ix.guildId, ix.userId);
   const revenue = sales.reduce((sum, entry) => sum + entry.total, 0);
+  const pending = await pendingDeliveries(ctx.db, ix.guildId, ix.userId);
 
   const components = [];
   if (items.length > 0) {
@@ -376,6 +464,11 @@ export async function mine(ix, _args, ctx, notice = null) {
   components.push(
     row(
       button(id('shop', 'sell'), '出品する', { emoji: '🆕', style: ButtonStyle.SUCCESS }),
+      button(id('shop', 'pending'), `対応待ち ${pending.length} 件`, {
+        emoji: '📬',
+        style: pending.length > 0 ? ButtonStyle.PRIMARY : ButtonStyle.SECONDARY,
+        disabled: pending.length === 0,
+      }),
       backButton('shop', 'ショップへ'),
       homeButton(),
     ),
@@ -392,7 +485,7 @@ export async function mine(ix, _args, ctx, notice = null) {
               ? 'まだ出品していません。**🆕 出品する** から始められます。'
               : items
                   .map((item) => {
-                    const state = item.active ? (item.stock < 0 ? '在庫∞' : `残り${item.stock}`) : '停止中';
+                    const state = stateLabel(item);
                     return `**#${item.id} ${truncate(item.name, 40)}** — ${settings.currency_emoji}${item.price}　*(${state}・${item.sold}個売れた)*`;
                   })
                   .join('\n'),
@@ -403,6 +496,49 @@ export async function mine(ix, _args, ctx, notice = null) {
     ],
     components,
   });
+}
+
+/** 使われたのに、まだ「対応した」を押していないもの。ここからも押せる。 */
+export async function pending(ix, _args, ctx, notice = null) {
+  const list = await pendingDeliveries(ctx.db, ix.guildId, ix.userId);
+  const seconds = (ms) => Math.floor(ms / 1000);
+  return show(ix, {
+    embeds: [
+      withNotice(
+        embed({
+          color: COLORS.shop,
+          title: '📬 対応待ち',
+          description:
+            list.length === 0
+              ? '対応待ちはありません。おつかれさまでした！'
+              : list
+                  .map((entry) => `• **${truncate(entry.name, 40)}** — <@${entry.buyer_id}> が <t:${seconds(entry.used_at)}:R> に使用`)
+                  .join('\n'),
+          footer: list.length > 0 ? { text: '受け渡しが済んだものを選ぶと「対応した」になります' } : undefined,
+        }),
+        notice,
+      ),
+    ],
+    components: [
+      list.length > 0
+        ? stringSelect(
+            id('shop', 'deliver'),
+            '対応したものを選ぶ',
+            list.map((entry) => ({
+              label: truncate(entry.name, 100),
+              value: String(entry.id),
+              description: truncate(`購入番号 ${entry.id}`, 100),
+            })),
+          )
+        : null,
+      row(button(id('shop', 'mine'), '自分の出品', { emoji: '📦' }), homeButton()),
+    ],
+  });
+}
+
+export async function deliver(ix, _args, ctx) {
+  const marked = await markDelivered(ctx.db, ix.guildId, Number(ix.values[0]), ix.userId);
+  return pending(ix, [], ctx, marked ? '「対応した」にしました' : 'もう対応済みか、見つかりませんでした。');
 }
 
 export async function manage2(ix, _args, ctx) {
@@ -428,8 +564,11 @@ export async function manage(ix, [rawId], ctx, notice = null) {
             { name: '在庫', value: item.stock < 0 ? '無制限' : `${item.stock}`, inline: true },
             { name: '売れた数', value: `${item.sold}`, inline: true },
             { name: '種類', value: kindLabel(item.kind), inline: true },
-            { name: '状態', value: item.active ? '販売中' : '停止中', inline: true },
+            { name: '状態', value: stateLabel(item), inline: true },
           ],
+          footer: item.taken_down
+            ? { text: '管理者が取り下げました。再開したいときはサーバーの管理者に相談してください' }
+            : undefined,
         }),
         notice,
       ),
@@ -443,6 +582,7 @@ export async function manage(ix, [rawId], ctx, notice = null) {
         button(id('shop', 'remove', String(item.id)), item.active ? '取り下げる' : '再開する', {
           emoji: item.active ? '🗑️' : '♻️',
           style: item.active ? ButtonStyle.DANGER : ButtonStyle.SUCCESS,
+          disabled: Boolean(item.taken_down),
         }),
       ),
       row(backButton('shop', 'ショップへ'), button(id('shop', 'mine'), '自分の出品', { emoji: '📦' }), homeButton()),
@@ -475,12 +615,14 @@ export async function update(ix, [rawId], ctx) {
   if (!item) return mine(ix, [], ctx, 'そのアイテムは見つかりませんでした。');
   if (item.seller_id !== ix.userId) return open(ix, [], ctx, '自分の出品だけ編集できます。');
 
-  const name = readText(ix, 'name');
+  const name = readText(ix, 'name', { line: true, max: 60 });
   const price = readInt(ix, 'price', { min: 0 });
   const stock = readInt(ix, 'stock', { min: 0, fallback: -1 });
   const imageUrl = readText(ix, 'image_url');
 
   if (!name) return manage(ix, [rawId], ctx, 'アイテム名を入力してください。');
+  const money = realMoneyWord(`${name} ${readText(ix, 'description') ?? ''}`);
+  if (money) return manage(ix, [rawId], ctx, realMoneyMessage(money));
   if (isError(price)) return manage(ix, [rawId], ctx, price.error);
   if (isError(stock)) return manage(ix, [rawId], ctx, stock.error);
   if (imageUrl && !isImageUrl(imageUrl)) return manage(ix, [rawId], ctx, '画像URLは http(s) から始まるURLにしてください。');
@@ -491,7 +633,8 @@ export async function update(ix, [rawId], ctx) {
     description: readText(ix, 'description'),
     stock,
     image_url: imageUrl,
-    active: stock === 0 ? 0 : 1,
+    // 管理者が取り下げたものは、編集しても売り場に戻さない
+    active: stock === 0 || item.taken_down ? 0 : 1,
   });
 
   return manage(ix, [rawId], ctx, '内容を更新しました');
@@ -516,6 +659,7 @@ export async function remove(ix, [rawId], ctx) {
     await setActive(ctx.db, ix.guildId, item.id, false);
     return manage(ix, [rawId], ctx, '出品を取り下げました');
   }
+  if (item.taken_down) return manage(ix, [rawId], ctx, '管理者が取り下げた出品は、自分では再開できません。');
   await updateItem(ctx.db, ix.guildId, item.id, { active: 1, stock: item.stock === 0 ? -1 : item.stock });
   return manage(ix, [rawId], ctx, '販売を再開しました');
 }
@@ -636,17 +780,48 @@ export async function owned(ix, args, ctx, notice = null) {
   });
 }
 
+/** 使う前に確かめる。使うとチャンネルに流れて、取り消せないため。 */
 export async function use(ix, [rawId], ctx) {
+  const itemId = Number(rawId);
+  const entry = await ownedItem(ctx.db, ix.guildId, ix.userId, itemId);
+  if (!entry || !isConsumable(entry.kind) || entry.usable <= 0) {
+    return owned(ix, [String(itemId)], ctx, '使えるものがありませんでした。');
+  }
+  return show(ix, {
+    embeds: [
+      embed({
+        color: 0x9b59b6,
+        title: `✨ ${truncate(entry.name, 80)} を使いますか？`,
+        description:
+          `使うと1つ減り（あと ${entry.usable - 1} 個）、**チャンネルに「使いました」と流れます**。\n` +
+          '出品者にも通知が届きます。使ったあとで取り消すことはできません。',
+        thumbnail: entry.image_url ?? undefined,
+      }),
+    ],
+    components: [
+      row(
+        button(id('shop', 'useok', String(itemId)), '使う', { emoji: '✨', style: ButtonStyle.SUCCESS }),
+        button(id('shop', 'owned', String(itemId)), 'やめる', { emoji: '↩️' }),
+      ),
+    ],
+  });
+}
+
+export async function useok(ix, [rawId], ctx) {
   const itemId = Number(rawId);
   const used = await useItem(ctx.db, ix.guildId, ix.userId, itemId);
   if (!used) return owned(ix, [String(itemId)], ctx, '使えるものがありませんでした。');
 
   const item = await getItem(ctx.db, ix.guildId, itemId);
+  /** @type {Array<{name: string, value: string, inline?: boolean}>} */
   const fields = [{ name: '商品番号', value: `#${itemId}`, inline: true }];
   if (item?.seller_id) fields.push({ name: '出品者', value: `<@${item.seller_id}>`, inline: true });
   if (item?.description) fields.push({ name: '説明', value: truncate(item.description, 400) });
 
+  // embed の中のメンションは通知が鳴らないので、出品者は本文に書く
+  const hasSeller = Boolean(item?.seller_id) && item.seller_id !== 'deleted';
   ctx.announce(ix.channelId, {
+    content: hasSeller ? `<@${item.seller_id}> さん、出番です` : '',
     embeds: [
       embed({
         color: 0x9b59b6,
@@ -655,10 +830,13 @@ export async function use(ix, [rawId], ctx) {
         description: `<@${ix.userId}> が使いました。`,
         image: used.image_url ?? undefined,
         fields,
-        footer: { text: '受け渡しは当人同士でどうぞ' },
+        footer: { text: hasSeller ? '受け渡しが済んだら、出品者が「対応した」を押してください' : '受け渡しは当人同士でどうぞ' },
       }),
     ],
-    allowed_mentions: item?.seller_id ? { users: [item.seller_id] } : { parse: [] },
+    components: hasSeller
+      ? [row(button(`${PUBLIC_PREFIX}:done:${used.id}`, '対応した（出品者用）', { emoji: '✅' }))]
+      : [],
+    allowed_mentions: hasSeller ? { users: [item.seller_id] } : { parse: [] },
   });
 
   return owned(ix, [String(itemId)], ctx, `**${used.name}** を使いました！ チャンネルにも知らせました`);
@@ -666,6 +844,10 @@ export async function use(ix, [rawId], ctx) {
 
 export const actions = {
   open,
+  search,
+  find,
+  pending,
+  deliver,
   view,
   view2,
   confirm,
@@ -676,6 +858,7 @@ export const actions = {
   kind,
   owned,
   use,
+  useok,
   mine,
   manage,
   manage2,

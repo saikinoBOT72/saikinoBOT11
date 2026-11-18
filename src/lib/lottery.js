@@ -8,6 +8,7 @@
  */
 import { deposit, withdraw } from './economy.js';
 import { dateKey } from './calendar.js';
+import { randomInt } from './random.js';
 
 export const TICKET_PRICE = 100;
 
@@ -39,7 +40,7 @@ export function formatNumber(number) {
 
 /**
  * 入力を数字に直す。全角も受け取り、3桁になるまでゼロ埋めして読む。
- * @returns {{ok: true, number: number} | {ok: false, message: string}}
+ * @returns {{ok: boolean, number?: number, message?: string}}
  */
 export function parseNumber(input) {
   const normalized = (input ?? '')
@@ -85,7 +86,7 @@ export function parseNumbers(input, limit = MAX_TICKETS_PER_USER) {
 }
 
 function drawNumber() {
-  return Math.floor(Math.random() * (MAX_NUMBER + 1));
+  return randomInt(MAX_NUMBER + 1);
 }
 
 /* ------------------------------------------------------------------ 回（draw）の区切り */
@@ -149,6 +150,11 @@ export async function setChannel(db, guildId, channelId) {
  * 持ち越しと元金を書き換える（管理者用）。
  * undefined を渡した項目は触らない。
  */
+/**
+ * @param {any} db
+ * @param {string} guildId
+ * @param {{carryover?: number, seedPool?: number}} [pool]
+ */
 export async function setPool(db, guildId, { carryover, seedPool } = {}) {
   await getLottery(db, guildId);
   if (Number.isInteger(carryover)) {
@@ -203,7 +209,7 @@ export async function poolOf(db, guildId, drawKey) {
  * 券を1枚買う。
  * 先に席（数字）を取ってから引き落とし、払えなければ席を返す。
  * こうすると「取られたのに買えていない」も「二重に買える」も起きない。
- * @returns {Promise<{ok: true} | {ok: false, reason: 'taken'|'limit'|'insufficient'|'range'}>}
+ * @returns {Promise<{ok: boolean, reason?: 'taken'|'limit'|'insufficient'|'range'}>}
  */
 export async function buyTicket(db, guildId, drawKey, userId, number) {
   if (!Number.isInteger(number) || number < 0 || number > MAX_NUMBER) return { ok: false, reason: 'range' };
@@ -265,7 +271,7 @@ export async function pickFreeNumbers(db, guildId, drawKey, count) {
   const free = [];
   // 1000通りしかないので、埋まっていても必ず有限回で終わる
   for (let attempt = 0; attempt < 400 && free.length < count; attempt++) {
-    const number = Math.floor(Math.random() * (MAX_NUMBER + 1));
+    const number = randomInt(MAX_NUMBER + 1);
     if (taken.has(number)) continue;
     taken.add(number);
     free.push(number);
@@ -280,16 +286,27 @@ export async function pickFreeNumbers(db, guildId, drawKey, count) {
  * @returns {Promise<null | {number, winnerId, prize, pool, carryover, tickets}>}
  */
 export async function drawLottery(db, lottery, drawKey, number = drawNumber()) {
-  // 「この回はもう引いた」を先に立てる。取れなければ誰かが引いている
+  // 「この回はもう引いた」を先に立てる。抽選の記録（回ごとに1行）を先に作れた1つだけが引く。
+  // 回ごとに印が付くので、遅れて昔の回を引いても、ほかの回の印を上書きしない
   const claimed = await db.run(
-    'UPDATE lottery SET last_draw_key = ?2 WHERE guild_id = ?1 AND (last_draw_key IS NULL OR last_draw_key != ?2)',
+    `INSERT OR IGNORE INTO lottery_draws (guild_id, draw_key, number, winner_id, prize, pool, carryover, tickets, created_at)
+     VALUES (?1, ?2, ?3, NULL, 0, 0, 0, 0, ?4)`,
+    lottery.guild_id,
+    drawKey,
+    number,
+    Date.now(),
+  );
+  if (claimed.changes !== 1) return null;
+  await db.run(
+    'UPDATE lottery SET last_draw_key = ?2 WHERE guild_id = ?1 AND (last_draw_key IS NULL OR last_draw_key < ?2)',
     lottery.guild_id,
     drawKey,
   );
-  if (claimed.changes !== 1) return null;
 
+  // 持ち越しは、いま読み直した値を使う（追いかけて何回ぶんか続けて引くときにずれないように）
+  const fresh = (await getLottery(db, lottery.guild_id)) ?? lottery;
   const { tickets, pool } = await poolOf(db, lottery.guild_id, drawKey);
-  const carryover = lottery.carryover;
+  const carryover = fresh.carryover;
   const hit = await db.get(
     'SELECT * FROM lottery_tickets WHERE guild_id = ?1 AND draw_key = ?2 AND number = ?3',
     lottery.guild_id,
@@ -301,26 +318,40 @@ export async function drawLottery(db, lottery, drawKey, number = drawNumber()) {
   if (hit) {
     await deposit(db, lottery.guild_id, hit.user_id, prize, 'lottery:win', `${drawKey} ${formatNumber(number)}`);
     // 払い出したら、また元金から積み直す
-    await db.run('UPDATE lottery SET carryover = ?2 WHERE guild_id = ?1', lottery.guild_id, seedPoolOf(lottery));
+    await db.run('UPDATE lottery SET carryover = ?2 WHERE guild_id = ?1', lottery.guild_id, seedPoolOf(fresh));
   } else {
     await db.run('UPDATE lottery SET carryover = ?2 WHERE guild_id = ?1', lottery.guild_id, carryover + pool);
   }
 
   await db.run(
-    `INSERT OR REPLACE INTO lottery_draws (guild_id, draw_key, number, winner_id, prize, pool, carryover, tickets, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+    `UPDATE lottery_draws SET winner_id = ?3, prize = ?4, pool = ?5, carryover = ?6, tickets = ?7
+      WHERE guild_id = ?1 AND draw_key = ?2`,
     lottery.guild_id,
     drawKey,
-    number,
     hit?.user_id ?? null,
     prize,
     pool,
     carryover,
     tickets,
-    Date.now(),
   );
 
   return { number, winnerId: hit?.user_id ?? null, prize, pool, carryover, tickets };
+}
+
+/**
+ * 引きそびれた回。抽選の時刻が過ぎたのに、券が売れたまま引かれていない回を古い順に。
+ * 日曜19時台に Bot が止まっていた・発表チャンネルを後から決めた、などで起きる。
+ */
+export async function missedDraws(db, guildId, calendar, now = new Date()) {
+  const rows = await db.all(
+    `SELECT DISTINCT t.draw_key FROM lottery_tickets t
+      WHERE t.guild_id = ?1 AND t.draw_key < ?2
+        AND NOT EXISTS (SELECT 1 FROM lottery_draws d WHERE d.guild_id = t.guild_id AND d.draw_key = t.draw_key)
+      ORDER BY t.draw_key ASC LIMIT 5`,
+    guildId,
+    drawKeyFor(calendar, now),
+  );
+  return rows.map((row) => row.draw_key);
 }
 
 /** 直近の抽選結果。 */

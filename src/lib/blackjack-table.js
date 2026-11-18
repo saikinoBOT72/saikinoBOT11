@@ -7,7 +7,7 @@
 import { deposit, withdraw } from './economy.js';
 import { DECKS, MAX_PLAYERS, dealerShouldHit, isBlackjack, outcome, payout } from './blackjack.js';
 import { draw, newDeck } from './cards.js';
-import { createTableStore } from './card-table.js';
+import { createTableStore, keptSeat } from './card-table.js';
 
 /** 参加を待つ時間と、席についてからの持ち時間。 */
 export const JOIN_TIMEOUT_MS = 120_000;
@@ -19,7 +19,7 @@ const store = createTableStore('blackjack_tables', {
   playTimeoutMs: PLAY_TIMEOUT_MS,
 });
 
-export const { createTable, getTable, stateOf, setMessageId, setStatus, mutate, expiredTables } = store;
+export const { createTable, getTable, stateOf, setMessageId, setStatus, mutate, close, expiredTables } = store;
 
 /* ------------------------------------------------------------------ 席につく */
 
@@ -29,7 +29,7 @@ export function seatOf(state, userId) {
 
 /**
  * 席につく。先に席を取ってから引き落とし、払えなければ席を返す。
- * @returns {Promise<{ok: true, state: object} | {ok: false, reason: string}>}
+ * @returns {Promise<{ok: boolean, table?: any, state?: any, reason?: string}>}
  */
 export async function joinTable(db, table, userId) {
   const claimed = await mutate(
@@ -58,6 +58,8 @@ export async function joinTable(db, table, userId) {
     );
     return { ok: false, reason: 'insufficient' };
   }
+  // 払っているあいだに「抜ける」「解散」が割り込んでいたら、払ったぶんを返す
+  if (!(await keptSeat(db, table, userId, { getTable, stateOf, refundReason: 'blackjack:refund' }))) return { ok: false, reason: 'closed' };
   return claimed;
 }
 

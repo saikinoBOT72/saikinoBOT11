@@ -1,6 +1,6 @@
 import { deposit } from './economy.js';
 import { equippedTitles, titleTag } from './achievements.js';
-import { METRICS, computeRanking, formatValue, periodStart, rankingTitle } from './ranking.js';
+import { METRICS, PERIOD_MODES, computeRanking, formatValue, looksBack, periodRange, rankingTitle } from './ranking.js';
 import { currentHour, dateKey } from './calendar.js';
 
 export { currentHour };
@@ -52,34 +52,75 @@ export function describeSchedule(announcement) {
   return `${when} ${announcement.hour}時`;
 }
 
+/** 発表の集計期間。'day' か 'week'。 */
+export function periodOf(announcement) {
+  return announcement.frequency === 'weekly' ? 'week' : 'day';
+}
+
+/** 集計期間の選び方（おまかせ・昨日先週・今日今週）。 */
+export function periodModeOf(announcement) {
+  return PERIOD_MODES[announcement.period] ? announcement.period : 'auto';
+}
+
+/** 時刻・人数・賞金を変える。 */
+export async function updateAnnouncement(db, guildId, id, { hour, topN, prize }) {
+  await db.run(
+    'UPDATE announcements SET hour = ?3, top_n = ?4, prize = ?5 WHERE guild_id = ?1 AND id = ?2',
+    guildId,
+    id,
+    hour,
+    topN,
+    prize,
+  );
+  return getAnnouncement(db, guildId, id);
+}
+
 export function describeAnnouncement(announcement) {
-  const period = announcement.frequency === 'weekly' ? 'week' : 'day';
   const title = rankingTitle({
     metric: announcement.metric,
     activityName: announcement.activity_name,
-    period,
+    period: periodOf(announcement),
   });
   const prize = announcement.prize > 0 ? `／1位に ${announcement.prize}` : '';
-  return `${title}　*(${describeSchedule(announcement)}・上位${announcement.top_n}人${prize})*`;
+  const mode = METRICS[announcement.metric]?.usesPeriod ? `・集計 ${PERIOD_MODES[periodModeOf(announcement)].label}` : '';
+  return `${title}　*(${describeSchedule(announcement)}・上位${announcement.top_n}人${prize}${mode})*`;
+}
+
+/** 集計期間の選び方を順に切り替える（おまかせ → 昨日・先週 → 今日・今週 → おまかせ）。 */
+export async function cyclePeriodMode(db, guildId, id) {
+  const current = await getAnnouncement(db, guildId, id);
+  if (!current) return null;
+  const order = Object.keys(PERIOD_MODES);
+  const next = order[(order.indexOf(periodModeOf(current)) + 1) % order.length];
+  await db.run('UPDATE announcements SET period = ?3 WHERE guild_id = ?1 AND id = ?2', guildId, id, next);
+  return getAnnouncement(db, guildId, id);
 }
 
 /**
  * いま発表すべきものを探す。
  * 1分ごとに呼ばれるので、時が一致していてその日まだ出していないものを対象にする。
  */
-export async function dueAnnouncements(db, calendar, now = new Date()) {
-  // 「何時に出すか」は時計どおり。「その日もう出したか」は区切りに合わせた日付で見る
-  const today = dateKey(calendar, now);
-  const hour = currentHour(calendar, now);
-  const weekday = new Date(`${today}T00:00:00Z`).getUTCDay();
+/**
+ * いま発表すべきものを探す。
+ * 「何時に出すか」は時計どおり。「その日もう出したか」は、そのサーバーの区切りに合わせた日付で見る。
+ * calendarOf はサーバーごとの数え方を返す（区切りはサーバーごとに変えられるため）。
+ * @returns {Promise<Array<object & {today: string, calendar: object}>>}
+ */
+export async function dueAnnouncements(db, calendarOf, now = new Date()) {
+  const lookup = typeof calendarOf === 'function' ? calendarOf : async () => calendarOf;
+  const anyCalendar = await lookup(null);
+  const hour = currentHour(anyCalendar, now);
 
-  const rows = await db.all(
-    `SELECT * FROM announcements
-      WHERE enabled = 1 AND hour = ?1 AND (last_run_date IS NULL OR last_run_date != ?2)`,
-    hour,
-    today,
-  );
-  return rows.filter((row) => row.frequency === 'daily' || row.weekday === weekday);
+  const rows = await db.all('SELECT * FROM announcements WHERE enabled = 1 AND hour = ?1', hour);
+  const due = [];
+  for (const row of rows) {
+    const calendar = await lookup(row.guild_id);
+    const today = dateKey(calendar, now);
+    if (row.last_run_date === today) continue;
+    const weekday = new Date(`${today}T00:00:00Z`).getUTCDay();
+    if (row.frequency === 'daily' || row.weekday === weekday) due.push({ ...row, today, calendar });
+  }
+  return due;
 }
 
 export async function markAnnounced(db, id, dateString) {
@@ -90,13 +131,21 @@ export async function markAnnounced(db, id, dateString) {
  * 発表用の Embed を組み立て、必要なら1位へ賞金を渡す。
  * @returns {Promise<{embed: object, winners: string[]} | null>} 対象がいなければ null
  */
-export async function buildAnnouncement(db, announcement, { settings, calendar }) {
-  const period = announcement.frequency === 'weekly' ? 'week' : 'day';
+/**
+ * 発表の中身を作る。本番なら1位に賞金を贈る。
+ * trial: true（試し・下見）のときは賞金を贈らず、そのことを書き添える。
+ */
+export async function buildAnnouncement(db, announcement, { settings, calendar, now = new Date(), trial = false }) {
+  const period = periodOf(announcement);
+  const usesPeriod = Boolean(METRICS[announcement.metric]?.usesPeriod);
+  const back = usesPeriod && looksBack(periodModeOf(announcement), period, calendar, now);
+  const { since, until } = periodRange(usesPeriod ? period : 'all', calendar, now, back);
   const rows = await computeRanking(db, {
     guildId: announcement.guild_id,
     metric: announcement.metric,
     activityName: announcement.activity_name,
-    since: periodStart(METRICS[announcement.metric]?.usesPeriod ? period : 'all', calendar),
+    since,
+    until,
     limit: announcement.top_n,
     calendar,
   });
@@ -110,7 +159,9 @@ export async function buildAnnouncement(db, announcement, { settings, calendar }
   });
 
   const winners = [];
-  if (announcement.prize > 0) {
+  if (announcement.prize > 0 && trial) {
+    lines.push('', `🎁 本番では1位に ${settings.currency_emoji} ${announcement.prize} を贈ります（試しなので、まだ贈っていません）`);
+  } else if (announcement.prize > 0) {
     const top = rows[0];
     await deposit(db, announcement.guild_id, top.user_id, announcement.prize, 'ranking', '1位の賞金');
     winners.push(top.user_id);
@@ -120,7 +171,7 @@ export async function buildAnnouncement(db, announcement, { settings, calendar }
   return {
     embed: embed({
       color: 0xf1c40f,
-      title: `📢 ${rankingTitle({ metric: announcement.metric, activityName: announcement.activity_name, period })}`,
+      title: `📢 ${rankingTitle({ metric: announcement.metric, activityName: announcement.activity_name, period, back })}`,
       description: lines.join('\n'),
       footer: { text: describeSchedule(announcement) },
     }),

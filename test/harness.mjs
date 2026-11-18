@@ -12,29 +12,47 @@ export function createTestContext() {
   const db = createFakeD1(migrationsDir);
   const sent = [];
   const edited = [];
+  const deleted = [];
   // 演出（回転中→結果）で送られる書き換えを、待ち時間なしで記録する
   const animated = [];
   const settingsCache = new Map();
   const pending = [];
   const applicationEmojis = { items: [], error: false };
+  // 押した本人にだけ送った一言（投稿に失敗したときなど）
+  const followups = [];
+  // チャンネルへの投稿をわざと失敗させるときに true にする
+  const failPosts = { on: false };
 
   return {
     db,
     sent,
     edited,
+    deleted,
     animated,
     applicationEmojis,
+    followups,
+    failPosts,
+    ix: null,
     env: { TIMEZONE: 'Asia/Tokyo' },
     timezone: 'Asia/Tokyo',
     calendar: { timezone: 'Asia/Tokyo', dayStartHour: 0 },
     rest: {
       async createMessage(channelId, payload) {
+        if (failPosts.on) throw new Error('Discord API POST /channels/x/messages が失敗しました (403): Missing Access');
         sent.push({ channelId, payload });
         return { id: `msg${sent.length}` };
+      },
+      async createFollowup(applicationId, token, payload) {
+        followups.push(payload);
+        return {};
       },
       async editMessage(channelId, messageId, payload) {
         edited.push({ channelId, messageId, payload });
         return {};
+      },
+      async deleteMessage(channelId, messageId) {
+        deleted.push({ channelId, messageId });
+        return null;
       },
       /** 先に「受け取った」と返したあと、押されたメッセージを書き換えるときに使われる。 */
       async editOriginalResponse(applicationId, token, payload) {
@@ -62,12 +80,33 @@ export function createTestContext() {
     forgetSettings(guildId) {
       settingsCache.delete(guildId);
     },
+    async calendarFor(guildId) {
+      if (!guildId) return this.calendar;
+      const settings = await this.settings(guildId);
+      if (settings?.day_start_hour == null) return this.calendar;
+      return { ...this.calendar, dayStartHour: settings.day_start_hour };
+    },
     waitUntil(promise) {
       pending.push(promise);
     },
+    async reportError(guildId, place, error) {
+      const { recordError, errorNotice } = await import(src('lib/error-report.js'));
+      const channelId = await recordError(db, guildId, place, error);
+      if (channelId) {
+        failPosts.on = false;
+        await this.rest.createMessage(channelId, errorNotice(place, error));
+      }
+    },
     announce(channelId, payload) {
-      if (!channelId) return;
-      this.waitUntil(this.rest.createMessage(channelId, payload));
+      if (!channelId) return Promise.resolve(null);
+      const ix = this.ix;
+      const posting = this.rest.createMessage(channelId, payload).catch(async (error) => {
+        await this.reportError(ix?.guildId, 'チャンネルへの投稿', error);
+        await this.rest.createFollowup('app', 'token', { content: `⚠️ <#${channelId}> に投稿できませんでした。` });
+        return null;
+      });
+      this.waitUntil(posting);
+      return posting;
     },
     animate(_ix, steps) {
       for (const step of steps) animated.push(step.payload);
@@ -94,6 +133,7 @@ export function rawInteraction({
   commandName,
   resolvedUsers = {},
   fromMessage = true,
+  message = null,
 } = {}) {
   const data = {};
   if (customId) data.custom_id = customId;
@@ -117,7 +157,7 @@ export function rawInteraction({
       permissions: admin ? ADMIN_PERMISSION : '0',
       user: { id: userId, username: `user${userId}`, global_name: null, avatar: null },
     },
-    ...(fromMessage && type !== 2 ? { message: { id: 'menu-message' } } : {}),
+    ...(fromMessage && type !== 2 ? { message: { id: 'menu-message', ...(message ?? {}) } } : {}),
   };
 }
 

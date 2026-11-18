@@ -13,11 +13,14 @@ import {
   setStatus,
 } from '../lib/rps.js';
 import { deposit, getSettings, withdraw } from '../lib/economy.js';
-import { coins } from '../lib/format.js';
+import { coins, relative } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
 import { handleRematch, rematchButton } from './rematch.js';
+import { foldLater } from '../lib/guild-prefs.js';
+import { recordMatch } from '../lib/match-results.js';
+import { inviteParts, resolveInvite } from './open-invite.js';
 
 /** 公開メッセージのボタンは `rps:` 始まり（メニューの `m:` とは別系統）。 */
 export const namespace = 'rps';
@@ -28,28 +31,29 @@ export const namespace = 'rps';
  */
 export async function startChallenge(ctx, { guildId, channelId, challengerId, opponentId, bet, settings }) {
   const id = crypto.randomUUID();
-  await createMatch(ctx.db, { id, guildId, channelId, challengerId, opponentId, bet });
+  const created = await createMatch(ctx.db, { id, guildId, channelId, challengerId, opponentId, bet });
 
+  const invite = inviteParts(challengerId, opponentId);
   try {
     const message = await ctx.rest.createMessage(channelId, {
-      content: `<@${opponentId}>`,
+      content: invite.content,
       embeds: [
         embed({
           color: 0x5865f2,
           title: '✊✌️🖐️ じゃんけん勝負！',
           description:
-            `<@${challengerId}> が <@${opponentId}> に勝負を挑みました。\n` +
+            `${invite.line}\n` +
             (bet > 0 ? `賭け金は ${coins(bet, settings)}（勝者が総取り）` : '賭けなしの真剣勝負'),
-          footer: { text: '2分以内に応答がなければ自動でキャンセルされます' },
+          fields: [{ name: '⏰ 返事の締め切り', value: `${relative(created.expires_at)}　受けなければ流れます` }],
         }),
       ],
       components: [
         row(
           button(`rps:accept:${id}`, '受けて立つ', { style: ButtonStyle.SUCCESS }),
-          button(`rps:decline:${id}`, 'やめておく', { style: ButtonStyle.SECONDARY }),
+          button(`rps:decline:${id}`, invite.declineLabel, { style: ButtonStyle.SECONDARY }),
         ),
       ],
-      allowed_mentions: { users: [opponentId] },
+      allowed_mentions: invite.allowed_mentions,
     });
     await setMessageId(ctx.db, id, message.id);
     return message;
@@ -83,10 +87,10 @@ export async function handleComponent(ix, ctx) {
   return reply({ content: '不明な操作です。' });
 }
 
-async function handleInvite(ix, ctx, match, action) {
-  if (ix.userId !== match.opponent_id) {
-    return reply({ content: 'この勝負に呼ばれているのはあなたではありません。' });
-  }
+async function handleInvite(ix, ctx, invited, action) {
+  const resolved = await resolveInvite(ix, ctx, { table: 'rps_matches', match: invited, action, need: invited.bet, cancelled: cancelEmbed });
+  if (resolved.response) return resolved.response;
+  const { match } = resolved;
 
   if (action === 'decline') {
     await setStatus(ctx.db, match.id, 'cancelled');
@@ -124,9 +128,10 @@ async function handleInvite(ix, ctx, match, action) {
     }
   }
 
+  const started = (await getMatch(ctx.db, match.id)) ?? match;
   return update({
     content: `<@${match.challenger_id}> <@${match.opponent_id}>`,
-    embeds: [playEmbed(match, settings, 1)],
+    embeds: [playEmbed(started, settings, 1)],
     components: [handRow(match.id)],
   });
 }
@@ -166,7 +171,7 @@ export async function resolveMatch(ctx, match) {
     if (match.round >= MAX_DRAWS) {
       if (!(await finishMatch(ctx.db, match.id))) return alreadyResolved();
       await refund(ctx.db, match);
-      return update({
+      return finalUpdate(ctx, match, {
         content: handsArt,
         embeds: [
           embed({
@@ -197,8 +202,9 @@ export async function resolveMatch(ctx, match) {
   const winnerId = result === 'challenger' ? match.challenger_id : match.opponent_id;
   const loserId = result === 'challenger' ? match.opponent_id : match.challenger_id;
   if (match.bet > 0) await deposit(ctx.db, match.guild_id, winnerId, match.bet * 2, 'rps:win', match.id);
+  await recordMatch(ctx.db, { guildId: match.guild_id, game: 'rps', winnerId, loserId, amount: match.bet * 2 });
 
-  return update({
+  return finalUpdate(ctx, match, {
     content: handsArt,
     embeds: [
       embed({
@@ -218,6 +224,12 @@ export async function resolveMatch(ctx, match) {
   });
 }
 
+/** 決着の表示。設定がオンなら、あとで1行に畳む予約もする。 */
+function finalUpdate(ctx, match, payload) {
+  ctx.waitUntil(foldLater(ctx, match, payload, '✊ じゃんけん'));
+  return update(payload);
+}
+
 function playEmbed(match, settings, round) {
   return embed({
     color: 0x5865f2,
@@ -226,7 +238,13 @@ function playEmbed(match, settings, round) {
       `<@${match.challenger_id}> vs <@${match.opponent_id}>\n` +
       (match.bet > 0 ? `賭け金 ${coins(match.bet, settings)}（勝者が総取り）\n` : '') +
       '\n二人ともボタンで手を選んでください。選んだ手は相手には見えません。',
-    footer: { text: round > 1 ? `第${round}ラウンド` : '3分以内に選ばないと引き分け返金になります' },
+    fields: [
+      {
+        name: '⏰ 時間切れ',
+        value: `${relative(match.expires_at)}　選ばない人は負け（二人とも選ばなければ返金）`,
+      },
+    ],
+    footer: round > 1 ? { text: `第${round}ラウンド` } : undefined,
   });
 }
 

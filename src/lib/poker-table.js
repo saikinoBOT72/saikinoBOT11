@@ -23,7 +23,7 @@
 import { deposit, withdraw } from './economy.js';
 import { draw, newDeck, sortHand } from './cards.js';
 import { bestOf, evaluate } from './poker.js';
-import { createTableStore } from './card-table.js';
+import { createTableStore, keptSeat } from './card-table.js';
 
 export const MIN_PLAYERS = 2;
 export const MAX_PLAYERS = 4;
@@ -40,7 +40,7 @@ const store = createTableStore('poker_tables', {
   playTimeoutMs: PLAY_TIMEOUT_MS,
 });
 
-export const { createTable, getTable, stateOf, setMessageId, setStatus, mutate, expiredTables } = store;
+export const { createTable, getTable, stateOf, setMessageId, setStatus, mutate, close, expiredTables } = store;
 
 export function seatOf(state, userId) {
   return state.players.findIndex((player) => player.userId === userId);
@@ -57,7 +57,7 @@ export function stayers(state) {
 
 /**
  * 席につく。先に席を取ってから引き落とし、払えなければ席を返す。
- * @returns {Promise<{ok: true, state: object} | {ok: false, reason: string}>}
+ * @returns {Promise<{ok: boolean, table?: any, state?: any, reason?: string}>}
  */
 export async function joinTable(db, table, userId) {
   const claimed = await mutate(
@@ -101,6 +101,8 @@ export async function joinTable(db, table, userId) {
     );
     return { ok: false, reason: 'insufficient' };
   }
+  // 払っているあいだに「抜ける」「解散」が割り込んでいたら、払ったぶんを返す
+  if (!(await keptSeat(db, table, userId, { getTable, stateOf, refundReason: 'poker:refund' }))) return { ok: false, reason: 'closed' };
   return claimed;
 }
 
@@ -306,6 +308,30 @@ export async function settleTable(db, table, state) {
     hand: evaluate(player.cards),
   }));
   return { kind: 'showdown', pot, winners, hands };
+}
+
+/**
+ * 時間切れのとき、いま待たせている人。
+ *  ・交換の段階：まだ交換を終えていない人
+ *  ・提案の周：まだ動いていない人
+ *  ・承認の周：上がったぶんをまだ払っていない人
+ */
+export function idlePlayers(state) {
+  return stayers(state).filter((player) => {
+    if (state.phase === 'draw') return !player.exchanged;
+    if (state.phase !== 'bet') return false;
+    return state.step === ACCEPT ? owedBy(state, player) > 0 : !player.acted;
+  });
+}
+
+/** 待たせていた人を降りた扱いにして、勝負を終わらせた形にする。 */
+export function foldIdle(state) {
+  const idle = new Set(idlePlayers(state).map((player) => player.userId));
+  return {
+    ...state,
+    phase: 'done',
+    players: state.players.map((player) => (idle.has(player.userId) ? { ...player, folded: true, timedOut: true } : player)),
+  };
 }
 
 /** 時間切れで流すときの返金。場に出したぶんを全員に返す。 */

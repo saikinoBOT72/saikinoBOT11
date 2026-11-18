@@ -13,16 +13,13 @@
  * 結局みんな限界まで回すだけになる。持ち点ごと飛ぶようにすると、
  * 終盤ほど「もう振れない」という判断が重くなって、引き際の読み合いになる。
  */
+import { shuffle } from './random.js';
 
 /** 1人が振れるターン数。 */
 export const TURNS = 3;
 
 /** これが出たら持ち点ごと0になる。 */
 export const BUST = 1;
-
-export function rollDie() {
-  return 1 + Math.floor(Math.random() * 6);
-}
 
 /**
  * 1回振った結果を返す（状態は変えない）。
@@ -35,10 +32,5 @@ export function applyRoll(turnTotal, die) {
 
 /** 席順をランダムに並べ替える（先行・後攻を運で決める）。 */
 export function shuffleSeats(players) {
-  const shuffled = [...players];
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-  }
-  return shuffled;
+  return shuffle(players);
 }

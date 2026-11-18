@@ -10,6 +10,8 @@
  * 「読んだときの version のまま」でなければ書けないので、勝った1リクエストだけが進む。
  */
 import { deposit } from './economy.js';
+import { chance } from './random.js';
+import { recordMatch } from './match-results.js';
 
 export const INVITE_TIMEOUT_MS = 120_000;
 export const PLAY_TIMEOUT_MS = 600_000;
@@ -116,7 +118,7 @@ export async function advance(db, duel, { state, turn = null, status = 'playing'
  *   - { reject: '理由' }                       … 書き込まずに終わる
  *   - { state, turn?, status?, extra? }        … この内容で書き込む
  *
- * @returns {Promise<{ok: true, duel: object, state: object, extra?: any} | {ok: false, reason: string}>}
+ * @returns {Promise<{ok: boolean, duel?: any, state?: any, extra?: any, reason?: string}>}
  */
 export async function mutate(db, id, apply, attempts = 6) {
   for (let attempt = 0; attempt < attempts; attempt++) {
@@ -154,6 +156,21 @@ export async function payout(db, duel, amounts, reason) {
       await deposit(db, duel.guild_id, userIdOf(duel, role), amount, reason, `duel:${duel.id}`);
     }
   }
+  // 片方だけが多く受け取ったら、その人の勝ちとして戦績に残す（山分け・返金は残さない）
+  if (reason === 'duel:win') {
+    const mine = amounts.challenger ?? 0;
+    const theirs = amounts.opponent ?? 0;
+    if (mine !== theirs) {
+      const winner = mine > theirs ? 'challenger' : 'opponent';
+      await recordMatch(db, {
+        guildId: duel.guild_id,
+        game: duel.game,
+        winnerId: userIdOf(duel, winner),
+        loserId: userIdOf(duel, otherRole(winner)),
+        amount: Math.max(mine, theirs),
+      });
+    }
+  }
 }
 
 /** 勝った側が総取り。引き分けなら預かりをそのまま返す。 */
@@ -172,28 +189,74 @@ export async function refundDuel(db, duel, reason = 'duel:refund') {
   await payout(db, duel, { challenger: duel.escrow, opponent: duel.escrow }, reason);
 }
 
-/** 期限切れの対戦を中止して返金する（1分ごとの定期処理から呼ぶ）。 */
-export async function cancelExpired(db, now = Date.now()) {
+/**
+ * 期限切れの対戦を片付ける（1分ごとの定期処理から呼ぶ）。
+ *
+ * 【放置した人の負け】
+ * 時間切れを一律に返金にすると、負けそうな人は手を止めるだけで負けを消せる
+ * （ロシアンルーレットで最後の1発を引かずに待つ、など）。
+ * そこで、始まっている勝負は「待たせていた人の負け」にする。
+ * 誰が待たせていたかはゲームごとに違うので decide に任せる。
+ *
+ * decide(duel, state) が返すもの:
+ *   { kind: 'refund' }                          … 二人とも動いていない。預かりを返す
+ *   { kind: 'forfeit', loser: 'challenger' }     … その人の負け。相手が総取り
+ *   { kind: 'payout', amounts: {challenger, opponent} } … 決めた配分で払う（運命の扉の山分けなど）
+ *
+ * 状態を先に書き換え（版番号つき）、取れた1つだけが払う。二重に払わない。
+ * @returns {Promise<Array<{duel: object, outcome: object, refunded: boolean}>>}
+ */
+/**
+ * @param {any} db
+ * @param {number} [now]
+ * @param {(duel: any, state: any) => any} [decide]
+ */
+export async function cancelExpired(db, now = Date.now(), decide = () => ({ kind: 'refund' })) {
   const rows = await db.all(
     "SELECT * FROM duels WHERE status IN ('pending', 'playing') AND expires_at <= ?1 LIMIT 25",
     now,
   );
   const handled = [];
   for (const duel of rows) {
-    // 先に状態を変えてから返金する（二重返金を防ぐ）
+    if (duel.status === 'pending') {
+      // 受ける前ならまだお金は動いていない
+      const claimed = await db.run("UPDATE duels SET status = 'cancelled' WHERE id = ?1 AND status = 'pending'", duel.id);
+      if (claimed.changes === 1) handled.push({ duel, outcome: { kind: 'expired' }, refunded: false });
+      continue;
+    }
+
+    const outcome = (duel.escrow > 0 ? decide(duel, stateOf(duel)) : null) ?? { kind: 'refund' };
     const claimed = await db.run(
-      "UPDATE duels SET status = 'cancelled' WHERE id = ?1 AND status IN ('pending', 'playing')",
+      `UPDATE duels SET status = ?3, turn = NULL, version = version + 1
+        WHERE id = ?1 AND version = ?2 AND status = 'playing'`,
       duel.id,
+      duel.version,
+      outcome.kind === 'refund' ? 'cancelled' : 'done',
     );
     if (claimed.changes !== 1) continue;
-    const refunded = duel.status === 'playing' && duel.escrow > 0;
-    if (refunded) await refundDuel(db, duel);
-    handled.push({ duel, refunded });
+
+    if (outcome.kind === 'forfeit') {
+      const { pot } = await settleDuel(db, duel, otherRole(outcome.loser));
+      handled.push({ duel, outcome: { ...outcome, pot }, refunded: false });
+    } else if (outcome.kind === 'payout') {
+      await payout(db, duel, outcome.amounts, 'duel:win');
+      handled.push({ duel, outcome, refunded: false });
+    } else {
+      await refundDuel(db, duel);
+      handled.push({ duel, outcome: { kind: 'refund' }, refunded: duel.escrow > 0 });
+    }
   }
   return handled;
 }
 
+/** 二人同時に選ぶゲームで、選んでいない人だけを負けにする。二人とも選んでいなければ返金。 */
+export function forfeitUnchosen(chosen) {
+  const missing = ['challenger', 'opponent'].filter((role) => !chosen[role]);
+  if (missing.length === 1) return { kind: 'forfeit', loser: missing[0] };
+  return { kind: 'refund' };
+}
+
 /** どちらが先攻か、コインで決める。 */
 export function randomFirst() {
-  return Math.random() < 0.5 ? 'challenger' : 'opponent';
+  return chance(0.5) ? 'challenger' : 'opponent';
 }

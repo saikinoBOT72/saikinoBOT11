@@ -145,6 +145,31 @@ await test('削除できる', async () => {
   assert.equal(await act.removeActivity(db, G, '自炊'), false);
 });
 
+await test('名前を変えても、記録・連続記録・連日ボーナス・称号・発表が引き継がれる', async () => {
+  const RG = 'rename-guild';
+  const streakLib = await import(src('lib/streak.js'));
+  const achLib = await import(src('lib/achievements.js'));
+  const annLib = await import(src('lib/announcements.js'));
+  await act.upsertActivity(db, RG, { name: 'ジョグ', reward: 10 });
+  await act.logReport(db, RG, 'rn1', 'ジョグ', 10);
+  await streakLib.touchStreak(db, RG, 'rn1', 'ジョグ', 'Asia/Tokyo');
+  await streakLib.upsertStreakReward(db, RG, 'ジョグ', 3, 0, 50);
+  await achLib.createAchievement(db, RG, { name: '走る人', condition_type: 'activity_count', threshold: 5, activity_name: 'ジョグ' });
+  await annLib.createAnnouncement(db, RG, { channelId: 'c', metric: 'activity_streak', activityName: 'ジョグ', frequency: 'daily', hour: 9, topN: 3 });
+
+  assert.deepEqual(await act.renameActivity(db, RG, 'ジョグ', 'ランニング'), { ok: true });
+  assert.equal(await act.getActivity(db, RG, 'ジョグ'), null);
+  assert.ok(await act.getActivity(db, RG, 'ランニング'));
+  assert.equal((await act.reportStats(db, RG, 'rn1')).byActivity[0].activity, 'ランニング', '報告の記録');
+  assert.equal((await streakLib.getStreak(db, RG, 'rn1', 'ランニング', 'Asia/Tokyo')).current, 1, '連続記録');
+  assert.equal((await streakLib.listStreakRewards(db, RG, 'ランニング')).length, 1, '連日ボーナス');
+  assert.equal((await achLib.listAchievements(db, RG))[0].activity_name, 'ランニング', '称号の条件');
+  assert.equal((await annLib.listAnnouncements(db, RG))[0].activity_name, 'ランニング', '定期発表');
+
+  await act.upsertActivity(db, RG, { name: '散歩', reward: 5 });
+  assert.deepEqual(await act.renameActivity(db, RG, 'ランニング', '散歩'), { ok: false, reason: 'taken' }, '別のアクションと同じ名前にはできない');
+});
+
 section('[連日ボーナス（アクションごと）]');
 
 const streak = await import(src('lib/streak.js'));
@@ -163,7 +188,7 @@ async function pretendLastReportWas(daysAgo, activity, userId = A) {
 
 await test('初めての報告で1日目になる', async () => {
   const result = await streak.touchStreak(db, G, A, '筋トレ', 'Asia/Tokyo');
-  assert.deepEqual(result, { current: 1, best: 1, isNewDay: true });
+  assert.deepEqual(result, { current: 1, best: 1, isNewDay: true, before: null });
 });
 
 await test('同じ日に何度報告しても増えない', async () => {
@@ -464,6 +489,36 @@ await test('見出しが読める日本語になる', () => {
     ranking.rankingTitle({ metric: 'activity_streak', activityName: '筋トレ' }),
     '「筋トレ」の連続記録ランキング',
   );
+  assert.equal(ranking.rankingTitle({ metric: 'earned', period: 'week', back: true }), '稼いだコインランキング（先週）');
+});
+
+await test('おまかせの集計は、期間の前半に発表するならひとつ前を見る', () => {
+  const mondayMorning = new Date('2026-09-07T09:00:00+09:00');
+  const friday = new Date('2026-09-11T21:00:00+09:00');
+  assert.equal(ranking.looksBack('auto', 'week', 'Asia/Tokyo', mondayMorning), true, '月曜の朝は先週');
+  assert.equal(ranking.looksBack('auto', 'week', 'Asia/Tokyo', friday), false, '金曜の夜は今週');
+  assert.equal(ranking.looksBack('auto', 'day', 'Asia/Tokyo', mondayMorning), true, '朝9時の日次は昨日');
+  assert.equal(ranking.looksBack('current', 'week', 'Asia/Tokyo', mondayMorning), false);
+  assert.equal(ranking.looksBack('previous', 'week', 'Asia/Tokyo', friday), true);
+
+  const { since, until } = ranking.periodRange('week', 'Asia/Tokyo', mondayMorning, true);
+  assert.equal(new Date(since).toISOString(), '2026-08-30T15:00:00.000Z', '先週の月曜0時から');
+  assert.equal(new Date(until).toISOString(), '2026-09-06T15:00:00.000Z', '今週の月曜0時まで');
+});
+
+await test('ひとつ前の期間を集計するとき、いまの期間のぶんは混ざらない', async () => {
+  const RG = 'range-guild';
+  const lastWeek = new Date('2026-09-03T12:00:00+09:00').getTime();
+  const thisWeek = new Date('2026-09-07T08:00:00+09:00').getTime();
+  for (const [user, at, amount] of [['rA', lastWeek, 500], ['rB', thisWeek, 900]]) {
+    await db.run(
+      "INSERT INTO ledger (guild_id, user_id, amount, reason, created_at) VALUES (?1, ?2, ?3, 'report', ?4)",
+      RG, user, amount, at,
+    );
+  }
+  const { since, until } = ranking.periodRange('week', 'Asia/Tokyo', new Date('2026-09-07T09:00:00+09:00'), true);
+  const rows = await ranking.computeRanking(db, { guildId: RG, metric: 'earned', since, until, limit: 5, calendar: 'Asia/Tokyo' });
+  assert.deepEqual(rows.map((row) => row.user_id), ['rA'], '今週の900は入らない');
 });
 
 section('[定期発表]');
@@ -685,6 +740,24 @@ await test('時間切れの対戦を返金して中止する', async () => {
   assert.equal((await rps.cancelExpired(db)).length, 0, '二重返金しない');
 });
 
+await test('じゃんけんで片方だけ手を出したまま時間切れなら、出さなかった人の負け', async () => {
+  await rps.createMatch(db, { id: 'm3', guildId: G, channelId: 'c', challengerId: A, opponentId: B, bet: 10 });
+  await rps.markPlaying(db, 'm3');
+  await eco.withdraw(db, G, A, 10, 'test');
+  await eco.withdraw(db, G, B, 10, 'test');
+  await rps.setHand(db, 'm3', 'challenger', 'rock');
+  const beforeA = await eco.getBalance(db, G, A);
+  const beforeB = await eco.getBalance(db, G, B);
+
+  await db.run('UPDATE rps_matches SET expires_at = ?1 WHERE id = ?2', Date.now() - 1000, 'm3');
+  const handled = await rps.cancelExpired(db);
+  const mine = handled.find((entry) => entry.match.id === 'm3');
+  assert.equal(mine.winnerId, A);
+  assert.equal(await eco.getBalance(db, G, A), beforeA + 20, '手を出した人が総取り');
+  assert.equal(await eco.getBalance(db, G, B), beforeB, '出さなかった人には返らない');
+  assert.equal((await rps.getMatch(db, 'm3')).status, 'done');
+});
+
 await test('まだ期限が来ていない対戦は触らない', async () => {
   await rps.createMatch(db, { id: 'm2', guildId: G, channelId: 'c', challengerId: A, opponentId: B, bet: 5 });
   assert.equal((await rps.cancelExpired(db)).length, 0);
@@ -861,8 +934,8 @@ await test('引き分けなら預かった額がそのまま返る', async () =>
   assert.equal(await eco.getBalance(db, G, P2), 1000);
 });
 
-await test('決着は先に取った1つだけ、時間切れは返金される', async () => {
-  const match = await chinchiro.createMatch(db, {
+await test('決着は先に取った1つだけ、時間切れは振らなかった人の負け', async () => {
+  await chinchiro.createMatch(db, {
     id: 'cc4', guildId: G, channelId: 'c', challengerId: 'ccE', opponentId: 'ccF', bet: 100,
   });
   assert.ok(['challenger', 'opponent'].includes(await chinchiro.markPlaying(db, 'cc4')), '先攻が決まる');
@@ -873,17 +946,34 @@ await test('決着は先に取った1つだけ、時間切れは返金される'
   const expiring = await chinchiro.createMatch(db, {
     id: 'cc5', guildId: G, channelId: 'c', challengerId: 'ccE', opponentId: 'ccF', bet: 100,
   });
-  await chinchiro.markPlaying(db, 'cc5');
+  const first = await chinchiro.markPlaying(db, 'cc5');
   await eco.withdraw(db, G, 'ccE', expiring.escrow, 'test');
   await eco.withdraw(db, G, 'ccF', expiring.escrow, 'test');
-  const before = await eco.getBalance(db, G, 'ccE');
+  const idle = first === 'challenger' ? 'ccE' : 'ccF';
+  const other = first === 'challenger' ? 'ccF' : 'ccE';
+  const idleBefore = await eco.getBalance(db, G, idle);
+  const otherBefore = await eco.getBalance(db, G, other);
 
   await db.run('UPDATE chinchiro_matches SET expires_at = ?1 WHERE id = ?2', Date.now() - 1000, 'cc5');
   const handled = await chinchiro.cancelExpired(db);
   assert.equal(handled.length, 1);
-  assert.equal(handled[0].refunded, true);
-  assert.equal(await eco.getBalance(db, G, 'ccE'), before + expiring.escrow);
-  assert.equal((await chinchiro.cancelExpired(db)).length, 0, '二重返金しない');
+  assert.equal(handled[0].refunded, false, '返金ではない');
+  assert.equal(handled[0].loserId, idle, '振る番だった人の負け');
+  assert.equal(await eco.getBalance(db, G, other), otherBefore + expiring.escrow + 100, '相手は預けた分＋賭け金×1');
+  assert.equal(await eco.getBalance(db, G, idle), idleBefore + expiring.escrow - 100, '放置した人は賭け金×1を失う');
+  assert.equal((await chinchiro.cancelExpired(db)).length, 0, '二重に払わない');
+});
+
+await test('チンチロは受ける前の時間切れなら、お金は動かずに流れる', async () => {
+  await chinchiro.createMatch(db, {
+    id: 'cc-pending', guildId: G, channelId: 'c', challengerId: 'ccE', opponentId: 'ccF', bet: 100,
+  });
+  const before = await eco.getBalance(db, G, 'ccE');
+  await db.run('UPDATE chinchiro_matches SET expires_at = ?1 WHERE id = ?2', Date.now() - 1000, 'cc-pending');
+  const handled = await chinchiro.cancelExpired(db);
+  assert.equal(handled.length, 1);
+  assert.equal(handled[0].refunded, false);
+  assert.equal(await eco.getBalance(db, G, 'ccE'), before);
 });
 
 await test('順番に振るので同じ人が続けて振れない', async () => {
@@ -1001,7 +1091,6 @@ await test('賭けた額に比例して山分けし、コインの総量は変�
   assert.equal(b, 800 + 467, '端数は一番多く賭けた人に寄せる');
   assert.equal(await eco.getBalance(db, G, 'c'), 900, '外れた人は戻らない');
 
-  const totalAfter = ['a', 'b', 'c', 'd'].reduce((sum, name) => sum + 0, 0);
   const balances = await Promise.all(['a', 'b', 'c', 'd'].map((name) => eco.getBalance(db, G, name)));
   assert.equal(balances.reduce((sum, value) => sum + value, 0), totalBefore + 700, 'コインは増えも減りもしない');
 });
@@ -1239,7 +1328,7 @@ await test('発表の「何時に出すか」は時計どおりのまま', () =>
 await test('4時始まりなら、深夜2時の報告は前日の続きとして数える', async () => {
   const run = (when) => streak.touchStreak(db, G, 'night', '筋トレ', FOUR, at(when));
 
-  assert.deepEqual(await run('2026-09-01T22:00:00+09:00'), { current: 1, best: 1, isNewDay: true });
+  assert.deepEqual(await run('2026-09-01T22:00:00+09:00'), { current: 1, best: 1, isNewDay: true, before: null });
   const sameDay = await run('2026-09-02T02:00:00+09:00');
   assert.equal(sameDay.isNewDay, false, '日付は変わったが同じ「1日」');
   assert.equal(sameDay.current, 1);
@@ -1510,6 +1599,61 @@ await test('時間切れの対戦は返金して片付ける', async () => {
   assert.equal((await duel.cancelExpired(db)).length, 0, '二重返金しない');
 });
 
+const board = await import(src('menu/duel-board.js'));
+
+/** 始まった対戦を作り、預かりまで済ませる。 */
+async function playingDuel(id, game, state, turn = null) {
+  await eco.setBalance(db, G, 'd1', 0, 'test');
+  await eco.setBalance(db, G, 'd2', 0, 'test');
+  await makeDuel({ id, game });
+  await duel.startDuel(db, id, { first: turn, state });
+  await db.run('UPDATE duels SET expires_at = ?2 WHERE id = ?1', id, Date.now() - 1000);
+}
+
+await test('ロシアンルーレットで引かずに放置したら、引く番だった人の負け', async () => {
+  await playingDuel('duelR', 'rr', { bulletAt: 6, pulled: 5, log: [] }, 'opponent');
+  const handled = await board.expireDuels(db);
+  const mine = handled.find((row) => row.duel.id === 'duelR');
+  assert.equal(mine.outcome.kind, 'forfeit');
+  assert.equal(mine.outcome.loser, 'opponent');
+  assert.equal(await eco.getBalance(db, G, 'd1'), 200, '待たされた人が総取り');
+  assert.equal(await eco.getBalance(db, G, 'd2'), 0, '放置した人には返らない');
+  assert.equal((await duel.getDuel(db, 'duelR')).status, 'done');
+  assert.equal((await board.expireDuels(db)).filter((row) => row.duel.id === 'duelR').length, 0, '二重に払わない');
+});
+
+await test('チャージ＆シュートで片方だけ選んでいたら、選ばなかった人の負け', async () => {
+  const state = {
+    hp: { challenger: 1, opponent: 2 },
+    energy: { challenger: 0, opponent: 0 },
+    choice: { challenger: 'guard', opponent: null },
+    round: 3,
+    log: [],
+  };
+  await playingDuel('duelS', 'cs', state);
+  await board.expireDuels(db);
+  assert.equal(await eco.getBalance(db, G, 'd1'), 200);
+  assert.equal(await eco.getBalance(db, G, 'd2'), 0);
+});
+
+await test('チャージ＆シュートで二人とも選んでいなければ返金', async () => {
+  const state = { hp: {}, energy: {}, choice: { challenger: null, opponent: null }, round: 1, log: [] };
+  await playingDuel('duelT', 'cs', state);
+  await board.expireDuels(db);
+  assert.equal(await eco.getBalance(db, G, 'd1'), 100);
+  assert.equal(await eco.getBalance(db, G, 'd2'), 100);
+});
+
+await test('運命の扉（2人）は、開けたぶんを持ち帰り、選んでいない人は山分け扱い', async () => {
+  const state = { phase: 'share', steps: 2, multiplier: 4, log: [], choice: { challenger: null, opponent: null } };
+  await playingDuel('duelU', 'doors', state);
+  const handled = await board.expireDuels(db);
+  const mine = handled.find((row) => row.duel.id === 'duelU');
+  assert.equal(mine.outcome.kind, 'payout');
+  assert.equal(await eco.getBalance(db, G, 'd1'), 400, '200×4 を半分ずつ');
+  assert.equal(await eco.getBalance(db, G, 'd2'), 400);
+});
+
 section('[ブラックジャック]');
 
 const bj = await import(src('lib/blackjack.js'));
@@ -1655,7 +1799,7 @@ await test('払えなければ席は空いたまま', async () => {
 });
 
 await test('配ると全員2枚、ディーラーも2枚', async () => {
-  const table = await makeTable('bjC');
+  await makeTable('bjC');
   for (const name of ['h1', 'p2']) {
     await eco.setBalance(db, BG, name, 1000, 'test');
     await bjTable.joinTable(db, await bjTable.getTable(db, 'bjC'), name);
@@ -1696,7 +1840,7 @@ await test('ディーラーは全員バーストなら引かない', () => {
 });
 
 await test('精算は一度だけ、勝った人にだけ払う', async () => {
-  const table = await makeTable('bjD');
+  await makeTable('bjD');
   for (const name of ['w1', 'l1']) {
     await eco.setBalance(db, BG, name, 1000, 'test');
     await bjTable.joinTable(db, await bjTable.getTable(db, 'bjD'), name);
@@ -1724,7 +1868,7 @@ await test('精算は一度だけ、勝った人にだけ払う', async () => {
 });
 
 await test('ダブルダウンは賭け金2倍で精算される', async () => {
-  const table = await makeTable('bjE');
+  await makeTable('bjE');
   await eco.setBalance(db, BG, 'd1', 1000, 'test');
   await bjTable.joinTable(db, await bjTable.getTable(db, 'bjE'), 'd1');
   await db.run("UPDATE blackjack_tables SET status = 'playing' WHERE id = 'bjE'");
@@ -1740,7 +1884,7 @@ await test('ダブルダウンは賭け金2倍で精算される', async () => {
 });
 
 await test('時間切れの卓を拾って返金できる', async () => {
-  const table = await makeTable('bjF');
+  await makeTable('bjF');
   await eco.setBalance(db, BG, 'r1', 1000, 'test');
   await bjTable.joinTable(db, await bjTable.getTable(db, 'bjF'), 'r1');
   await db.run('UPDATE blackjack_tables SET expires_at = ?2 WHERE id = ?1', 'bjF', Date.now() - 1000);
@@ -1864,6 +2008,87 @@ await test('発表チャンネルを決めるまで抽選しない', async () =>
   assert.equal((await lottery.activeLotteries(db)).some((row) => row.guild_id === 'lot-quiet'), false, '停止中は引かない');
 });
 
+section('[ビンゴ・スクラッチ・ルーレット]');
+
+const bingoLib = await import(src('lib/bingo.js'));
+const scratchLib = await import(src('lib/scratch.js'));
+const wheelLib = await import(src('lib/wheel.js'));
+
+await test('ビンゴのカードは列ごとの数字の範囲に収まり、重ならない', () => {
+  for (let round = 0; round < 200; round++) {
+    const card = bingoLib.newCard();
+    for (let column = 0; column < 5; column++) {
+      for (let row = 0; row < 5; row++) {
+        const value = card[column][row];
+        if (column === 2 && row === 2) {
+          assert.equal(value, bingoLib.FREE);
+          continue;
+        }
+        assert.ok(value >= column * 15 + 1 && value <= column * 15 + 15, `${value} は ${'BINGO'[column]} の範囲外`);
+      }
+    }
+    const numbers = card.flat().filter((value) => value !== bingoLib.FREE);
+    assert.equal(new Set(numbers).size, 24);
+    const balls = bingoLib.drawBalls();
+    assert.equal(new Set(balls).size, bingoLib.BALLS, '同じ球は2度出ない');
+  }
+});
+
+await test('ビンゴの線の数え方：全部当たれば12本、何も当たらなければ0本', () => {
+  const card = bingoLib.newCard();
+  assert.equal(bingoLib.scoreCard(card, card.flat()).lines, 12);
+  assert.equal(bingoLib.scoreCard(card, []).lines, 0);
+  const firstRow = [0, 1, 2, 3, 4].map((column) => card[column][0]);
+  assert.equal(bingoLib.scoreCard(card, firstRow).lines, 1);
+  const middleRowButOne = [0, 1, 3].map((column) => card[column][2]);
+  assert.equal(bingoLib.scoreCard(card, middleRowButOne).reaches >= 1, true, '真ん中の空きを数えてリーチになる');
+});
+
+await test('ビンゴの還元率はおよそ9割（2万回）', () => {
+  let paid = 0;
+  const N = 20000;
+  for (let i = 0; i < N; i++) paid += bingoLib.playBingo().multiplier;
+  const rtp = paid / N;
+  assert.ok(rtp > 0.8 && rtp < 1.0, `還元率 ${rtp.toFixed(3)}`);
+});
+
+await test('スクラッチ：当たりのカードは3つそろいが1組だけ、外れのカードはどの絵柄も2つまで', () => {
+  for (let i = 0; i < 3000; i++) {
+    const ticket = scratchLib.newTicket();
+    assert.equal(ticket.cells.length, 9);
+    const counts = scratchLib.SYMBOLS.map((_, symbol) => ticket.cells.filter((cell) => cell === symbol).length);
+    if (ticket.multiplier > 0) {
+      assert.equal(counts.filter((n) => n >= 3).length, 1);
+      assert.equal(counts[ticket.symbol], 3);
+      assert.equal(scratchLib.winnerOf(ticket.cells), ticket.symbol);
+    } else {
+      assert.ok(counts.every((n) => n <= 2), `外れなのに3つある: ${ticket.cells}`);
+      assert.equal(scratchLib.winnerOf(ticket.cells), null);
+    }
+  }
+  // 確率の表どおりの還元率（90%）
+  const expected = scratchLib.TIERS.reduce((sum, tier) => sum + tier.chance * tier.multiplier, 0);
+  assert.ok(Math.abs(expected - 0.9) < 1e-9);
+  assert.equal(scratchLib.newTicket(0).multiplier, 50, 'いちばん小さい乱数は最高の当たり');
+  assert.equal(scratchLib.newTicket(0.999).multiplier, 0, '大きい乱数は外れ');
+});
+
+await test('ルーレット：どの張り方も還元率は 36/37', () => {
+  for (const kind of Object.keys(wheelLib.BETS)) {
+    let total = 0;
+    for (let number = 0; number <= 36; number++) total += wheelLib.multiplierOf(kind, number);
+    assert.equal(total, 36, `${kind}`);
+  }
+  for (const pick of [0, 17, 36]) {
+    let total = 0;
+    for (let number = 0; number <= 36; number++) total += wheelLib.multiplierOf('num', number, pick);
+    assert.equal(total, 36);
+  }
+  assert.equal(wheelLib.multiplierOf('red', 0), 0, '0 は赤ではない');
+  assert.equal(wheelLib.multiplierOf('even', 0), 0, '0 は偶数に入れない');
+  assert.equal(wheelLib.RED.size, 18);
+});
+
 section('[定期処理（1分ごと）]');
 
 const cron = await import(src('cron.js'));
@@ -1879,6 +2104,10 @@ function cronContext() {
     async settings(guildId) {
       return eco.getSettings(db, guildId);
     },
+    async calendarFor() {
+      return this.calendar;
+    },
+    async reportError() {},
     rest: {
       async createMessage(channelId, payload) {
         sent.push({ channelId, payload });
@@ -1918,6 +2147,29 @@ await test('同じ時刻に2つ設定しても、両方とも発表される', a
   await announcements.removeAnnouncement(db, G, second.id);
 });
 
+await test('「新しい見た目」なら定期発表は V2 で出し、賞金の人だけ通知を鳴らす', async () => {
+  const cronCtx = cronContext();
+  const GV = 'g-v2-cron';
+  await eco.setBalance(db, GV, 'v2-top', 900, 'test');
+  await eco.setBalance(db, GV, 'v2-second', 100, 'test');
+  await db.run('UPDATE guild_settings SET modern_ui = 1 WHERE guild_id = ?1', GV);
+  const created = await announcements.createAnnouncement(db, GV, {
+    channelId: 'chan-v2', metric: 'balance', frequency: 'daily', hour: 0, topN: 3, prize: 50,
+  });
+  const hour = Number(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tokyo', hour: '2-digit', hour12: false })
+    .formatToParts(new Date()).find((part) => part.type === 'hour').value) % 24;
+  await db.run('UPDATE announcements SET hour = ?1 WHERE id = ?2', hour, created.id);
+
+  await cron.postDueAnnouncements(cronCtx);
+  const posted = cronCtx.sent.find((entry) => entry.channelId === 'chan-v2');
+  assert.ok(posted, '発表された');
+  assert.equal(posted.payload.flags, 1 << 15);
+  assert.equal(posted.payload.embeds, undefined);
+  assert.deepEqual(posted.payload.allowed_mentions, { users: ['v2-top'] }, '2位は鳴らさない');
+  assert.match(JSON.stringify(posted.payload.components), /v2-second/, '名前は載る');
+  await announcements.removeAnnouncement(db, GV, created.id);
+});
+
 await test('日曜19時に宝くじを抽選して発表する', async () => {
   const cronCtx = cronContext();
   cronCtx.emoji = async () => (await import(src('lib/emoji.js'))).defaultEmoji();
@@ -1935,6 +2187,52 @@ await test('日曜19時に宝くじを抽選して発表する', async () => {
   cronCtx.sent.length = 0;
   await cron.drawLotteries(cronCtx, new Date('2026-09-13T19:40:00+09:00'));
   assert.equal(cronCtx.sent.length, 0, '同じ回は一度だけ');
+});
+
+await test('日曜19時台に止まっていた週の宝くじは、あとから追いかけて抽選する', async () => {
+  const cronCtx = cronContext();
+  await lottery.setChannel(db, 'lot-late', 'chan-late');
+  await eco.setBalance(db, 'lot-late', 'l1', 1000, 'test');
+  await lottery.buyTicket(db, 'lot-late', '2026-09-20', 'l1', 7);
+  const carry = (await lottery.getLottery(db, 'lot-late')).carryover;
+
+  // 9/20 の19時台は動かず、翌月曜の朝に初めて見回りが動いた
+  await cron.drawLotteries(cronCtx, new Date('2026-09-21T08:00:00+09:00'));
+  const late = cronCtx.sent.filter((entry) => entry.channelId === 'chan-late');
+  assert.equal(late.length, 1, '遅れて1回だけ引く');
+  assert.match(JSON.stringify(late[0].payload), /遅れて抽選/);
+  const drawn = (await lottery.recentDraws(db, 'lot-late', 1))[0];
+  assert.equal(drawn.draw_key, '2026-09-20');
+  assert.equal(drawn.pool, lottery.TICKET_PRICE);
+
+  const after = await lottery.getLottery(db, 'lot-late');
+  assert.equal(after.carryover, drawn.winner_id ? lottery.SEED_POOL : carry + lottery.TICKET_PRICE, '持ち越しも正しく動く');
+
+  cronCtx.sent.length = 0;
+  await cron.drawLotteries(cronCtx, new Date('2026-09-21T08:01:00+09:00'));
+  assert.equal(cronCtx.sent.filter((entry) => entry.channelId === 'chan-late').length, 0, '二度は引かない');
+});
+
+await test('時間切れの1分前に、待たせている人にだけ一度知らせる', async () => {
+  const cronCtx = cronContext();
+  await eco.setBalance(db, G, 'n1', 0, 'test');
+  await eco.setBalance(db, G, 'n2', 0, 'test');
+  await duel.createDuel(db, { id: 'nudgeD', guildId: G, channelId: 'cN', game: 'rr', challengerId: 'n1', opponentId: 'n2', bet: 10, escrow: 10, state: {} });
+  await duel.startDuel(db, 'nudgeD', { first: 'opponent', state: { bulletAt: 3, pulled: 1, log: [] } });
+  await duel.setMessageId(db, 'nudgeD', 'boardN');
+  const now = Date.now();
+  await db.run('UPDATE duels SET expires_at = ?2 WHERE id = ?1', 'nudgeD', now + 60 * 1000);
+
+  await cron.nudgeIdlePlayers(cronCtx, now);
+  const sent = cronCtx.sent.filter((entry) => entry.channelId === 'cN');
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].payload.content, /<@n2>/, '引く番の人に');
+  assert.doesNotMatch(sent[0].payload.content, /<@n1>/, '待たされている人には送らない');
+  assert.equal(sent[0].payload.message_reference.message_id, 'boardN', '掲示への返信になる');
+
+  await cron.nudgeIdlePlayers(cronCtx, now + 10 * 1000);
+  assert.equal(cronCtx.sent.filter((entry) => entry.channelId === 'cN').length, 1, '同じ締切には一度だけ');
+  await db.run("UPDATE duels SET status = 'cancelled' WHERE id = 'nudgeD'");
 });
 
 await test('1つの定期処理がこけても、残りは動く', async () => {
@@ -2090,6 +2388,13 @@ await test('Discord の署名を検証できる', async () => {
   const tampered = `${signature.slice(0, 126)}${signature.slice(126) === 'ff' ? '00' : 'ff'}`;
   assert.equal((await verify.verifyRequest(makeRequest(tampered), publicKey)).valid, false);
   assert.equal((await verify.verifyRequest(makeRequest('zz'), publicKey)).valid, false);
+
+  const tenMinutesLater = Date.now() + 10 * 60 * 1000;
+  assert.equal(
+    (await verify.verifyRequest(makeRequest(signature), publicKey, tenMinutesLater)).valid,
+    false,
+    '正しい署名でも、古すぎるリクエストの送り直しは弾く',
+  );
 });
 
 await test('埋め込みとボタンの JSON が Discord の形になる', () => {

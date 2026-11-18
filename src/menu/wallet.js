@@ -1,7 +1,9 @@
-import { getBalance, ledgerFor, rankOf, topBalances, totals, transfer } from '../lib/economy.js';
+import { getBalance, rankOf, topBalances, totals, transfer } from '../lib/economy.js';
 import { equippedTitles, titleTag } from '../lib/achievements.js';
 import { coins } from '../lib/format.js';
-import { modal, textInput, userSelect } from '../discord/builders.js';
+import { HISTORY_FILTERS, byDay, groupEntries, groupLine, historyPage } from '../lib/history.js';
+import { MATCH_GAMES, statsOf } from '../lib/match-results.js';
+import { modal, textInput, userField, userSelect } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import {
   backButton,
@@ -52,6 +54,8 @@ export async function open(ix, _args, ctx, notice = null) {
         button(id('wallet', 'rank'), 'ランキング', { emoji: '🏆' }),
       ),
       row(
+        button(id('wallet', 'stats'), '戦績', { emoji: '📊' }),
+        button(id('profile', 'open'), 'プロフィール', { emoji: '👤' }),
         button(id('titles', 'open'), '称号・連続記録', { emoji: '🏅' }),
         button(id('privacy', 'open'), '自分のデータ', { emoji: '🔐' }),
       ),
@@ -60,7 +64,22 @@ export async function open(ix, _args, ctx, notice = null) {
   });
 }
 
-export async function pay(ix, _args, _ctx, notice = null) {
+export async function pay(ix, _args, ctx, notice = null) {
+  // 新しい見た目なら、相手・金額・メモを1つのフォームで受け取る
+  if (!notice && (await ctx.settings(ix.guildId)).modern_ui) {
+    return openModal(
+      modal(
+        id('wallet', 'payform'),
+        '送金する',
+        [
+          userField('to', '送る相手'),
+          textInput('amount', '金額', { required: true, max: 12, placeholder: '例: 100' }),
+          textInput('memo', 'メモ（任意）', { max: 100 }),
+        ],
+        { labeled: true },
+      ),
+    );
+  }
   return show(ix, {
     embeds: [
       withNotice(embed({ color: 0xf1c40f, title: '💸 送金', description: '送りたい相手を選んでください。' }), notice),
@@ -74,13 +93,31 @@ export async function payto(ix, _args, ctx) {
   if (targetId === ix.userId) return pay(ix, [], ctx, '自分自身には送金できません。');
   const target = ix.raw.data?.resolved?.users?.[targetId];
   if (target?.bot) return pay(ix, [], ctx, 'Botには送金できません。');
+  return openModal(payModal(targetId, target));
+}
 
-  return openModal(
-    modal(id('wallet', 'paydo', targetId), `${target?.username ?? 'メンバー'} に送金`, [
-      textInput('amount', '金額', { required: true, max: 12, placeholder: '例: 100' }),
-      textInput('memo', 'メモ（任意）', { max: 100 }),
-    ]),
-  );
+function payModal(targetId, target) {
+  return modal(id('wallet', 'paydo', targetId), `${target?.global_name ?? target?.username ?? 'メンバー'} に送金`.slice(0, 45), [
+    textInput('amount', '金額', { required: true, max: 12, placeholder: '例: 100' }),
+    textInput('memo', 'メモ（任意）', { max: 100 }),
+  ]);
+}
+
+/** 右クリックの「コインを送る」から。相手は決まっているので、金額のフォームをすぐ開く。 */
+export async function payToTarget(ix, ctx, target) {
+  if (!target?.id) return pay(ix, [], ctx, '送る相手が分かりませんでした。');
+  if (target.id === ix.userId) return open(ix, [], ctx, '自分自身には送金できません。');
+  if (target.bot) return open(ix, [], ctx, 'Botには送金できません。');
+  return openModal(payModal(target.id, target));
+}
+
+/** 1つのフォームで送られた送金（新しい見た目のとき）。 */
+export async function payform(ix, _args, ctx) {
+  const target = ix.fieldUser('to');
+  if (!target) return open(ix, [], ctx, '送る相手を選んでください。');
+  if (target.id === ix.userId) return open(ix, [], ctx, '自分自身には送金できません。');
+  if (target.bot) return open(ix, [], ctx, 'Botには送金できません。');
+  return paydo(ix, [target.id], ctx);
 }
 
 export async function paydo(ix, [targetId], ctx) {
@@ -113,48 +150,52 @@ export async function paydo(ix, [targetId], ctx) {
   });
 }
 
-const REASONS = {
-  initial: '初期残高',
-  report: '報告',
-  pay: '送金',
-  'slot:bet': 'スロット',
-  'slot:win': 'スロット当選',
-  'coinflip:bet': 'コイントス',
-  'coinflip:win': 'コイントス的中',
-  'rps:bet': 'じゃんけん',
-  'rps:win': 'じゃんけん勝利',
-  'rps:refund': 'じゃんけん返金',
-  'shop:buy': 'ショップで購入',
-  'shop:sell': 'ショップで売れた',
-  'admin:give': '管理者から',
-  'admin:take': '管理者が回収',
-  'admin:set': '管理者が調整',
-};
+/**
+ * 📜 コインの履歴。絞り込み・ページ送り・日ごとの合計つき。
+ * 同じ勝負の「賭け→払い戻し」は1行にまとめて、収支だけ大きく見せる。
+ */
+export async function history(ix, [rawFilter = 'all', rawPage = '0'] = [], ctx) {
+  const filter = HISTORY_FILTERS[rawFilter] ? rawFilter : 'all';
+  const page = Math.max(0, Number(rawPage) || 0);
+  const { rows, hasMore } = await historyPage(ctx.db, ix.guildId, ix.userId, filter, page);
+  const days = byDay(groupEntries(rows), ctx.calendar);
+  const signed = (n) => `${n >= 0 ? '+' : ''}${n.toLocaleString('ja-JP')}`;
 
-export function reasonLabel(entry) {
-  const base = REASONS[entry.reason] ?? entry.reason;
-  return entry.detail && entry.reason === 'report' ? `${base}（${entry.detail}）` : base;
-}
+  const fields = days.slice(0, 10).map((day) => {
+    const [, month, date] = day.key.split('-');
+    return {
+      name: `📅 ${Number(month)}/${Number(date)}　その日の合計 ${signed(day.net)}`,
+      value: day.groups.map(groupLine).join('\n').slice(0, 1024),
+    };
+  });
 
-export async function history(ix, _args, ctx) {
-  const entries = await ledgerFor(ctx.db, ix.guildId, ix.userId, 15);
   return show(ix, {
     embeds: [
       embed({
         color: 0xf1c40f,
-        title: '📜 コインの履歴',
-        description:
-          entries.length === 0
-            ? 'まだ履歴がありません。'
-            : entries
-                .map((entry) => {
-                  const sign = entry.amount >= 0 ? '+' : '';
-                  return `<t:${Math.floor(entry.created_at / 1000)}:R>　\`${sign}${entry.amount}\`　${reasonLabel(entry)}`;
-                })
-                .join('\n'),
+        title: `📜 コインの履歴（${HISTORY_FILTERS[filter].label}）`,
+        description: rows.length === 0 ? (page === 0 ? 'まだ履歴がありません。' : 'これより前の履歴はありません。') : undefined,
+        fields,
+        footer: { text: `${page + 1} ページ目　同じ勝負の賭けと払い戻しは1行にまとめています` },
       }),
     ],
-    components: [row(backButton('wallet'), homeButton())],
+    components: [
+      row(
+        ...Object.entries(HISTORY_FILTERS).map(([key, meta]) =>
+          button(id('wallet', 'history', key, '0'), meta.label, {
+            emoji: meta.emoji,
+            style: key === filter ? ButtonStyle.PRIMARY : ButtonStyle.SECONDARY,
+            disabled: key === filter,
+          }),
+        ),
+      ),
+      row(
+        button(id('wallet', 'history', filter, String(page - 1)), '新しいほうへ', { emoji: '⬅️', disabled: page === 0 }),
+        button(id('wallet', 'history', filter, String(page + 1)), '前の履歴へ', { emoji: '➡️', disabled: !hasMore }),
+        backButton('wallet'),
+        homeButton(),
+      ),
+    ],
   });
 }
 
@@ -186,4 +227,52 @@ export async function rank(ix, _args, ctx) {
   });
 }
 
-export const actions = { open, pay, payto, paydo, history, rank };
+/** 📊 戦績：ゲームごとの収支と、1対1の勝ち負け（相手ごと）。 */
+export async function stats(ix, _args, ctx) {
+  const data = await statsOf(ctx.db, ix.guildId, ix.userId);
+  const signed = (n) => `${n > 0 ? '+' : ''}${n.toLocaleString('ja-JP')}`;
+  const rate = (wins, losses) => (wins + losses > 0 ? `勝率 ${Math.round((wins / (wins + losses)) * 100)}%` : '');
+
+  const fields = [];
+  if (data.games.length > 0) {
+    fields.push({
+      name: '🎮 ゲームごとの収支',
+      value: data.games
+        .slice(0, 12)
+        .map((entry) => `${entry.net >= 0 ? '🟢' : '🔴'} **${entry.name}** ${signed(entry.net)}　*(${entry.plays}回)*`)
+        .join('\n'),
+    });
+  }
+  if (data.wins + data.losses > 0) {
+    fields.push(
+      {
+        name: '⚔️ 1対1の勝ち負け',
+        value:
+          `**${data.wins}勝 ${data.losses}敗**　${rate(data.wins, data.losses)}\n` +
+          data.byGame.map((entry) => `・${MATCH_GAMES[entry.game] ?? entry.game} ${entry.wins}勝${entry.losses}敗`).join('\n'),
+        inline: true,
+      },
+      {
+        name: '🤝 よく戦う相手',
+        value: data.rivals.map((entry) => `<@${entry.rival}> ${entry.wins}勝${entry.losses}敗`).join('\n') || '—',
+        inline: true,
+      },
+    );
+  }
+
+  return show(ix, {
+    embeds: [
+      embed({
+        color: 0xf1c40f,
+        author: { name: ix.displayName, icon_url: ix.avatar },
+        title: '📊 戦績',
+        description: fields.length === 0 ? 'まだ記録がありません。ゲームで遊ぶとここに積み上がります。' : undefined,
+        fields,
+        footer: { text: '1対1の勝ち負けは、この機能が入った版から数えています' },
+      }),
+    ],
+    components: [row(backButton('wallet', 'お財布へ'), homeButton())],
+  });
+}
+
+export const actions = { open, pay, payto, payform, paydo, history, rank, stats };

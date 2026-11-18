@@ -85,16 +85,16 @@ export const EMOJI = {
   hp_full: '❤️',
   hp_lost: '🖤',
 
-  /* --- 地雷＆陣取り --- */
+  /* --- 地雷＆陣取り（赤は四角・青は丸。色が見分けにくい人にも形で分かるように） --- */
   cell_empty: '⬜',
   cell_challenger: '🟥',
-  cell_opponent: '🟦',
+  cell_opponent: '🔵',
   bomb: '💣',
   boom: '💥',
 
-  /* --- 運命の扉 --- */
+  /* --- 運命の扉（赤は四角・青は丸。色だけに頼らない） --- */
   door_red: '🟥',
-  door_blue: '🟦',
+  door_blue: '🔵',
   hit: '⭕',
   miss: '❌',
 };
@@ -128,6 +128,7 @@ export function cardSlot(suitKey, rank) {
 
 /** Discord から取ってきた一覧を控える。 */
 export async function saveCustomEmoji(db, items) {
+  forgetCachedEmoji();
   await db.run('DELETE FROM app_emoji');
   const now = Date.now();
   const rows = items
@@ -143,10 +144,29 @@ export async function saveCustomEmoji(db, items) {
 }
 
 /**
+ * 取り込んだ絵文字は滅多に変わらないので、少しのあいだ覚えておく。
+ * Worker は同じ入れ物で何度もリクエストを受けるので、毎回データベースを読まずに済む。
+ * 管理メニューで取り込み直したら forgetCachedEmoji() で忘れる（ほかの入れ物は最長この時間で追いつく）。
+ */
+const EMOJI_CACHE_MS = 5 * 60 * 1000;
+let cached = null;
+
+export function forgetCachedEmoji() {
+  cached = null;
+}
+
+/**
  * 既定の絵文字に、控えてあるカスタム絵文字をかぶせたものを返す。
  * @returns {Promise<Record<string, string>>} 名前 → 絵文字
  */
-export async function loadEmoji(db) {
+export async function loadEmoji(db, now = Date.now()) {
+  if (cached && cached.db === db && now - cached.at < EMOJI_CACHE_MS) return cached.value;
+  const merged = await readEmoji(db);
+  cached = { db, at: now, value: merged };
+  return merged;
+}
+
+async function readEmoji(db) {
   const merged = { ...EMOJI };
   try {
     for (const row of await db.all('SELECT name, code FROM app_emoji')) {

@@ -1,5 +1,6 @@
 import { deposit } from './economy.js';
 import { EMOJI } from './emoji.js';
+import { recordMatch } from './match-results.js';
 
 export const HANDS = {
   rock: { emoji: EMOJI.hand_rock, label: 'グー' },
@@ -111,19 +112,42 @@ export async function expiredMatches(db, now = Date.now()) {
 }
 
 /**
- * 期限切れの対戦を中止して返金する。
- * @returns {Promise<Array<{match: object, refunded: boolean}>>}
+ * 期限切れの対戦を片付ける。
+ *
+ * 片方だけ手を出していたら、出さなかった人の負け（負けそうだから放置、を許さない）。
+ * 二人とも出していなければ返金。状態を先に書き換え、取れた1つだけが払う。
+ * @returns {Promise<Array<{match: object, refunded: boolean, winnerId?: string, loserId?: string}>>}
  */
 export async function cancelExpired(db, now = Date.now()) {
   const matches = await expiredMatches(db, now);
   const handled = [];
   for (const match of matches) {
-    // 先に状態を変えてから返金する（二重返金を防ぐ）
+    const challengerOnly = Boolean(match.challenger_hand) && !match.opponent_hand;
+    const opponentOnly = Boolean(match.opponent_hand) && !match.challenger_hand;
+    const forfeit = match.status === 'playing' && match.bet > 0 && (challengerOnly || opponentOnly);
+
+    // 読んだときのまま（手もラウンドも変わっていない）ときだけ書き換える
     const claimed = await db.run(
-      "UPDATE rps_matches SET status = 'cancelled' WHERE id = ?1 AND status IN ('pending', 'playing')",
+      `UPDATE rps_matches SET status = ?2
+        WHERE id = ?1 AND status = ?3 AND round = ?4
+          AND challenger_hand IS ?5 AND opponent_hand IS ?6`,
       match.id,
+      forfeit ? 'done' : 'cancelled',
+      match.status,
+      match.round,
+      match.challenger_hand,
+      match.opponent_hand,
     );
     if (claimed.changes !== 1) continue;
+
+    if (forfeit) {
+      const winnerId = challengerOnly ? match.challenger_id : match.opponent_id;
+      const loserId = challengerOnly ? match.opponent_id : match.challenger_id;
+      await deposit(db, match.guild_id, winnerId, match.bet * 2, 'rps:win', match.id);
+      await recordMatch(db, { guildId: match.guild_id, game: 'rps', winnerId, loserId, amount: match.bet * 2 });
+      handled.push({ match, refunded: false, winnerId, loserId });
+      continue;
+    }
     const refunded = match.status === 'playing' && match.bet > 0;
     if (refunded) await refund(db, match);
     handled.push({ match, refunded });

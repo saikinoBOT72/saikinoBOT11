@@ -1,4 +1,5 @@
 import { EMOJI } from './emoji.js';
+import { chance } from './random.js';
 
 /**
  * 運命の扉。
@@ -32,7 +33,7 @@ export const MAX_STEPS = 20;
 export const MAX_MULTIPLIER = 2 ** MAX_STEPS;
 
 export function openDoor() {
-  return Math.random() < 0.5 ? 'red' : 'blue';
+  return chance(0.5) ? 'red' : 'blue';
 }
 
 /** 累積倍率を掛け合わせる。 */

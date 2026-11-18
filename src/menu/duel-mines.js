@@ -14,13 +14,15 @@ import {
   leader,
   placeMine,
 } from '../lib/mines.js';
-import { finishDuel, mutate, otherRole, randomFirst, settleDuel, userIdOf } from '../lib/duel.js';
+import { finishDuel, forfeitUnchosen, mutate, otherRole, randomFirst, settleDuel, userIdOf } from '../lib/duel.js';
 import { coins } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
 import { rematchButton } from './rematch.js';
 import { EMOJI as em } from '../lib/emoji.js';
+import { noteFor, stampDeadline } from './deadline.js';
+import { foldLater } from '../lib/guild-prefs.js';
 
 export const key = 'mine';
 export const title = '地雷＆陣取り';
@@ -29,6 +31,21 @@ export const color = 0x34495e;
 
 const MARKS = { challenger: em.cell_challenger, opponent: em.cell_opponent, null: em.cell_empty };
 const NUMBERS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'];
+
+/**
+ * 時間切れ。地雷を埋める段階なら埋め終えていない人、
+ * 取り合う段階なら手番の人の負け。二人とも埋めていなければ返金。
+ */
+export function timeoutOutcome(_duel, state) {
+  if (!state.mines) return { kind: 'refund' };
+  if (state.phase === 'place') {
+    return forfeitUnchosen({
+      challenger: state.mines.challenger.length >= MINES_PER_PLAYER,
+      opponent: state.mines.opponent.length >= MINES_PER_PLAYER,
+    });
+  }
+  return state.turn ? { kind: 'forfeit', loser: state.turn } : { kind: 'refund' };
+}
 
 export function inviteFields() {
   return [{ name: 'ルール', value: RULES }];
@@ -176,7 +193,9 @@ async function handleClaim(ix, ctx, duel, role, cell, settings) {
     return reply({ content: 'この勝負はもう終わっています。' });
   }
   const { pot } = await settleDuel(ctx.db, taken.duel, winner);
-  return update(resultPayload(duel, taken.state, settings, winner, pot, headline));
+  const final = resultPayload(duel, taken.state, settings, winner, pot, headline);
+  ctx.waitUntil(foldLater(ctx, duel, final, `${em[emojiSlot]} ${title}`));
+  return update(final);
 }
 
 /* ------------------------------------------------------------------ 表示 */
@@ -202,7 +221,13 @@ function grid(state, { reveal = false } = {}) {
   return rows.join('\n');
 }
 
-export function board(duel, state, settings, headline = null) {
+/** 掲示に残り時間を添える（中身は boardBody が作る）。 */
+export function board(...args) {
+  const payload = boardBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, noteFor(args[0]));
+}
+
+function boardBody(duel, state, settings, headline = null) {
   const placing = state.phase === 'place';
   const waiting = placing
     ? [duel.challenger_id, duel.opponent_id].filter((_, index) => {
@@ -266,7 +291,7 @@ function cellRows(duel, state) {
       const index = y * SIZE + x;
       const owner = state.board[index];
       buttons.push(
-        button(`d:cell:${duel.id}:${index}`, '​', {
+        button(`d:cell:${duel.id}:${index}`, '\u200B', {
           emoji: owner ? MARKS[owner] : NUMBERS[index],
           style: owner === 'challenger' ? ButtonStyle.DANGER : owner === 'opponent' ? ButtonStyle.PRIMARY : ButtonStyle.SECONDARY,
           disabled: owner !== null,

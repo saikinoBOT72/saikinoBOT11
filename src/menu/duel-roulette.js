@@ -12,12 +12,20 @@ import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
 import { rematchButton } from './rematch.js';
 import { EMOJI as em } from '../lib/emoji.js';
+import { noteFor, stampDeadline } from './deadline.js';
+import { foldLater } from '../lib/guild-prefs.js';
 
 export const key = 'rr';
 export const title = 'ロシアンルーレット';
 export const emojiSlot = 'roulette';
 export const color = 0x992d22;
 export const firstTurn = randomFirst;
+
+/** 時間切れ：引き金を引かなかった人の負け。 */
+export function timeoutOutcome(duel, state) {
+  if (!state.bulletAt || !duel.turn) return { kind: 'refund' };
+  return { kind: 'forfeit', loser: duel.turn };
+}
 
 export function inviteFields() {
   return [{ name: 'ルール', value: RULES }];
@@ -57,10 +65,12 @@ export async function handle(ix, ctx, { duel, role, state, action }) {
     if (!(await finishDuel(ctx.db, duel, next))) return reply({ content: 'この勝負はもう終わっています。' });
     const winner = otherRole(role);
     const { pot } = await settleDuel(ctx.db, duel, winner);
+    const final = resultPayload(duel, next, settings, winner, pot);
     ctx.animate(ix, [
       { after: 900, payload: pullFrame(duel, state, ix.userId, '…') },
-      { after: 1100, payload: resultPayload(duel, next, settings, winner, pot) },
+      { after: 1100, payload: final },
     ]);
+    ctx.waitUntil(foldLater(ctx, duel, final, `${em[emojiSlot]} ${title}`));
     return update(pullFrame(duel, state, ix.userId, ''));
   }
 
@@ -92,8 +102,14 @@ function pullFrame(duel, state, userId, tail) {
   };
 }
 
+/** 掲示に残り時間を添える（中身は boardBody が作る）。 */
+export function board(...args) {
+  const payload = boardBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, noteFor(args[0]));
+}
+
 /** 場の状態。次に引く人のボタンを出す。 */
-export function board(duel, state, settings, headline = null) {
+function boardBody(duel, state, settings, headline = null) {
   const waiting = userIdOf(duel, duel.turn);
   const left = chambersLeft(state.pulled);
   const lines = [

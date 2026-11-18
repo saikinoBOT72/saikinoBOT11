@@ -7,6 +7,10 @@
 #   DISCORD_PUBLIC_KEY     Public Key（署名の確認に使う）
 #   DISCORD_APPLICATION_ID Application ID
 #   DISCORD_GUILD_ID       （任意）自分のサーバーID。入れるとコマンドが即反映される
+#
+# 【公開ログに出さないもの】このリポジトリは公開なので、Actions のログも誰でも読める。
+#   D1 の ID・workers.dev のアドレス・サーバーID は、出る前に伏せ字にする（::add-mask::）。
+#   シークレット（トークンなど）は GitHub が自動で伏せ字にする。
 name: デプロイ
 
 on:
@@ -18,6 +22,9 @@ concurrency:
   group: deploy
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 env:
   DATABASE_NAME: saikinobot
 
@@ -25,11 +32,11 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
 
       - name: 依存を入れる
@@ -37,6 +44,23 @@ jobs:
 
       - name: テスト
         run: npm test
+
+      - name: 書き方と型の検査
+        run: npm run lint && npm run typecheck
+
+      - name: 公開ログに出したくない値を伏せる
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
+        run: |
+          set -euo pipefail
+          # workers.dev のアドレスはアカウントごとの名前が入るので、先に伏せ字にしておく
+          SUB=$(curl -sS -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+                  "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/subdomain" \
+                  | jq -r '.result.subdomain // empty' || true)
+          if [ -n "$SUB" ]; then echo "::add-mask::${SUB}"; fi
+          if [ -n "${DISCORD_GUILD_ID:-}" ]; then echo "::add-mask::${DISCORD_GUILD_ID}"; fi
 
       - name: D1 データベースを用意する
         env:
@@ -56,8 +80,10 @@ jobs:
             echo "D1 データベースを用意できませんでした。APIトークンの権限を確認してください。" >&2
             exit 1
           fi
+          # これ以降のログ（wrangler の出力も含む）では、ID は *** と出る
+          echo "::add-mask::${ID}"
           sed -i "s/DATABASE_ID_PLACEHOLDER/${ID}/" wrangler.jsonc
-          echo "D1: ${ID}"
+          echo "D1 データベースを用意しました"
 
       - name: テーブルを最新にする
         env:
@@ -69,20 +95,21 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # コミットの1行目は、管理用チャンネルに「何が変わったか」として出す。
+          # 文字をそのままコマンドに埋め込むと危ないので、環境変数で渡す
+          HEAD_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
           set -euo pipefail
-          npx wrangler deploy | tee deploy.log
-          URL=$(grep -oE 'https://[a-z0-9.-]+\.workers\.dev' deploy.log | head -1 || true)
+          NOTE="$(printf '%s' "${HEAD_MESSAGE:-}" | head -n 1 | cut -c 1-100)"
+          npx wrangler deploy \
+            --var "BUILD_SHA:${GITHUB_SHA::7}" \
+            --var "BUILD_TIME:$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --var "BUILD_NOTE:${NOTE:-手動で反映}"
           {
             echo "## デプロイ完了"
-            if [ -n "$URL" ]; then
-              echo ""
-              echo "Discord Developer Portal の **Interactions Endpoint URL** にこれを入れてください："
-              echo ""
-              echo '```'
-              echo "$URL"
-              echo '```'
-            fi
+            echo ""
+            echo "Interactions Endpoint URL（https://〜.workers.dev）は公開ログには出していません。"
+            echo "必要なときは Cloudflare のダッシュボード → Workers & Pages → saikinobot で確認してください。"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: トークンを Cloudflare に渡す
@@ -96,7 +123,7 @@ jobs:
           printf '%s' "$DISCORD_TOKEN" | npx wrangler secret put DISCORD_TOKEN
           printf '%s' "$DISCORD_PUBLIC_KEY" | npx wrangler secret put DISCORD_PUBLIC_KEY
 
-      - name: スラッシュコマンドを登録する
+      - name: コマンドを登録する
         env:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           DISCORD_APPLICATION_ID: ${{ secrets.DISCORD_APPLICATION_ID }}

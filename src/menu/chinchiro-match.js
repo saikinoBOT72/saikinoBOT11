@@ -12,12 +12,15 @@ import {
 } from '../lib/chinchiro.js';
 import { MAX_MULTIPLIER, compare, diceLine, evaluate, handLabel, rollHand } from '../lib/dice.js';
 import { deposit, getSettings, withdraw } from '../lib/economy.js';
-import { coins } from '../lib/format.js';
+import { coins, relative } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
+import { inviteParts, resolveInvite } from './open-invite.js';
 import { handleRematch, rematchButton } from './rematch.js';
 import { diceFaces } from '../lib/emoji.js';
+import { rollDie } from '../lib/random.js';
+import { foldLater } from '../lib/guild-prefs.js';
 
 /** 公開メッセージのボタンは `cc:` 始まり。 */
 export const namespace = 'cc';
@@ -27,33 +30,34 @@ export { cancelExpired };
 /** 挑戦状をチャンネルに投稿する。 */
 export async function startChallenge(ctx, { guildId, channelId, challengerId, opponentId, bet, settings }) {
   const id = crypto.randomUUID();
-  await createMatch(ctx.db, { id, guildId, channelId, challengerId, opponentId, bet });
+  const created = await createMatch(ctx.db, { id, guildId, channelId, challengerId, opponentId, bet });
 
+  const invite = inviteParts(challengerId, opponentId);
   try {
     const message = await ctx.rest.createMessage(channelId, {
-      content: `<@${opponentId}>`,
+      content: invite.content,
       embeds: [
         embed({
           color: 0xe67e22,
           title: '🎲 チンチロ勝負！',
           description:
-            `<@${challengerId}> が <@${opponentId}> に勝負を挑みました。\n` +
+            `${invite.line}\n` +
             `賭け金は ${coins(bet, settings)}。**役によって動く額が変わります。**`,
           fields: [
             { name: '預かる額', value: `${coins(escrowFor(bet), settings)}（最大×${MAX_MULTIPLIER}）`, inline: true },
             { name: '精算', value: '勝負が終わったら余りは返します', inline: true },
             { name: '役と倍率', value: PAYOUT_TABLE },
+            { name: '⏰ 返事の締め切り', value: `${relative(created.expires_at)}　受けなければ流れます（お金は動きません）` },
           ],
-          footer: { text: '2分以内に応答がなければ自動でキャンセルされます' },
         }),
       ],
       components: [
         row(
           button(`cc:accept:${id}`, '受けて立つ', { style: ButtonStyle.SUCCESS }),
-          button(`cc:decline:${id}`, 'やめておく', { style: ButtonStyle.SECONDARY }),
+          button(`cc:decline:${id}`, invite.declineLabel, { style: ButtonStyle.SECONDARY }),
         ),
       ],
-      allowed_mentions: { users: [opponentId] },
+      allowed_mentions: invite.allowed_mentions,
     });
     await setMessageId(ctx.db, id, message.id);
     return message;
@@ -95,10 +99,16 @@ export async function handleComponent(ix, ctx) {
   return reply({ content: '不明な操作です。' });
 }
 
-async function handleInvite(ix, ctx, match, action) {
-  if (ix.userId !== match.opponent_id) {
-    return reply({ content: 'この勝負に呼ばれているのはあなたではありません。' });
-  }
+async function handleInvite(ix, ctx, invited, action) {
+  const resolved = await resolveInvite(ix, ctx, {
+    table: 'chinchiro_matches',
+    match: invited,
+    action,
+    need: invited.escrow,
+    cancelled: cancelEmbed,
+  });
+  if (resolved.response) return resolved.response;
+  const { match } = resolved;
 
   if (action === 'decline') {
     await setStatus(ctx.db, match.id, 'cancelled');
@@ -135,9 +145,10 @@ async function handleInvite(ix, ctx, match, action) {
   }
 
   const firstId = first === 'challenger' ? match.challenger_id : match.opponent_id;
+  const started = (await getMatch(ctx.db, match.id)) ?? { ...match, turn: first };
   return update({
     content: `<@${firstId}>`,
-    embeds: [tableEmbed({ ...match, turn: first }, settings, `先攻は <@${firstId}> に決まりました！`, faces)],
+    embeds: [tableEmbed(started, settings, `先攻は <@${firstId}> に決まりました！`, faces)],
     components: [rollRow(match.id)],
   });
 }
@@ -174,7 +185,9 @@ async function handleRoll(ix, ctx, match) {
 
   // 両者が振り終えていれば決着、まだなら手番を渡す
   if (updated.challenger_dice && updated.opponent_dice) {
-    frames.push({ after: 900, payload: await resolveMatch(ctx, updated, settings, faces) });
+    const final = await resolveMatch(ctx, updated, settings, faces);
+    frames.push({ after: 900, payload: final });
+    ctx.waitUntil(foldLater(ctx, updated, final, '🎲 チンチロ'));
   } else {
     const nextId = updated.turn === 'challenger' ? updated.challenger_id : updated.opponent_id;
     frames.push({
@@ -255,7 +268,7 @@ function lastThrow(json) {
 }
 
 function rolling(faces) {
-  const roll = faces[1 + Math.floor(Math.random() * 6)];
+  const roll = faces[rollDie()];
   return `${roll} ${roll} ${roll}`;
 }
 
@@ -277,7 +290,10 @@ function tableEmbed(match, settings, headline = null, faces = undefined) {
       (done.length > 0 ? `${done.join('\n')}\n\n` : '') +
       `<@${waiting}> の番です。サイコロを振ってください。\n` +
       `賭け金 ${coins(match.bet, settings)}（預かり ${match.escrow}）`,
-    fields: [{ name: '役と倍率', value: PAYOUT_TABLE }],
+    fields: [
+      { name: '役と倍率', value: PAYOUT_TABLE },
+      ...(match.expires_at ? [{ name: '⏰ 時間切れ', value: `${relative(match.expires_at)}　振らなかった人の負け（×1）` }] : []),
+    ],
     footer: { text: '役が出るまで最大3回振ります' },
   });
 }

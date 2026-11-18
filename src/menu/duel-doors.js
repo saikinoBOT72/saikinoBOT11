@@ -24,11 +24,29 @@ import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
 import { rematchButton } from './rematch.js';
 import { EMOJI as em } from '../lib/emoji.js';
+import { noteFor, stampDeadline } from './deadline.js';
+import { foldLater } from '../lib/guild-prefs.js';
 
 export const key = 'doors';
 export const title = '運命の扉';
 export const emojiSlot = 'doors';
 export const color = 0x8e44ad;
+
+/**
+ * 時間切れ。扉はどちらが押してもいいので、誰かを負けにはしない。
+ *  ・まだ1枚も開けていなければ返金
+ *  ・開けていれば、そこで持ち帰ったことにして、選んでいない人は「山分け」扱い
+ */
+export function timeoutOutcome(duel, state) {
+  if (!state.phase || state.phase === 'lost') return { kind: 'refund' };
+  if (state.phase === 'doors' && !(state.steps > 0)) return { kind: 'refund' };
+  const choices = {
+    challenger: state.choice?.challenger ?? 'split',
+    opponent: state.choice?.opponent ?? 'split',
+  };
+  const share = splitOrSteal(payout(duel.escrow * 2, state.multiplier), choices);
+  return { kind: 'payout', amounts: { challenger: share.challenger, opponent: share.opponent }, share };
+}
 
 export function inviteFields() {
   return [{ name: 'ルール', value: RULES }];
@@ -100,7 +118,9 @@ async function handleDoor(ix, ctx, duel, choice, settings) {
 
   if (!hit) {
     // 掛け金は預かったまま没収（誰にも返さない）
-    frames.push({ after: 1000, payload: lostPayload(duel, opened.state, settings) });
+    const final = lostPayload(duel, opened.state, settings);
+    frames.push({ after: 1000, payload: final });
+    ctx.waitUntil(foldLater(ctx, duel, final, `${em[emojiSlot]} ${title}`));
     ctx.animate(ix, frames);
     return update(openingFrame(duel, ix.userId, choice));
   }
@@ -170,7 +190,9 @@ async function handleShare(ix, ctx, duel, role, choice, settings) {
   if (!(await finishDuel(ctx.db, chosen.duel, state))) return reply({ content: 'この勝負はもう終わっています。' });
   await payDuel(ctx.db, duel, { challenger: share.challenger, opponent: share.opponent }, 'doors:win');
 
-  return update(resultPayload(duel, state, share, prize, settings));
+  const final = resultPayload(duel, state, share, prize, settings);
+  ctx.waitUntil(foldLater(ctx, duel, final, `${em[emojiSlot]} ${title}`));
+  return update(final);
 }
 
 async function refreshBoard(ctx, duel, state, settings) {
@@ -196,7 +218,13 @@ function openingFrame(duel, userId, choice) {
   };
 }
 
-export function board(duel, state, settings, headline = null) {
+/** 掲示に残り時間を添える（中身は boardBody が作る）。 */
+export function board(...args) {
+  const payload = boardBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, noteFor(args[0]));
+}
+
+function boardBody(duel, state, settings, headline = null) {
   const current = payout(duel.escrow * 2, state.multiplier);
   const history = state.log.map((entry) => DOORS[entry.choice].emoji).join('');
 
@@ -234,7 +262,13 @@ export function board(duel, state, settings, headline = null) {
   };
 }
 
-function sharePayload(duel, state, settings, headline = null) {
+/** 掲示に残り時間を添える（中身は sharePayloadBody が作る）。 */
+function sharePayload(...args) {
+  const payload = sharePayloadBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, '選ばなかった人は「山分け」として数えます');
+}
+
+function sharePayloadBody(duel, state, settings, headline = null) {
   const prize = payout(duel.escrow * 2, state.multiplier);
   const waiting = [];
   if (!state.choice.challenger) waiting.push(duel.challenger_id);

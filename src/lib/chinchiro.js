@@ -1,5 +1,7 @@
 import { deposit } from './economy.js';
 import { MAX_MULTIPLIER } from './dice.js';
+import { chance } from './random.js';
+import { recordMatch } from './match-results.js';
 
 export const INVITE_TIMEOUT_MS = 120_000;
 export const PLAY_TIMEOUT_MS = 300_000;
@@ -45,7 +47,8 @@ export async function setStatus(db, id, status) {
  * 先攻はランダム。あとから振るほうが相手の目を見られて有利なので、固定にしない。
  * @returns {Promise<'challenger'|'opponent'|null>} 取れたら先攻の役、取れなければ null
  */
-export async function markPlaying(db, id, first = Math.random() < 0.5 ? 'challenger' : 'opponent') {
+/** @param {'challenger'|'opponent'} [first] */
+export async function markPlaying(db, id, first = chance(0.5) ? 'challenger' : 'opponent') {
   const result = await db.run(
     "UPDATE chinchiro_matches SET status = 'playing', turn = ?3, expires_at = ?2 WHERE id = ?1 AND status = 'pending'",
     id,
@@ -109,9 +112,18 @@ export async function settle(db, match, winner, multiplier) {
   if (match.escrow - prize > 0) {
     await deposit(db, match.guild_id, loserId, match.escrow - prize, 'chinchiro:refund', `cc:${match.id}`);
   }
+  await recordMatch(db, { guildId: match.guild_id, game: 'cc', winnerId, loserId, amount: match.escrow + prize });
   return { prize, winnerId, loserId };
 }
 
+/**
+ * 期限切れの勝負を片付ける。
+ *
+ * 振る番の人が振らなかったら、その人の負け（倍率は×1）。
+ * 振り終わるまで放置すれば負けが消える、を許さないため。
+ * 受ける前（pending）なら、まだお金は動いていないので流すだけ。
+ * @returns {Promise<Array<{match: object, refunded: boolean, winnerId?: string, loserId?: string, prize?: number}>>}
+ */
 export async function cancelExpired(db, now = Date.now()) {
   const matches = await db.all(
     "SELECT * FROM chinchiro_matches WHERE status IN ('pending', 'playing') AND expires_at <= ?1 LIMIT 25",
@@ -119,11 +131,27 @@ export async function cancelExpired(db, now = Date.now()) {
   );
   const handled = [];
   for (const match of matches) {
+    const forfeit = match.status === 'playing' && match.escrow > 0 && Boolean(match.turn);
+
+    // 読んだときのまま（手番も出目も変わっていない）ときだけ書き換える
     const claimed = await db.run(
-      "UPDATE chinchiro_matches SET status = 'cancelled' WHERE id = ?1 AND status IN ('pending', 'playing')",
+      `UPDATE chinchiro_matches SET status = ?2
+        WHERE id = ?1 AND status = ?3 AND turn IS ?4 AND challenger_dice IS ?5 AND opponent_dice IS ?6`,
       match.id,
+      forfeit ? 'done' : 'cancelled',
+      match.status,
+      match.turn,
+      match.challenger_dice,
+      match.opponent_dice,
     );
     if (claimed.changes !== 1) continue;
+
+    if (forfeit) {
+      const winner = match.turn === 'challenger' ? 'opponent' : 'challenger';
+      const settled = await settle(db, match, winner, 1);
+      handled.push({ match, refunded: false, ...settled });
+      continue;
+    }
     const refunded = match.status === 'playing' && match.escrow > 0;
     if (refunded) await refundEscrow(db, match);
     handled.push({ match, refunded });

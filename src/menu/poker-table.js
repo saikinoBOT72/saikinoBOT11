@@ -21,15 +21,18 @@ import {
   PROPOSE,
   acceptRoundOver,
   actInRound,
+  close,
   closeAcceptRound,
   closeProposeRound,
   createTable,
   deal,
   everyoneExchanged,
   exchange,
+  foldIdle,
   foldPlayer,
   getTable,
   giveBack,
+  idlePlayers,
   joinTable,
   mutate,
   owedBy,
@@ -54,8 +57,11 @@ import { getBalance, getSettings } from '../lib/economy.js';
 import { coins } from '../lib/format.js';
 import { button, embed, modal, row, textInput } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
+import { handleDisband, handleLeave, lobbyButtons } from './lobby.js';
 import { deferUpdate, modalResponse, reply, update } from '../discord/respond.js';
 import { readText } from './common.js';
+import { noteFor, stampDeadline } from './deadline.js';
+import { foldLater } from '../lib/guild-prefs.js';
 
 /** 公開メッセージのボタンは `pk:` 始まり。 */
 export const namespace = 'pk';
@@ -109,6 +115,8 @@ export async function handleComponent(ix, ctx) {
   // Discord の3秒の制限に余裕を持たせるため
   if (action === 'join') return handleJoin(ix, ctx, table, settings);
   if (action === 'start') return handleStart(ix, ctx, table, settings);
+  if (action === 'leave') return handleLeave(ix, ctx, table, { mutate, lobby: (t, s) => lobbyPayload(t, s, settings), refundReason: 'poker:refund' });
+  if (action === 'disband') return handleDisband(ix, ctx, table, { close, stateOf, refundReason: 'poker:refund' });
   if (action === 'hand') return handleHand(ix, ctx, table, settings, await ctx.emoji());
   if (action === 'keep') return handleKeep(ix, ctx, table, Number(arg), settings, await ctx.emoji());
   if (action === 'swap') return handleSwap(ix, ctx, table, settings, await ctx.emoji());
@@ -484,7 +492,7 @@ async function afterBetStep(ix, ctx, table, settings, em, content) {
 /* ------------------------------------------------------------------ レイズの提案 */
 
 /** 「好きな額」の入力フォーム。 */
-async function handleRaiseForm(ix, ctx, table, settings) {
+async function handleRaiseForm(ix, ctx, table, _settings) {
   const blocked = raiseBlocked(stateOf(table), ix.userId);
   if (blocked) return reply({ content: blocked });
 
@@ -528,6 +536,7 @@ function raiseBlocked(state, userId) {
  * ここを超えなければ、承認したい人が払えなくて詰まることがない。
  */
 async function capFor(ctx, table, state) {
+  /** @type {Record<string, number>} */
   const balances = {};
   for (const player of stayers(state)) {
     balances[player.userId] = await getBalance(ctx.db, table.guild_id, player.userId);
@@ -630,15 +639,17 @@ async function advanceIfReady(ctx, id, settings, em) {
     (async () => {
       const table = await getTable(ctx.db, id);
       if (!table?.message_id) return;
+      const final = resultPayload(table, toDone.state, result, settings, em);
       await ctx.rest
-        .editMessage(table.channel_id, table.message_id, resultPayload(table, toDone.state, result, settings, em))
+        .editMessage(table.channel_id, table.message_id, final)
         .catch((error) => console.error('簡ポーカーの結果表示に失敗:', error));
+      await foldLater(ctx, table, final, '♠️ 簡ポーカー');
     })(),
   );
 }
 
 /** 公開の卓を、いまの状態で描き直す。 */
-async function refreshBoard(ctx, table, settings, em) {
+async function refreshBoard(ctx, table, settings, _em) {
   if (!table?.message_id) return;
   const state = stateOf(table);
   if (state.phase === 'done') return; // 結果は advanceIfReady が出す
@@ -650,7 +661,13 @@ async function refreshBoard(ctx, table, settings, em) {
 
 /* ------------------------------------------------------------------ 表示 */
 
-function lobbyPayload(table, state, settings) {
+/** 掲示に残り時間を添える（中身は lobbyPayloadBody が作る）。 */
+function lobbyPayload(...args) {
+  const payload = lobbyPayloadBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, noteFor(args[0]));
+}
+
+function lobbyPayloadBody(table, state, _settings) {
   const seats = state.players.map((player) => `　<@${player.userId}>`).join('\n') || '　（まだ誰もいません）';
   return {
     content: '',
@@ -663,7 +680,6 @@ function lobbyPayload(table, state, settings) {
           `5枚配って、いらない札を**${MAX_DRAWS}回まで**引き直し。\n` +
           'そのあと「乗る」「レイズを提案」「降りる」。誰も提案しなくなったら役比べです。\n\n' +
           `**席（${state.players.length}/${MAX_PLAYERS}）**\n${seats}`,
-        footer: { text: '2分以内に始まらなければ流れます' },
       }),
     ],
     components: [
@@ -674,12 +690,19 @@ function lobbyPayload(table, state, settings) {
           style: ButtonStyle.PRIMARY,
           disabled: state.players.length < MIN_PLAYERS,
         }),
+        ...lobbyButtons('pk', table.id),
       ),
     ],
   };
 }
 
-function drawPayload(table, state, settings) {
+/** 掲示に残り時間を添える（中身は drawPayloadBody が作る）。 */
+function drawPayload(...args) {
+  const payload = drawPayloadBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, noteFor(args[0]));
+}
+
+function drawPayloadBody(table, state, settings) {
   const lines = state.players.map((player) => {
     const draws = player.draws ?? 0;
     const mark = player.exchanged ? '✅ 交換ずみ' : draws > 0 ? `🔁 ${draws}回替えた` : '⏳ 考え中…';
@@ -742,7 +765,13 @@ function betRows(table, state, { owed = null, mine = false } = {}) {
   ];
 }
 
-function betPayload(table, state, settings) {
+/** 掲示に残り時間を添える（中身は betPayloadBody が作る）。 */
+function betPayload(...args) {
+  const payload = betPayloadBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, noteFor(args[0]));
+}
+
+function betPayloadBody(table, state, settings) {
   const accepting = state.step === ACCEPT;
   const lines = state.players.map((player) => {
     if (player.folded) return `　<@${player.userId}>　🏳️ 降りた`;
@@ -782,7 +811,8 @@ function potOf(state) {
   return state.players.reduce((sum, player) => sum + player.staked, 0);
 }
 
-function resultPayload(table, state, result, settings, em) {
+function resultPayload(table, state, result, settings, em, note = null) {
+  const lead = note ? `${note}\n\n` : '';
   if (result.kind === 'nobody') {
     return {
       content: '',
@@ -790,7 +820,7 @@ function resultPayload(table, state, result, settings, em) {
         embed({
           color: 0x95a5a6,
           title: '🤝 全員が降りました',
-          description: '勝負は流れました。参加費は全員に返しています。',
+          description: `${lead}勝負は流れました。参加費は全員に返しています。`,
         }),
       ],
       components: [rematchRow(table)],
@@ -806,7 +836,7 @@ function resultPayload(table, state, result, settings, em) {
           color: 0xf1c40f,
           title: '🏆 ひとり残って総取り',
           description:
-            `**<@${winnerId}> の勝ち！**\n` +
+            `${lead}**<@${winnerId}> の勝ち！**\n` +
             `ほかの全員が降りたので、手札を見せずに ${coins(result.pot, settings)} を持っていきました。`,
         }),
       ],
@@ -819,7 +849,7 @@ function resultPayload(table, state, result, settings, em) {
   const champion = winnerHands.get(best.userId);
 
   const lines = state.players.map((player) => {
-    if (player.folded) return `　<@${player.userId}>　🏳️ 降りた`;
+    if (player.folded) return `　<@${player.userId}>　${player.timedOut ? '⏰ 時間切れ' : '🏳️ 降りた'}`;
     const shown = winnerHands.get(player.userId);
     const crown = result.winners.some((winner) => winner.userId === player.userId) ? '　👑' : '';
     return `　<@${player.userId}>　${renderHand(em, shown.cards)}　**${shown.hand.label}**${crown}`;
@@ -838,7 +868,7 @@ function resultPayload(table, state, result, settings, em) {
       embed({
         color: 0xf1c40f,
         title: `🏆 ${champion.hand.label}`,
-        description: `${verdict}\n\n${lines.join('\n')}`,
+        description: `${lead}${verdict}\n\n${lines.join('\n')}`,
         footer: { text: `参加費 ${table.bet}` },
       }),
     ],
@@ -878,12 +908,16 @@ async function handleAgain(ix, ctx, table) {
 
 /* ------------------------------------------------------------------ 時間切れ */
 
-/** 1分ごとの見回りから呼ばれる。配る前も途中も、預かったぶんを返して流す。 */
+/**
+ * 1分ごとの見回りから呼ばれる。
+ *
+ * 配る前なら流して全員に返す。始まっていたら、**待たせていた人は降りた扱い**にして
+ * 残った人で決着させる（負けそうな人が放置して返金を待つ、を許さないため）。
+ * 誰も動いていなかったときだけ、全員に返す。
+ */
 export async function timeOut(ctx, table) {
   const state = stateOf(table);
-  await refundTable(ctx.db, table, state);
-  await setStatus(ctx.db, table.id, 'cancelled');
-  return {
+  const flowed = {
     payload: {
       content: '',
       embeds: [
@@ -896,5 +930,20 @@ export async function timeOut(ctx, table) {
       components: [],
     },
   };
+
+  const idle = idlePlayers(state);
+  const nobodyMoved = table.status === 'joining' || idle.length === stayers(state).length;
+  if (nobodyMoved) {
+    if (!(await close(ctx.db, table, { status: 'cancelled' }))) return null;
+    await refundTable(ctx.db, table, state);
+    return flowed;
+  }
+
+  const final = foldIdle(state);
+  if (!(await close(ctx.db, table, { status: 'done', state: final }))) return null;
+  const result = await settleTable(ctx.db, table, final);
+  const settings = await getSettings(ctx.db, table.guild_id);
+  const note = `⏰ 時間切れ。${idle.map((player) => `<@${player.userId}>`).join(' ')} は動かなかったので降りた扱いにしました。`;
+  return { payload: resultPayload(table, final, result, settings, await ctx.emoji(), note) };
 }
 

@@ -11,6 +11,8 @@
  * 1の目〜6の目の合計が BONUS_LINE 以上なら BONUS 点。
  * 「各目を3個ずつ確保できればちょうど届く」という設計になっている。
  */
+import { rollDie } from './random.js';
+
 export const DICE_COUNT = 5;
 export const MAX_ROLLS = 3;
 
@@ -47,12 +49,12 @@ export const LARGE_STRAIGHT = 40;
 export const YACHT = 50;
 
 export function rollDice(count = DICE_COUNT) {
-  return Array.from({ length: count }, () => 1 + Math.floor(Math.random() * 6));
+  return Array.from({ length: count }, () => rollDie());
 }
 
 /** 残す札を指定して振り直す。keep[i] が true のサイコロはそのまま。 */
 export function reroll(dice, keep) {
-  return dice.map((die, index) => (keep[index] ? die : 1 + Math.floor(Math.random() * 6)));
+  return dice.map((die, index) => (keep[index] ? die : rollDie()));
 }
 
 /**

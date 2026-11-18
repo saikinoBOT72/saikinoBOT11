@@ -14,6 +14,7 @@ import { handleComponent as handlePig } from './menu/pig-table.js';
 import { handleComponent as handleChohan } from './menu/chohan-table.js';
 import { handleComponent as handleYacht } from './menu/yacht-table.js';
 import { handleComponent as handleReportPanel } from './menu/report-panel.js';
+import { handleComponent as handleShopPublic } from './menu/shop-public.js';
 import { findCommand } from './commands.js';
 import { runScheduled } from './cron.js';
 
@@ -40,12 +41,20 @@ export default {
 
     const ix = new Ix(raw);
     const ctx = createContext(env, executionCtx);
+    ctx.ix = ix;
 
+    const startedAt = Date.now();
     try {
+      // 「1日」の区切りはサーバーごとに変えられるので、ここで合わせておく
+      if (ix.guildId) ctx.calendar = await ctx.calendarFor(ix.guildId);
       return await dispatch(ix, ctx);
     } catch (error) {
-      console.error('処理中のエラー:', error);
-      return reply({ content: '処理中にエラーが発生しました。もう一度お試しください。' });
+      ctx.waitUntil(ctx.reportError(ix.guildId, placeOf(ix), error));
+      return reply({ content: '⚠️ 処理中にエラーが起きました。もう一度お試しください。続くようならサーバー管理者に伝えてください。' });
+    } finally {
+      // 3秒を超えると「応答しませんでした」になる。近づいているものはログに残して、直す手がかりにする
+      const took = Date.now() - startedAt;
+      if (took > 1500) console.warn(`遅い応答: ${placeOf(ix)} ${took}ms`);
     }
   },
 
@@ -54,6 +63,12 @@ export default {
     await runScheduled(createContext(env, executionCtx));
   },
 };
+
+/** エラーの記録に残す「どこで起きたか」。ボタンなら操作名まで（引数は入れない）。 */
+function placeOf(ix) {
+  if (ix.type === InteractionType.APPLICATION_COMMAND) return `/${ix.commandName}`;
+  return ix.customId.split(':').slice(0, 3).join(':') || '不明な操作';
+}
 
 async function dispatch(ix, ctx) {
   if (!ix.guildId) return reply({ content: 'このBotはサーバー内でのみ使えます。' });
@@ -77,6 +92,7 @@ async function dispatch(ix, ctx) {
     if (namespace === 'ch') return handleChohan(ix, ctx);
     if (namespace === 'yt') return handleYacht(ix, ctx);
     if (namespace === 'rp') return handleReportPanel(ix, ctx);
+    if (namespace === 'sp') return handleShopPublic(ix, ctx);
     return reply({ content: 'この操作はもう使えません。`/menu` を開き直してください。' });
   }
 

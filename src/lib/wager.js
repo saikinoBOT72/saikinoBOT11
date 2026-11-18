@@ -2,7 +2,7 @@ import { coins } from './format.js';
 
 /**
  * 賭け金が使えるか確認する。
- * @returns {{ok: true} | {ok: false, message: string}}
+ * @returns {{ok: boolean, message?: string}} ok が false なら message に理由
  */
 export function checkBet(amount, balance, settings) {
   if (!Number.isInteger(amount) || amount <= 0) {

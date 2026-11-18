@@ -8,6 +8,18 @@
  */
 import fs from 'node:fs';
 
+/**
+ * 公開リポジトリなので、Actions のログと実行ページは誰でも読める。
+ * Discord の ID（ユーザー・サーバー・チャンネル）、URL、トークン、データベースの ID は伏せて出す。
+ */
+export function mask(text) {
+  return String(text ?? '')
+    .replace(/Bot\s+[\w.-]{20,}/g, 'Bot <token>')
+    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '<uuid>')
+    .replace(/https?:\/\/\S+/g, '<url>')
+    .replace(/\d{15,}/g, '<id>');
+}
+
 const path = process.argv[2];
 const lines = fs.existsSync(path)
   ? fs
@@ -53,18 +65,18 @@ for (const event of events) {
   const outcome = OUTCOME[event.outcome] ?? event.outcome;
   const took = typeof event.wallTime === 'number' ? `　${event.wallTime}ms` : '';
   const cpu = typeof event.cpuTime === 'number' ? `　CPU ${event.cpuTime}ms` : '';
-  const path = event.event?.request?.url ? new URL(event.event.request.url).pathname : (event.event?.cron ?? '');
+  const path = event.event?.request?.url ? mask(new URL(event.event.request.url).pathname) : (event.event?.cron ?? '');
 
   console.log(`\n■ ${when}  ${outcome}${took}${cpu}  ${path}`);
 
   for (const log of event.logs ?? []) {
     const text = (log.message ?? []).map((part) => (typeof part === 'string' ? part : JSON.stringify(part))).join(' ');
-    console.log(`   [${log.level}] ${text.slice(0, 400)}`);
+    console.log(`   [${log.level}] ${mask(text).slice(0, 400)}`);
   }
   for (const problem of event.exceptions ?? []) {
-    console.log(`   💥 ${problem.name}: ${problem.message}`);
+    console.log(`   💥 ${problem.name}: ${mask(problem.message)}`);
     if (problem.stack) {
-      for (const at of String(problem.stack).split('\n').slice(0, 6)) console.log(`      ${at.trim()}`);
+      for (const at of String(problem.stack).split('\n').slice(0, 6)) console.log(`      ${mask(at.trim())}`);
     }
   }
 }

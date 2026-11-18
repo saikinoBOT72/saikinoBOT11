@@ -3,18 +3,26 @@
  * 二人が同時に手を選び、そろったところで結果を出す。
  */
 import { MAX_HP, MAX_ROUNDS, MOVES, canUse, hearts, playRound } from '../lib/charge.js';
-import { finishDuel, mutate, otherRole, refundDuel, settleDuel, userIdOf } from '../lib/duel.js';
+import { finishDuel, forfeitUnchosen, mutate, otherRole, refundDuel, settleDuel, userIdOf } from '../lib/duel.js';
 import { coins } from '../lib/format.js';
 import { button, embed, row } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import { reply, update } from '../discord/respond.js';
 import { rematchButton } from './rematch.js';
 import { EMOJI as em } from '../lib/emoji.js';
+import { noteFor, stampDeadline } from './deadline.js';
+import { foldLater } from '../lib/guild-prefs.js';
 
 export const key = 'cs';
 export const title = 'チャージ＆シュート';
 export const emojiSlot = 'charge';
 export const color = 0xf1c40f;
+
+/** 時間切れ：手を選ばなかった人の負け。二人とも選んでいなければ返金。 */
+export function timeoutOutcome(_duel, state) {
+  if (!state.choice) return { kind: 'refund' };
+  return forfeitUnchosen(state.choice);
+}
 
 export function inviteFields() {
   return [{ name: 'ルール', value: RULES }];
@@ -94,7 +102,9 @@ async function resolveRound(ix, ctx, duel, state, settings) {
     const next = { ...state, hp: round.hp, energy: round.energy, choice: { challenger: null, opponent: null }, log };
     if (!(await finishDuel(ctx.db, duel, next))) return reply({ content: 'この勝負はもう終わっています。' });
     const { pot } = await settleDuel(ctx.db, duel, winner);
-    ctx.animate(ix, [{ after: 1000, payload: resultPayload(duel, entry, next, settings, winner, pot) }]);
+    const final = resultPayload(duel, entry, next, settings, winner, pot);
+    ctx.animate(ix, [{ after: 1000, payload: final }]);
+    ctx.waitUntil(foldLater(ctx, duel, final, `${em[emojiSlot]} ${title}`));
     return update(revealFrame(duel, entry));
   }
 
@@ -143,7 +153,13 @@ function revealFrame(duel, entry) {
   };
 }
 
-export function board(duel, state, settings, headline = null) {
+/** 掲示に残り時間を添える（中身は boardBody が作る）。 */
+export function board(...args) {
+  const payload = boardBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, noteFor(args[0]));
+}
+
+function boardBody(duel, state, settings, headline = null) {
   const waiting = [];
   if (!state.choice.challenger) waiting.push(duel.challenger_id);
   if (!state.choice.opponent) waiting.push(duel.opponent_id);
@@ -243,7 +259,7 @@ function resultPayload(duel, entry, state, settings, winner, pot) {
   };
 }
 
-function drawPayload(duel, settings) {
+function drawPayload(_duel, _settings) {
   return {
     content: '',
     embeds: [

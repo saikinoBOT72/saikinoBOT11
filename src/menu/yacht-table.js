@@ -19,6 +19,7 @@ import {
   MIN_PLAYERS,
   canRoll,
   canWrite,
+  close,
   createTable,
   everyoneDone,
   getTable,
@@ -44,8 +45,11 @@ import { getSettings } from '../lib/economy.js';
 import { coins } from '../lib/format.js';
 import { button, embed, row, stringSelect } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
+import { handleDisband, handleLeave, lobbyButtons } from './lobby.js';
 import { reply, update } from '../discord/respond.js';
 import { diceFaces } from '../lib/emoji.js';
+import { noteFor, stampDeadline } from './deadline.js';
+import { foldLater } from '../lib/guild-prefs.js';
 
 /** 公開メッセージのボタンは `yt:` 始まり。 */
 export const namespace = 'yt';
@@ -95,7 +99,18 @@ export async function openTable(ctx, { guildId, channelId, hostId, bet, settings
  * 人を待つ必要がないので、掲示は最初から「記入中」の形で出す
  * （募集中の画面が一瞬ちらつかないように、立てて・座って・始めてから出す）。
  */
-export async function startSolo(ctx, { guildId, channelId, userId, settings }) {
+/** 本人が進めている途中のひとり練習（自分の画面だけで遊んでいるときの「続きから」用）。 */
+export async function activeSolo(db, guildId, userId) {
+  return db.get(
+    `SELECT id FROM yacht_tables
+      WHERE guild_id = ?1 AND host_id = ?2 AND bet = 0 AND status = 'playing'
+      ORDER BY created_at DESC LIMIT 1`,
+    guildId,
+    userId,
+  );
+}
+
+export async function startSolo(ctx, { guildId, channelId, userId, settings, privately = false }) {
   const id = crypto.randomUUID();
   await createTable(ctx.db, { id, guildId, channelId, hostId: userId, bet: 0 });
 
@@ -113,12 +128,15 @@ export async function startSolo(ctx, { guildId, channelId, userId, settings }) {
     return { ok: false, reason: 'start' };
   }
 
-  try {
-    await postBoard(ctx, id, boardPayload(started.table, started.state, settings));
-  } catch (error) {
-    console.error('ヨットのひとり練習の投稿に失敗:', error);
-    await setStatus(ctx.db, id, 'cancelled');
-    return { ok: false, reason: 'post' };
+  // 自分の画面だけで進める設定なら、掲示は出さない（続きは 🎲 ヨット の「続きから」で開ける）
+  if (!privately) {
+    try {
+      await postBoard(ctx, id, boardPayload(started.table, started.state, settings));
+    } catch (error) {
+      console.error('ヨットのひとり練習の投稿に失敗:', error);
+      await setStatus(ctx.db, id, 'cancelled');
+      return { ok: false, reason: 'post' };
+    }
   }
 
   const table = await getTable(ctx.db, id);
@@ -142,6 +160,8 @@ export async function handleComponent(ix, ctx) {
   const settings = await getSettings(ctx.db, table.guild_id);
   if (action === 'join') return handleJoin(ix, ctx, table, settings);
   if (action === 'start') return handleStart(ix, ctx, table, settings);
+  if (action === 'leave') return handleLeave(ix, ctx, table, { mutate, lobby: (t, s) => lobbyPayload(t, s, settings), refundReason: 'yacht:refund' });
+  if (action === 'disband') return handleDisband(ix, ctx, table, { close, stateOf, refundReason: 'yacht:refund' });
 
   const em = await ctx.emoji();
   if (action === 'card') return handleCard(ix, table, em);
@@ -289,6 +309,7 @@ async function finish(ctx, table, state, settings) {
         .editMessage(table.channel_id, table.message_id, payload)
         .catch((error) => console.error('ヨットの結果表示に失敗:', error)),
     );
+    ctx.waitUntil(foldLater(ctx, table, payload, '🎲 ヨット'));
   }
   // ひとり練習は自分しかいないので、結果をそのまま手元にも出す
   return update(table.bet > 0 ? finishedPayload(result) : payload);
@@ -478,7 +499,13 @@ function finishedPayload(result) {
   };
 }
 
-function lobbyPayload(table, state, settings) {
+/** 掲示に残り時間を添える（中身は lobbyPayloadBody が作る）。 */
+function lobbyPayload(...args) {
+  const payload = lobbyPayloadBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, noteFor(args[0]));
+}
+
+function lobbyPayloadBody(table, state, settings) {
   const seats = state.players.map((player) => `　<@${player.userId}>`).join('\n') || '　（まだ誰もいません）';
   return {
     content: '',
@@ -492,7 +519,6 @@ function lobbyPayload(table, state, settings) {
           '**13個の欄**を1つずつ埋めます。\n' +
           '全員が同時に進めるので、順番待ちはありません。合計点が一番高い人が総取り。\n\n' +
           `**席（${state.players.length}/${MAX_PLAYERS}）**\n${seats}`,
-        footer: { text: '2分以内に始まらなければ流れます' },
       }),
     ],
     components: [
@@ -503,13 +529,20 @@ function lobbyPayload(table, state, settings) {
           style: ButtonStyle.PRIMARY,
           disabled: state.players.length < neededPlayers(table),
         }),
+        ...lobbyButtons('yt', table.id),
       ),
     ],
   };
 }
 
+/** 掲示に残り時間を添える（中身は boardPayloadBody が作る）。 */
+function boardPayload(...args) {
+  const payload = boardPayloadBody(...args);
+  return stampDeadline(payload, args[0]?.expires_at, '書いていない欄は0点で決着します');
+}
+
 /** 進み具合だけを出す掲示。中身は出さない。 */
-function boardPayload(table, state, settings) {
+function boardPayloadBody(table, state, settings) {
   if (table.status === 'joining') return lobbyPayload(table, state, settings);
 
   const lines = state.players.map((player) => {
@@ -602,12 +635,29 @@ async function handleAgain(ix, ctx, table) {
 
 /* ------------------------------------------------------------------ 時間切れ */
 
-/** 1分ごとの見回りから呼ばれる。預かったぶんを返して流す。 */
+/**
+ * 1分ごとの見回りから呼ばれる。
+ *
+ * 始まっていて誰かが1欄でも書いていたら、**書いていない欄は0点**として決着させる。
+ * 手を止めても得をしないので、負けそうな人が放置して返金を待つことができない。
+ * 始まる前・誰も書いていない・ひとり練習のときは、流して全員に返す。
+ */
 export async function timeOut(ctx, table) {
   const state = stateOf(table);
+  const anyWritten = state.players.some((player) => openCategories(player.card).length < CATEGORIES.length);
+
+  if (table.status === 'playing' && table.bet > 0 && anyWritten) {
+    if (!(await close(ctx.db, table, { status: 'done' }))) return null;
+    const result = await settleTable(ctx.db, table, state);
+    const settings = await getSettings(ctx.db, table.guild_id);
+    const payload = resultPayload(table, result, settings);
+    payload.embeds[0].description = `⏰ 時間切れ。書いていない欄は0点で数えました。\n\n${payload.embeds[0].description}`;
+    return { payload };
+  }
+
+  if (!(await close(ctx.db, table, { status: 'cancelled' }))) return null;
   await refundTable(ctx.db, table, state);
-  await setStatus(ctx.db, table.id, 'cancelled');
-  if (!table.message_id) return null; // ひとり練習は掲示がない
+  if (!table.message_id) return null; // 掲示がなければ書き換えるものもない
   return {
     payload: {
       content: '',

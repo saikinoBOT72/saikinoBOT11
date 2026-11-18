@@ -1,4 +1,4 @@
-import { deposit, getBalance, withdraw } from '../lib/economy.js';
+import { getBalance, settleWager } from '../lib/economy.js';
 import { checkBet } from '../lib/wager.js';
 import { coins } from '../lib/format.js';
 import { payoutTable, spin } from '../lib/slot.js';
@@ -8,7 +8,7 @@ import { openTable as openBlackjack } from './blackjack-table.js';
 import { openTable as openPoker } from './poker-table.js';
 import { openTable as openPig } from './pig-table.js';
 import { openBoard as openChohan } from './chohan-table.js';
-import { openTable as openYacht, startSolo as startYachtSolo } from './yacht-table.js';
+import { activeSolo as activeYachtSolo, openTable as openYacht, startSolo as startYachtSolo } from './yacht-table.js';
 import {
   MAX_DRAWS as PK_MAX_DRAWS,
   MAX_PLAYERS as PK_MAX_PLAYERS,
@@ -26,7 +26,7 @@ import {
   getRecord as getYachtRecord,
 } from '../lib/yacht-table.js';
 import { MAX_ROLLS as YT_ROLLS } from '../lib/yacht.js';
-import { enabledGames, GAME_BY_KEY, isGameEnabled } from '../lib/game-catalog.js';
+import { CATEGORIES, enabledGames, GAME_BY_KEY, gamesIn, isGameEnabled } from '../lib/game-catalog.js';
 import { startChallenge as startChinchiro } from './chinchiro-match.js';
 import { escrowFor } from '../lib/chinchiro.js';
 import { MAX_MULTIPLIER as DICE_MAX } from '../lib/dice.js';
@@ -45,17 +45,29 @@ import {
   readInt,
   resultEmbed,
   row,
+  shareButton,
   show,
   withNotice,
 } from './common.js';
 import { EMOJI as em } from '../lib/emoji.js';
+import { chance } from '../lib/random.js';
+import { gameChannelOf, goLive } from '../lib/guild-prefs.js';
+import { linkButton } from '../discord/builders.js';
+import { ANYONE, isOpenChallenge, opponentLabel } from '../lib/open-challenge.js';
 
 /* ------------------------------------------------------------------ ゲーム選択 */
 
-export async function open(ix, _args, ctx, notice = null) {
+/**
+ * 「🎮 あそぶ」。上の段で「ひとりで／1対1／みんなで」を切り替える。
+ * 20近いゲームが一面に並ぶと探しにくいので、遊び方で分けて出す。
+ * ボタンは1行5個・1画面5行までなので、切り替えの1行＋ゲーム4行（20個）まで。
+ */
+export async function open(ix, [rawTab] = [], ctx, notice = null) {
   const settings = await ctx.settings(ix.guildId);
   const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
-  const playable = enabledGames(settings);
+  const tab = CATEGORIES[rawTab] ? rawTab : 'all';
+  const everything = enabledGames(settings);
+  const playable = (tab === 'all' ? everything : gamesIn(everything, tab)).slice(0, 20);
 
   if (playable.length === 0) {
     return show(ix, {
@@ -73,8 +85,20 @@ export async function open(ix, _args, ctx, notice = null) {
     });
   }
 
+  // 1行目は切り替え。いま見ている分類は押せなくしておく
+  const tabs = row(
+    button(id('games', 'open', 'all'), 'すべて', { emoji: '🎮', disabled: tab === 'all' }),
+    ...Object.entries(CATEGORIES).map(([key, meta]) =>
+      button(id('games', 'open', key), meta.label, {
+        emoji: meta.emoji,
+        disabled: tab === key || gamesIn(everything, key).length === 0,
+      }),
+    ),
+    backButton(),
+  );
+
   // ボタンは1行5個まで。名簿の順に詰めていく
-  const rows = [];
+  const rows = [tabs];
   for (let index = 0; index < playable.length; index += 5) {
     rows.push(
       row(
@@ -93,8 +117,11 @@ export async function open(ix, _args, ctx, notice = null) {
       withNotice(
         embed({
           color: 0xe67e22,
+          author: { name: tab === 'all' ? '🏠 › 🎮 あそぶ' : `🏠 › 🎮 あそぶ › ${CATEGORIES[tab].emoji} ${CATEGORIES[tab].label}` },
           title: '🎮 あそぶ',
-          description: `所持金 ${coins(balance, settings)}\n\n遊びたいものを選んでください。`,
+          description:
+            `所持金 ${coins(balance, settings)}\n\n遊びたいものを選んでください。` +
+            (tab === 'all' && everything.length > 20 ? '\n多いので、上の段で遊び方ごとに分けて見てください。' : ''),
           fields: playable.map((game) => ({
             name: `${game.emoji} ${game.name}`,
             value: game.hint,
@@ -104,7 +131,7 @@ export async function open(ix, _args, ctx, notice = null) {
         notice,
       ),
     ],
-    components: [...rows, row(backButton())],
+    components: rows,
   });
 }
 
@@ -188,7 +215,7 @@ async function pkOpen(ix, _args, ctx, notice = null) {
   });
 }
 
-function pkCustom(ix) {
+function pkCustom(_ix) {
   return openModal(amountModal(id('pk', 'amount'), '簡ポーカーの参加費', '参加費'));
 }
 
@@ -209,7 +236,7 @@ async function pkGo(ix, [rawBet], ctx) {
 
   const opened = await openPoker(ctx, {
     guildId: ix.guildId,
-    channelId: ix.channelId,
+    channelId: gameChannelOf(settings, ix.channelId),
     hostId: ix.userId,
     bet,
     settings,
@@ -233,7 +260,7 @@ async function pkGo(ix, [rawBet], ctx) {
           `**${PK_MIN_PLAYERS}人**集まったら「▶️ 始める」で配れます。`,
       }),
     ],
-    components: [row(button(id('pk', 'open'), 'もう一度立てる', { emoji: '♠️' }), homeButton())],
+    components: [row(jumpButton(ix.guildId, opened.message?.channel_id ?? gameChannelOf(settings, ix.channelId), opened.message?.id), button(id('pk', 'open'), 'もう一度立てる', { emoji: '♠️' }), homeButton())],
   });
 }
 
@@ -276,7 +303,7 @@ async function pigOpen(ix, _args, ctx, notice = null) {
   });
 }
 
-function pigCustom(ix) {
+function pigCustom(_ix) {
   return openModal(amountModal(id('pig', 'amount'), 'ピッグの参加費', '参加費'));
 }
 
@@ -296,7 +323,7 @@ async function pigGo(ix, [rawBet], ctx) {
 
   const opened = await openPig(ctx, {
     guildId: ix.guildId,
-    channelId: ix.channelId,
+    channelId: gameChannelOf(settings, ix.channelId),
     hostId: ix.userId,
     bet,
     settings,
@@ -319,7 +346,7 @@ async function pigGo(ix, [rawBet], ctx) {
           `**${PG_MIN_PLAYERS}人**集まったら「▶️ 始める」で開始できます。順番はそのときランダムで決まります。`,
       }),
     ],
-    components: [row(button(id('pig', 'open'), 'もう一度立てる', { emoji: '🐷' }), homeButton())],
+    components: [row(jumpButton(ix.guildId, opened.message?.channel_id ?? gameChannelOf(settings, ix.channelId), opened.message?.id), button(id('pig', 'open'), 'もう一度立てる', { emoji: '🐷' }), homeButton())],
   });
 }
 
@@ -364,7 +391,7 @@ async function chOpen(ix, _args, ctx, notice = null) {
   });
 }
 
-function chCustom(ix) {
+function chCustom(_ix) {
   return openModal(amountModal(id('ch', 'amount'), '丁半博打の一口', '一口の額'));
 }
 
@@ -384,7 +411,7 @@ async function chGo(ix, [rawBet], ctx) {
 
   const opened = await openChohan(ctx, {
     guildId: ix.guildId,
-    channelId: ix.channelId,
+    channelId: gameChannelOf(settings, ix.channelId),
     hostId: ix.userId,
     bet,
     settings,
@@ -401,7 +428,7 @@ async function chGo(ix, [rawBet], ctx) {
           '丁と半の両方にコマが入ったら「🏺 壺を開ける」を押してください。',
       }),
     ],
-    components: [row(button(id('ch', 'open'), 'もう一度開く', { emoji: '🏺' }), homeButton())],
+    components: [row(jumpButton(ix.guildId, opened.message?.channel_id ?? gameChannelOf(settings, ix.channelId), opened.message?.id), button(id('ch', 'open'), 'もう一度開く', { emoji: '🏺' }), homeButton())],
   });
 }
 
@@ -413,6 +440,7 @@ async function ytOpen(ix, _args, ctx, notice = null) {
   const settings = await ctx.settings(ix.guildId);
   const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
   const record = await getYachtRecord(ctx.db, ix.guildId, ix.userId);
+  const ongoing = await activeYachtSolo(ctx.db, ix.guildId, ix.userId);
 
   return show(ix, {
     embeds: [
@@ -447,14 +475,16 @@ async function ytOpen(ix, _args, ctx, notice = null) {
         customId: id('yt', 'custom'),
       }),
       row(
-        button(id('yt', 'solo'), 'ひとりで練習（賭けなし）', { emoji: '🎲', style: ButtonStyle.SECONDARY }),
+        ongoing
+          ? button(`yt:card:${ongoing.id}`, '練習の続きから', { emoji: '▶️', style: ButtonStyle.SUCCESS })
+          : button(id('yt', 'solo'), 'ひとりで練習（賭けなし）', { emoji: '🎲', style: ButtonStyle.SECONDARY }),
         backButton('games'),
       ),
     ],
   });
 }
 
-function ytCustom(ix) {
+function ytCustom(_ix) {
   return openModal(amountModal(id('yt', 'amount'), 'ヨットの参加費', '参加費'));
 }
 
@@ -474,7 +504,7 @@ async function ytGo(ix, [rawBet], ctx) {
 
   const opened = await openYacht(ctx, {
     guildId: ix.guildId,
-    channelId: ix.channelId,
+    channelId: gameChannelOf(settings, ix.channelId),
     hostId: ix.userId,
     bet,
     settings,
@@ -497,17 +527,19 @@ async function ytGo(ix, [rawBet], ctx) {
           `**${YT_MIN_PLAYERS}人**集まったら「▶️ 始める」で開始できます。`,
       }),
     ],
-    components: [row(button(id('yt', 'open'), 'もう一度立てる', { emoji: '🎲' }), homeButton())],
+    components: [row(jumpButton(ix.guildId, opened.message?.channel_id ?? gameChannelOf(settings, ix.channelId), opened.message?.id), button(id('yt', 'open'), 'もう一度立てる', { emoji: '🎲' }), homeButton())],
   });
 }
 
-/** 賭けずに1枚書く。チャンネルには何も出さず、この画面だけで進む。 */
+/** 賭けずに1枚書く。設定によっては、チャンネルに掲示を出さずにこの画面だけで進む。 */
 async function ytSolo(ix, _args, ctx) {
+  const settings = await ctx.settings(ix.guildId);
   const started = await startYachtSolo(ctx, {
     guildId: ix.guildId,
-    channelId: ix.channelId,
+    channelId: gameChannelOf(settings, ix.channelId),
     userId: ix.userId,
-    settings: await ctx.settings(ix.guildId),
+    settings,
+    privately: Boolean(settings.solo_private),
   });
   if (!started.ok) return ytOpen(ix, [], ctx, '始められませんでした。');
   return show(ix, started.payload);
@@ -518,6 +550,12 @@ export const yt = { open: ytOpen, custom: ytCustom, amount: ytAmount, go: ytGo, 
 export const games = { open };
 
 /* ------------------------------------------------------------------ 共通 */
+
+/** 立てた卓や挑戦状へ飛ぶボタン。投稿の場所が分からなければ出さない。 */
+function jumpButton(guildId, channelId, messageId) {
+  if (!channelId || !messageId) return null;
+  return linkButton(`https://discord.com/channels/${guildId}/${channelId}/${messageId}`, '投稿へ移動', { emoji: '↗️' });
+}
 
 function amountModal(customId, title, label = '賭け金') {
   return modal(customId, title, [
@@ -544,7 +582,10 @@ async function slotOpen(ix, _args, ctx, notice = null) {
         notice,
       ),
     ],
-    components: amountRows(['slot', 'bet'], balance, { maxBet: settings.max_bet, extra: [backButton('games')] }),
+    components: amountRows(['slot', 'bet'], balance, {
+      maxBet: settings.max_bet,
+      extra: [button(id('slot', 'tens'), '10回まとめて', { emoji: '🔟' }), backButton('games')],
+    }),
   });
 }
 
@@ -568,29 +609,35 @@ async function slotSpin(ix, ctx, bet) {
   const check = checkBet(bet, balance, settings);
   if (!check.ok) return slotOpen(ix, [], ctx, check.message);
 
-  if (!(await withdraw(ctx.db, ix.guildId, ix.userId, bet, 'slot:bet'))) {
-    return slotOpen(ix, [], ctx, '残高が足りません。');
-  }
-
-  // 先にお金の処理を済ませてから、演出だけ後追いで見せる
+  // 結果を先に決め、賭け金と払い戻しを1回の処理で動かす。演出はそのあとで見せるだけ
   const result = spin();
   const payout = result.multiplier * bet;
-  if (payout > 0) await deposit(ctx.db, ix.guildId, ix.userId, payout, 'slot:win', `x${result.multiplier}`);
-  const after = await getBalance(ctx.db, ix.guildId, ix.userId);
+  const settled = await settleWager(ctx.db, ix.guildId, ix.userId, {
+    bet,
+    payout,
+    betReason: 'slot:bet',
+    winReason: 'slot:win',
+    detail: `x${result.multiplier}`,
+  });
+  if (!settled.ok) return slotOpen(ix, [], ctx, '残高が足りません。');
+  const after = settled.balance;
   const net = payout - bet;
 
   // リールは content に絵文字だけで置く。Discord がいちばん大きく描いてくれる。
   const reelLine = (reels) => reels.join('');
-  const spinning = (reels, note) => ({
+  const spinning = (reels, note, hot = false) => ({
     content: reelLine(reels),
     embeds: [
       embed({
-        color: 0xe67e22,
+        color: hot ? 0xe74c3c : 0xe67e22,
         title: note,
         footer: { text: `賭け金 ${bet.toLocaleString('ja-JP')}` },
       }),
     ],
   });
+  // 左2つがそろったら「リーチ」。最後のリールは少しじらしてから止める（結果はもう決まっている）
+  const reach = result.reels[0] === result.reels[1];
+  const reachNote = HOT_SYMBOLS.has(result.reels[0]) ? '⚡ 激アツ リーチ！' : '🔥 リーチ！';
 
   const final = resultEmbed({
     art: reelLine(result.reels),
@@ -606,7 +653,12 @@ async function slotSpin(ix, ctx, bet) {
         style: ButtonStyle.SUCCESS,
         disabled: after < bet,
       }),
+      button(id('slot', 'ten', String(bet)), `10回まとめて（${(bet * TEN_SPINS).toLocaleString('ja-JP')}）`, {
+        emoji: '🔟',
+        disabled: after < bet * TEN_SPINS,
+      }),
       button(id('slot', 'open'), '賭け金を変える', { emoji: '💰' }),
+      shareButton(),
       homeButton(),
     ),
   ];
@@ -614,23 +666,152 @@ async function slotSpin(ix, ctx, bet) {
   // 左のリールから1つずつ止まっていく
   ctx.animate(ix, [
     { after: 800, payload: { ...spinning([result.reels[0], em.slot_spin, em.slot_spin], '🎰 回転中…'), components: [] } },
-    { after: 800, payload: { ...spinning([result.reels[0], result.reels[1], em.slot_spin], '🎰 回転中…'), components: [] } },
-    { after: 800, payload: { ...final, components: finalComponents } },
+    {
+      after: 800,
+      payload: {
+        ...spinning([result.reels[0], result.reels[1], em.slot_spin], reach ? reachNote : '🎰 回転中…', reach),
+        components: [],
+      },
+    },
+    { after: reach ? 1800 : 800, payload: { ...final, components: finalComponents } },
   ]);
 
-  if (result.kind === 'triple') {
-    ctx.announce(ix.channelId, {
-      embeds: [
-        embed({
-          color: 0xf1c40f,
-          title: '🎉 大当たり！',
-          description: `<@${ix.userId}> がスロットで **${result.symbol} 3つ揃い（x${result.multiplier}）**！\n${coins(payout, settings)} を獲得しました。`,
-        }),
-      ],
-    });
-  }
+  // 3つそろいは必ず、それ以外は設定した額を超えたら実況する
+  goLive(ctx, ix, settings, {
+    net,
+    force: result.kind === 'triple',
+    embed: embed({
+      color: net > 0 ? 0xf1c40f : 0x95a5a6,
+      title: result.kind === 'triple' ? '🎉 大当たり！' : net > 0 ? '🎰 スロットで大勝ち' : '🎰 スロットで大負け',
+      description:
+        result.kind === 'triple'
+          ? `<@${ix.userId}> がスロットで **${result.symbol} 3つ揃い（x${result.multiplier}）**！\n${coins(payout, settings)} を獲得しました。`
+          : `<@${ix.userId}> が ${result.reels.join('')} で **${net > 0 ? '+' : ''}${net.toLocaleString('ja-JP')}**`,
+    }),
+  });
 
   return show(ix, { ...spinning([em.slot_spin, em.slot_spin, em.slot_spin], '🎰 回転中…'), components: [] });
+}
+
+/** リーチでいちばん盛り上がる絵柄（7 と 💎）。 */
+const HOT_SYMBOLS = new Set([em.slot_seven, em.slot_diamond]);
+
+/* --------------------------------------------------- スロット：10回まとめて */
+
+const TEN_SPINS = 10;
+
+/** 10回まとめて：1回ぶんの賭け金を選ぶ。 */
+async function slotTens(ix, _args, ctx, notice = null) {
+  const settings = await ctx.settings(ix.guildId);
+  const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
+  return show(ix, {
+    embeds: [
+      withNotice(
+        embed({
+          color: 0xe67e22,
+          title: '🔟 10回まとめて回す',
+          description:
+            `所持金 ${coins(balance, settings)}\n\n` +
+            `**1回ぶんの賭け金**を選んでください。10回ぶん（×${TEN_SPINS}）を先に払い、当たりはまとめて受け取ります。\n` +
+            '1回ずつ回すのと、当たりやすさ・配当は同じです。',
+        }),
+        notice,
+      ),
+    ],
+    components: amountRows(['slot', 'ten'], Math.floor(balance / TEN_SPINS), {
+      maxBet: settings.max_bet,
+      customId: id('slot', 'tencustom'),
+      extra: [backButton('slot', 'スロットへ')],
+    }),
+  });
+}
+
+function slotTenCustom() {
+  return openModal(amountModal(id('slot', 'tenamount'), 'スロット10回まとめて', '1回ぶんの賭け金'));
+}
+
+async function slotTenAmount(ix, _args, ctx) {
+  const amount = readInt(ix, 'amount', { min: 1 });
+  if (isError(amount)) return slotTens(ix, [], ctx, amount.error);
+  return slotTen(ix, [String(amount)], ctx);
+}
+
+async function slotTen(ix, [rawBet], ctx) {
+  const bet = Number(rawBet);
+  const total = bet * TEN_SPINS;
+  const settings = await ctx.settings(ix.guildId);
+  const balance = await getBalance(ctx.db, ix.guildId, ix.userId);
+  const check = checkBet(bet, balance, settings);
+  if (!check.ok) return slotTens(ix, [], ctx, check.message);
+  if (balance < total) return slotTens(ix, [], ctx, `10回ぶん（${total.toLocaleString('ja-JP')}）に足りません。`);
+
+  const results = Array.from({ length: TEN_SPINS }, () => spin());
+  const payout = results.reduce((sum, result) => sum + result.multiplier * bet, 0);
+  const settled = await settleWager(ctx.db, ix.guildId, ix.userId, {
+    bet: total,
+    payout,
+    betReason: 'slot:bet',
+    winReason: 'slot:win',
+    detail: `10回 x${payout / bet}`,
+  });
+  if (!settled.ok) return slotTens(ix, [], ctx, '残高が足りません。');
+  const net = payout - total;
+
+  const best = results.reduce((top, result) => (result.multiplier > top.multiplier ? result : top), results[0]);
+  const hits = results.filter((result) => result.multiplier > 0).length;
+  const lines = results.map(
+    (result, index) =>
+      `\`${String(index + 1).padStart(2, ' ')}\`　${result.reels.join('')}　${result.multiplier > 0 ? `**×${result.multiplier}**` : '—'}`,
+  );
+
+  const final = resultEmbed({
+    art: best.reels.join(''),
+    verdict: hits === 0 ? '💧 10回ともはずれ' : `${slotVerdict(best)}（10回中 ${hits} 回当たり）`,
+    color: net > 0 ? 0x2ecc71 : payout > 0 ? 0xf39c12 : 0x95a5a6,
+    detail: lines.join('\n'),
+    fields: moneyFields(total, net, settled.balance, settings, { coins }),
+  });
+
+  ctx.animate(ix, [
+    {
+      after: 1200,
+      payload: {
+        ...final,
+        components: [
+          row(
+            button(id('slot', 'ten', String(bet)), `もう10回（${total.toLocaleString('ja-JP')}）`, {
+              emoji: '🔟',
+              style: ButtonStyle.SUCCESS,
+              disabled: settled.balance < total,
+            }),
+            button(id('slot', 'bet', String(bet)), `1回だけ（${bet}）`, { emoji: '🎰', disabled: settled.balance < bet }),
+            button(id('slot', 'open'), '賭け金を変える', { emoji: '💰' }),
+            shareButton(),
+            homeButton(),
+          ),
+        ],
+      },
+    },
+  ]);
+
+  const triple = results.find((result) => result.kind === 'triple');
+  goLive(ctx, ix, settings, {
+    net,
+    force: Boolean(triple),
+    embed: embed({
+      color: net > 0 ? 0xf1c40f : 0x95a5a6,
+      title: triple ? '🎉 大当たり！' : net > 0 ? '🎰 スロットで大勝ち' : '🎰 スロットで大負け',
+      description: triple
+        ? `<@${ix.userId}> がスロット10回まとめての中で **${triple.symbol} 3つ揃い（x${triple.multiplier}）**！`
+        : `<@${ix.userId}> がスロット10回まとめてで **${net > 0 ? '+' : ''}${net.toLocaleString('ja-JP')}**`,
+    }),
+  });
+
+  return show(ix, {
+    content: `${em.slot_spin}${em.slot_spin}${em.slot_spin}`,
+    embeds: [embed({ color: 0xe67e22, title: '🔟 10回まとめて回転中…', footer: { text: `賭け金 ${total.toLocaleString('ja-JP')}` } })],
+    components: [],
+  });
 }
 
 /** 結果のひとこと。いちばん先に読ませたいので短く。 */
@@ -646,7 +827,16 @@ function slotDetail(result, payout, settings) {
   return `${result.symbol} がそろって ${coins(payout, settings)} 獲得。`;
 }
 
-export const slot = { open: slotOpen, bet: slotBet, custom: slotCustom, amount: slotAmount };
+export const slot = {
+  open: slotOpen,
+  bet: slotBet,
+  custom: slotCustom,
+  amount: slotAmount,
+  tens: slotTens,
+  ten: slotTen,
+  tencustom: slotTenCustom,
+  tenamount: slotTenAmount,
+};
 
 /* ------------------------------------------------------------------ コイントス */
 
@@ -716,14 +906,26 @@ async function cfGo(ix, [rawBet, side], ctx) {
   const check = checkBet(bet, balance, settings);
   if (!check.ok) return cfOpen(ix, [], ctx, check.message);
 
-  if (!(await withdraw(ctx.db, ix.guildId, ix.userId, bet, 'coinflip:bet'))) {
-    return cfOpen(ix, [], ctx, '残高が足りません。');
-  }
+  if (!SIDES[side]) return cfOpen(ix, [], ctx, '表か裏を選んでください。');
 
-  const outcome = Math.random() < 0.5 ? 'heads' : 'tails';
+  const outcome = chance(0.5) ? 'heads' : 'tails';
   const won = outcome === side;
-  if (won) await deposit(ctx.db, ix.guildId, ix.userId, bet * 2, 'coinflip:win');
-  const after = await getBalance(ctx.db, ix.guildId, ix.userId);
+  const settled = await settleWager(ctx.db, ix.guildId, ix.userId, {
+    bet,
+    payout: won ? bet * 2 : 0,
+    betReason: 'coinflip:bet',
+    winReason: 'coinflip:win',
+  });
+  if (!settled.ok) return cfOpen(ix, [], ctx, '残高が足りません。');
+  const after = settled.balance;
+  goLive(ctx, ix, settings, {
+    net: won ? bet : -bet,
+    embed: embed({
+      color: won ? 0xf1c40f : 0x95a5a6,
+      title: won ? '🪙 コイントスで大勝ち' : '🪙 コイントスで大負け',
+      description: `<@${ix.userId}> が ${SIDES[side].label} に ${bet.toLocaleString('ja-JP')} 賭けて **${won ? '的中' : 'はずれ'}**`,
+    }),
+  });
 
   // コインは content に絵文字だけで置く。ここがいちばん大きく出る。
   const tossing = (note) => ({
@@ -759,6 +961,7 @@ async function cfGo(ix, [rawBet, side], ctx) {
               disabled: after < bet,
             }),
             button(id('cf', 'open'), '賭け金を変える', { emoji: '💰' }),
+            shareButton(),
             homeButton(),
           ),
         ],
@@ -773,6 +976,18 @@ export const cf = { open: cfOpen, bet: cfBet, custom: cfCustom, amount: cfAmount
 
 /* ------------------------------------------------------------------ じゃんけん */
 
+/** 相手を決めずに出す挑戦状のボタン（最初に受けた1人が相手になる）。 */
+function anyoneButton(screen) {
+  return button(id(screen, 'anyone'), 'だれでも受けられる挑戦状', { emoji: '📣', style: ButtonStyle.PRIMARY });
+}
+
+/** 挑戦状を出したあとの一言。 */
+function sentLine(opponentId, what) {
+  return isOpenChallenge(opponentId)
+    ? `だれでも受けられる${what}の挑戦状を出しました。最初に受けた人が相手です。`
+    : `<@${opponentId}> に${what}を申し込みました。`;
+}
+
 async function rpsOpen(ix, _args, _ctx, notice = null) {
   return show(ix, {
     embeds: [
@@ -785,7 +1000,7 @@ async function rpsOpen(ix, _args, _ctx, notice = null) {
         notice,
       ),
     ],
-    components: [userSelect(id('rps', 'user'), '対戦相手を選ぶ'), row(backButton('games'), homeButton())],
+    components: [userSelect(id('rps', 'user'), '対戦相手を選ぶ'), row(anyoneButton('rps'), backButton('games'), homeButton())],
   });
 }
 
@@ -813,7 +1028,7 @@ async function rpsBetScreen(ix, ctx, opponentId, notice = null) {
         embed({
           color: 0x5865f2,
           title: '✊✌️🖐️ じゃんけん',
-          description: `相手: <@${opponentId}>\n所持金 ${coins(balance, settings)}\n\n賭け金を選んでください。`,
+          description: `相手: ${opponentLabel(opponentId)}\n所持金 ${coins(balance, settings)}\n\n賭け金を選んでください。`,
         }),
         notice,
       ),
@@ -844,7 +1059,7 @@ async function rpsGo(ix, [opponentId, rawBet], ctx) {
 
   const sent = await startChallenge(ctx, {
     guildId: ix.guildId,
-    channelId: ix.channelId,
+    channelId: gameChannelOf(settings, ix.channelId),
     challengerId: ix.userId,
     opponentId,
     bet,
@@ -858,16 +1073,23 @@ async function rpsGo(ix, [opponentId, rawBet], ctx) {
         color: 0x5865f2,
         title: '✊ 挑戦状を送りました',
         description:
-          `<@${opponentId}> に勝負を申し込みました。\n` +
+          `${sentLine(opponentId, '勝負')}\n` +
           (bet > 0 ? `賭け金 ${coins(bet, settings)}\n` : '') +
           'チャンネルのメッセージで、相手が「受けて立つ」を押すと勝負開始です。',
       }),
     ],
-    components: [row(button(id('rps', 'open'), 'もう一度挑戦', { emoji: '🔁' }), homeButton())],
+    components: [row(jumpButton(ix.guildId, sent.channel_id ?? gameChannelOf(settings, ix.channelId), sent.id), button(id('rps', 'open'), 'もう一度挑戦', { emoji: '🔁' }), homeButton())],
   });
 }
 
-export const rps = { open: rpsOpen, user: rpsUser, custom: rpsCustom, amount: rpsAmount, go: rpsGo };
+export const rps = {
+  open: rpsOpen,
+  user: rpsUser,
+  anyone: (ix, _args, ctx) => rpsBetScreen(ix, ctx, ANYONE),
+  custom: rpsCustom,
+  amount: rpsAmount,
+  go: rpsGo,
+};
 
 /* ------------------------------------------------------------------ チンチロ */
 
@@ -898,7 +1120,7 @@ async function ccOpen(ix, _args, _ctx, notice = null) {
         notice,
       ),
     ],
-    components: [userSelect(id('cc', 'user'), '対戦相手を選ぶ'), row(backButton('games'), homeButton())],
+    components: [userSelect(id('cc', 'user'), '対戦相手を選ぶ'), row(anyoneButton('cc'), backButton('games'), homeButton())],
   });
 }
 
@@ -931,7 +1153,7 @@ async function ccBetScreen(ix, ctx, opponentId, notice = null) {
           color: 0xe67e22,
           title: '🎲 チンチロ',
           description:
-            `相手: <@${opponentId}>\n所持金 ${coins(balance, settings)}\n\n` +
+            `相手: ${opponentLabel(opponentId)}\n所持金 ${coins(balance, settings)}\n\n` +
             `賭け金を選んでください。**その${DICE_MAX}倍を一時的に預かります**（余りは勝負後に返却）。\n` +
             `いまの所持金なら **${affordable.toLocaleString('ja-JP')}** まで賭けられます。`,
         }),
@@ -970,7 +1192,7 @@ async function ccGo(ix, [opponentId, rawBet], ctx) {
 
   const sent = await startChinchiro(ctx, {
     guildId: ix.guildId,
-    channelId: ix.channelId,
+    channelId: gameChannelOf(settings, ix.channelId),
     challengerId: ix.userId,
     opponentId,
     bet,
@@ -984,16 +1206,23 @@ async function ccGo(ix, [opponentId, rawBet], ctx) {
         color: 0xe67e22,
         title: '🎲 挑戦状を送りました',
         description:
-          `<@${opponentId}> にチンチロを申し込みました。\n` +
+          `${sentLine(opponentId, 'チンチロ')}\n` +
           `賭け金 ${coins(bet, settings)}（預かり ${escrowFor(bet).toLocaleString('ja-JP')}）\n` +
           '相手が「受けて立つ」を押すと勝負開始です。',
       }),
     ],
-    components: [row(button(id('cc', 'open'), 'もう一度挑戦', { emoji: '🔁' }), homeButton())],
+    components: [row(jumpButton(ix.guildId, sent.channel_id ?? gameChannelOf(settings, ix.channelId), sent.id), button(id('cc', 'open'), 'もう一度挑戦', { emoji: '🔁' }), homeButton())],
   });
 }
 
-export const cc = { open: ccOpen, user: ccUser, custom: ccCustom, amount: ccAmount, go: ccGo };
+export const cc = {
+  open: ccOpen,
+  user: ccUser,
+  anyone: (ix, _args, ctx) => ccBetScreen(ix, ctx, ANYONE),
+  custom: ccCustom,
+  amount: ccAmount,
+  go: ccGo,
+};
 
 /* ------------------------------------------------------------------ 1対1の対戦ゲーム（共通） */
 
@@ -1020,7 +1249,7 @@ function duelScreens(gameKey, { screen, lead, extra = null }) {
       ],
       components: [
         userSelect(id(screen, 'user'), '対戦相手を選ぶ'),
-        row(...(extra ? extra() : []), backButton('games'), homeButton()),
+        row(anyoneButton(screen), ...(extra ? extra() : []), backButton('games'), homeButton()),
       ],
     });
   }
@@ -1048,7 +1277,7 @@ function duelScreens(gameKey, { screen, lead, extra = null }) {
             color: rules.color,
             title: `${em[rules.emojiSlot]} ${rules.title}`,
             description:
-              `相手: <@${opponentId}>\n所持金 ${coins(balance, settings)}\n\n` +
+              `相手: ${opponentLabel(opponentId)}\n所持金 ${coins(balance, settings)}\n\n` +
               '賭け金を選んでください。**勝った方が両方の賭け金を総取り**します。',
           }),
           notice,
@@ -1080,7 +1309,7 @@ function duelScreens(gameKey, { screen, lead, extra = null }) {
     const sent = await startDuel(ctx, {
       game: gameKey,
       guildId: ix.guildId,
-      channelId: ix.channelId,
+      channelId: gameChannelOf(settings, ix.channelId),
       challengerId: ix.userId,
       opponentId,
       bet,
@@ -1093,14 +1322,14 @@ function duelScreens(gameKey, { screen, lead, extra = null }) {
         embed({
           color: rules.color,
           title: '挑戦状を送りました',
-          description: `<@${opponentId}> に ${rules.title} を申し込みました。チャンネルの投稿から応答してもらってください。`,
+          description: `${sentLine(opponentId, rules.title)}チャンネルの投稿から応答してもらってください。`,
         }),
       ],
-      components: [row(backButton('games'), homeButton())],
+      components: [row(jumpButton(ix.guildId, sent.channel_id ?? gameChannelOf(settings, ix.channelId), sent.id), backButton('games'), homeButton())],
     });
   }
 
-  return { open, user, custom, amount, go };
+  return { open, user, custom, amount, go, anyone: (ix, _args, ctx) => betScreen(ix, ctx, ANYONE) };
 }
 
 export const rr = duelScreens('rr', {
@@ -1218,7 +1447,7 @@ async function bjStart(ix, [rawBet], ctx, solo) {
 
   const opened = await openBlackjack(ctx, {
     guildId: ix.guildId,
-    channelId: ix.channelId,
+    channelId: gameChannelOf(settings, ix.channelId),
     hostId: ix.userId,
     bet,
     settings,
@@ -1232,6 +1461,11 @@ async function bjStart(ix, [rawBet], ctx, solo) {
     return bjOpen(ix, [], ctx, messages[opened.reason] ?? '卓を立てられませんでした。');
   }
 
+  if (opened.privately) {
+    if (opened.after) ctx.animate(ix, [{ after: 1200, payload: opened.after }]);
+    return show(ix, opened.payload);
+  }
+
   return show(ix, {
     embeds: [
       embed({
@@ -1243,7 +1477,7 @@ async function bjStart(ix, [rawBet], ctx, solo) {
             `ほかの人が座るのを待って、**▶️ 始める** を押してください（${BJ_MAX_PLAYERS}人そろえば自動で始まります）。`,
       }),
     ],
-    components: [row(backButton('games'), homeButton())],
+    components: [row(jumpButton(ix.guildId, opened.message?.channel_id ?? gameChannelOf(settings, ix.channelId), opened.message?.id), backButton('games'), homeButton())],
   });
 }
 

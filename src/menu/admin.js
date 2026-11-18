@@ -1,4 +1,11 @@
-import { PRESET_ACTIVITIES, getActivity, listActivities, removeActivity, upsertActivity } from '../lib/activities.js';
+import {
+  getActivity,
+  listActivities,
+  PRESET_ACTIVITIES,
+  removeActivity,
+  renameActivity,
+  upsertActivity,
+} from '../lib/activities.js';
 import {
   BULK_COLUMNS,
   CONDITION_EXAMPLES,
@@ -9,6 +16,7 @@ import {
   listAchievements,
   parseAchievementLines,
   removeAchievement,
+  toggleHidden,
 } from '../lib/achievements.js';
 import {
   STREAK_BULK_COLUMNS,
@@ -29,12 +37,16 @@ import { disabledSet, disabledText, GAME_BY_KEY, GAMES } from '../lib/game-catal
 import {
   WEEKDAYS,
   createAnnouncement,
+  cyclePeriodMode,
   describeAnnouncement,
+  periodModeOf,
   describeSchedule,
   getAnnouncement,
   listAnnouncements,
   removeAnnouncement,
   toggleAnnouncement,
+  buildAnnouncement,
+  updateAnnouncement,
 } from '../lib/announcements.js';
 import {
   DRAW_HOUR as LOTTERY_DRAW_HOUR,
@@ -47,9 +59,10 @@ import {
   setPool as setLotteryPool,
 } from '../lib/lottery.js';
 import { SUIT_KEYS, cardSlot, diceSlot, saveCustomEmoji } from '../lib/emoji.js';
-import { METRICS, rankingTitle } from '../lib/ranking.js';
+import { METRICS, PERIOD_MODES, rankingTitle } from '../lib/ranking.js';
 import { ButtonStyle, TextInputStyle } from '../discord/constants.js';
 import {
+  COLORS,
   backButton,
   button,
   embed,
@@ -64,58 +77,87 @@ import {
   withNotice,
 } from './common.js';
 import { open as openHome } from './home.js';
-import { reasonLabel } from './wallet.js';
+import { reasonLabel } from '../lib/ledger-reasons.js';
+import { clampHour } from '../lib/calendar.js';
+import { describeVersion } from '../lib/version.js';
+import { clearErrors, recentErrors } from '../lib/error-report.js';
+import { itemActions } from './admin-items.js';
+import { embedToV2 } from '../discord/components-v2.js';
+import { setupChecklist, toolActions } from './admin-tools.js';
 
 /** 管理操作は毎回権限を確かめる。権限が無ければホームに戻す。 */
 function denied(ix, ctx) {
   return openHome(ix, [], ctx, 'この操作には「サーバー管理」権限が必要です。');
 }
 
+/**
+ * 管理メニュー。ボタンを4つのまとまりに分け、1段に1つのまとまりを置く。
+ *   1段目 💪 かせぐ：アクション・連日ボーナス・称号・報告パネル
+ *   2段目 🎮 あそぶ：ゲームのオンオフ・全ゲーム・宝くじ・絵文字
+ *   3段目 📢 場所とお知らせ：Botの設定・定期発表・管理用チャンネル
+ *   4段目 💰 お金と見守り：残高の調整・出品の取り下げ・経済の様子・設定の保存
+ * はじめの準備が終わっていなければ、残っているものを上に出す。
+ */
 export async function open(ix, _args, ctx, notice = null) {
   if (!ix.isAdmin) return denied(ix, ctx);
   const settings = await ctx.settings(ix.guildId);
+  const checklist = await setupChecklist(ctx.db, ix.guildId, settings);
+  const left = checklist.filter((item) => !item.done);
+
+  /** @type {Array<{name: string, value: string, inline?: boolean}>} */
+  const fields = [
+    { name: '通貨', value: `${settings.currency_emoji} ${settings.currency_name}`, inline: true },
+    { name: '初期残高', value: `${settings.starting_balance}`, inline: true },
+    { name: '賭け金', value: `${settings.min_bet} 〜 ${settings.max_bet === 0 ? '無制限' : settings.max_bet}`, inline: true },
+  ];
+  if (left.length > 0) {
+    fields.unshift({
+      name: `🧭 はじめの準備（${checklist.length - left.length}/${checklist.length}）`,
+      value: checklist.map((item) => `${item.done ? '✅' : '⬜'} ${item.text}`).join('\n'),
+    });
+  }
+  fields.push({
+    name: 'ボタンの並び',
+    value: '1段目 **💪 かせぐ**　2段目 **🎮 あそぶ**　3段目 **📢 場所とお知らせ**　4段目 **💰 お金と見守り**',
+  });
 
   return show(ix, {
     embeds: [
       withNotice(
         embed({
-          color: 0x9b59b6,
+          color: COLORS.admin,
           title: '⚙️ 管理メニュー',
-          description: 'サーバー管理権限を持つ人だけが使えます。',
-          fields: [
-            { name: '通貨', value: `${settings.currency_emoji} ${settings.currency_name}`, inline: true },
-            { name: '初期残高', value: `${settings.starting_balance}`, inline: true },
-            {
-              name: '賭け金',
-              value: `${settings.min_bet} 〜 ${settings.max_bet === 0 ? '無制限' : settings.max_bet}`,
-              inline: true,
-            },
-          ],
+          description: `サーバー管理権限を持つ人だけが使えます。\n${describeVersion(ctx.env)}`,
+          fields,
         }),
         notice,
       ),
     ],
     components: [
       row(
-        button(id('admin', 'acts'), 'アクション管理', { emoji: '📋', style: ButtonStyle.PRIMARY }),
+        button(id('admin', 'acts'), 'アクション', { emoji: '📋', style: ButtonStyle.PRIMARY }),
         button(id('admin', 'streak'), '連日ボーナス', { emoji: '🔥', style: ButtonStyle.PRIMARY }),
         button(id('admin', 'ach'), '称号', { emoji: '🏅', style: ButtonStyle.PRIMARY }),
+        button(id('admin', 'panel'), '報告パネル', { emoji: '📌', style: ButtonStyle.PRIMARY }),
       ),
       row(
-        button(id('admin', 'ann'), '定期発表', { emoji: '📢', style: ButtonStyle.PRIMARY }),
-        button(id('admin', 'bal'), '残高を調整', { emoji: '💰' }),
-        button(id('admin', 'cfg'), '通貨の設定', { emoji: '⚙️' }),
+        button(id('admin', 'gm'), 'ゲームのオンオフ', { emoji: '🎮', style: ButtonStyle.SUCCESS }),
+        button(id('admin', 'allgames'), '全ゲーム', { emoji: '🕹️', style: ButtonStyle.SUCCESS }),
+        button(id('admin', 'lot'), '宝くじ', { emoji: '🎫', style: ButtonStyle.SUCCESS }),
+        button(id('admin', 'emoji'), '絵文字', { emoji: '😀', style: ButtonStyle.SUCCESS }),
       ),
       row(
-        button(id('admin', 'lot'), '宝くじ', { emoji: '🎫' }),
-        button(id('admin', 'emoji'), '絵文字を確認', { emoji: '😀' }),
-        button(id('admin', 'gm'), 'ゲームのオンオフ', { emoji: '🎮' }),
-        button(id('admin', 'allgames'), '全ゲーム', { emoji: '🕹️' }),
+        button(id('admin', 'prefs'), 'Botの設定', { emoji: '🛠️' }),
+        button(id('admin', 'ann'), '定期発表', { emoji: '📢' }),
+        button(id('admin', 'log'), '管理用チャンネル', { emoji: '🧰' }),
       ),
       row(
-        button(id('admin', 'panel'), '報告パネルを置く', { emoji: '📌', style: ButtonStyle.PRIMARY }),
-        backButton(),
+        button(id('admin', 'bal'), '残高の調整', { emoji: '💰' }),
+        button(id('admin', 'items'), '出品の取り下げ', { emoji: '🚫' }),
+        button(id('admin', 'eco'), '経済の様子', { emoji: '📈' }),
+        button(id('admin', 'backup'), '設定の保存', { emoji: '💾' }),
       ),
+      row(backButton()),
     ],
   });
 }
@@ -135,9 +177,9 @@ export async function streak(ix, _args, ctx, notice = null) {
       embeds: [
         withNotice(
           embed({
-            color: 0xe67e22,
+            color: COLORS.admin,
             title: '🔥 連日ボーナス',
-            description: '先に **📋 アクション管理** でアクションを作ってください。連日ボーナスはアクションごとに設定します。',
+            description: '先に **📋 アクション** でアクションを作ってください。連日ボーナスはアクションごとに設定します。',
           }),
           notice,
         ),
@@ -159,7 +201,7 @@ export async function streak(ix, _args, ctx, notice = null) {
     embeds: [
       withNotice(
         embed({
-          color: 0xe67e22,
+          color: COLORS.admin,
           title: '🔥 連日ボーナス',
           description:
             'アクションごとに「何日目から何日目までは毎日何コイン」を決められます。\n連続はアクション別に数えるので、筋トレと勉強は別々です。\n' +
@@ -267,7 +309,7 @@ export async function streakout(ix, _args, ctx) {
   return show(ix, {
     embeds: [
       embed({
-        color: 0xe67e22,
+        color: COLORS.admin,
         title: '📤 連日ボーナスの書き出し',
         description:
           `\`\`\`\n${STREAK_BULK_COLUMNS}\n${body}\n\`\`\`\n` +
@@ -318,7 +360,7 @@ export async function streakview(ix, args, ctx, notice = null) {
     embeds: [
       withNotice(
         embed({
-          color: 0xe67e22,
+          color: COLORS.admin,
           title: `🔥 ${activity} の連日ボーナス`,
           description:
             rewards.length === 0
@@ -377,6 +419,18 @@ export async function streakdel(ix, args, ctx) {
   if (!ix.isAdmin) return denied(ix, ctx);
   const activity = args.join(':');
   const fromDays = Number(ix.values[0]);
+  return confirmScreen(ix, {
+    title: `🔥 ${truncate(activity, 40)} の「${fromDays}日目から」の設定を削除しますか？`,
+    description: 'その日数に届いた人に、この段階のボーナスが出なくなります。',
+    ok: id('admin', 'streakdelok', String(fromDays), activity),
+    back: id('admin', 'streakview', activity),
+  });
+}
+
+export async function streakdelok(ix, [rawFrom, ...rest], ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const activity = rest.join(':');
+  const fromDays = Number(rawFrom);
   await removeStreakReward(ctx.db, ix.guildId, activity, fromDays);
   return streakview(ix, [activity], ctx, `${fromDays}日目からの設定を削除しました`);
 }
@@ -402,6 +456,15 @@ export async function ach(ix, _args, ctx, notice = null) {
           description: truncate(describeCondition(achievement, settings), 100),
         })),
       ),
+      stringSelect(
+        id('admin', 'achhide'),
+        '隠し称号にする／戻す（条件を満たすまで「？？？」）',
+        achievements.slice(0, 25).map((achievement) => ({
+          label: truncate(`${achievement.hidden ? '🙈 ' : ''}${achievement.name}`, 100),
+          value: String(achievement.id),
+          description: achievement.hidden ? '隠している → 選ぶと見せる' : '見せている → 選ぶと隠す',
+        })),
+      ),
     );
   }
   components.push(
@@ -417,7 +480,7 @@ export async function ach(ix, _args, ctx, notice = null) {
     embeds: [
       withNotice(
         embed({
-          color: 0xf39c12,
+          color: COLORS.admin,
           title: '🏅 称号',
           description:
             achievements.length === 0
@@ -439,7 +502,7 @@ function achievementList(achievements, settings) {
     .slice(0, LIMIT)
     .map(
       (achievement) =>
-        `${achievement.emoji ?? '🏅'} **${achievement.name}** — ${describeCondition(achievement, settings)}` +
+        `${achievement.hidden ? '🙈' : ''}${achievement.emoji ?? '🏅'} **${achievement.name}** — ${describeCondition(achievement, settings)}` +
         (achievement.reward > 0 ? `（+${achievement.reward}）` : ''),
     );
   if (achievements.length > LIMIT) {
@@ -448,12 +511,24 @@ function achievementList(achievements, settings) {
   return lines.join('\n');
 }
 
+export async function achhide(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const updated = await toggleHidden(ctx.db, ix.guildId, Number(ix.values[0]));
+  if (!updated) return ach(ix, [], ctx, 'その称号は見つかりませんでした。');
+  return ach(
+    ix,
+    [],
+    ctx,
+    updated.hidden ? `「${updated.name}」を隠し称号にしました（まだの人には「？？？」と出ます）` : `「${updated.name}」を見せるようにしました`,
+  );
+}
+
 export async function achnew(ix, _args, ctx) {
   if (!ix.isAdmin) return denied(ix, ctx);
   return show(ix, {
     embeds: [
       embed({
-        color: 0xf39c12,
+        color: COLORS.admin,
         title: '🏅 称号を作る',
         description: 'まず、どんな条件で贈るかを選んでください。',
         fields: Object.entries(CONDITION_TYPES).map(([key, type]) => ({
@@ -502,10 +577,10 @@ export async function achsave(ix, [type], ctx) {
   const meta = CONDITION_TYPES[type];
   if (!meta) return ach(ix, [], ctx, '不明な条件です。');
 
-  const name = readText(ix, 'name');
+  const name = readText(ix, 'name', { line: true, max: 32 });
   const threshold = readInt(ix, 'threshold', { min: 1 });
   const reward = readInt(ix, 'reward', { min: 0, fallback: 0 });
-  const activityName = meta.needsActivity ? readText(ix, 'activity') : null;
+  const activityName = meta.needsActivity ? readText(ix, 'activity', { line: true }) : null;
 
   if (!name) return ach(ix, [], ctx, '称号の名前を入力してください。');
   if (isError(threshold)) return ach(ix, [], ctx, threshold.error);
@@ -520,7 +595,7 @@ export async function achsave(ix, [type], ctx) {
 
   await createAchievement(ctx.db, ix.guildId, {
     name,
-    emoji: readText(ix, 'emoji'),
+    emoji: readText(ix, 'emoji', { line: true, max: 8 }),
     condition_type: type,
     threshold,
     activity_name: activityName,
@@ -601,7 +676,7 @@ export async function achout(ix, _args, ctx) {
   return show(ix, {
     embeds: [
       embed({
-        color: 0xf39c12,
+        color: COLORS.admin,
         title: '📤 称号の書き出し',
         description:
           `\`\`\`\n${BULK_COLUMNS}\n${body}\n\`\`\`\n` +
@@ -620,10 +695,45 @@ export async function achout(ix, _args, ctx) {
   });
 }
 
+/** 削除の前に確かめる。持っている人の記録ごと消えるため。 */
 export async function achdel(ix, _args, ctx) {
   if (!ix.isAdmin) return denied(ix, ctx);
-  await removeAchievement(ctx.db, ix.guildId, Number(ix.values[0]));
+  const target = (await listAchievements(ctx.db, ix.guildId)).find((item) => item.id === Number(ix.values[0]));
+  if (!target) return ach(ix, [], ctx, 'その称号は見つかりませんでした。');
+  const holders = (
+    await ctx.db.get(
+      'SELECT COUNT(*) AS n FROM user_achievements WHERE guild_id = ?1 AND achievement_id = ?2',
+      ix.guildId,
+      target.id,
+    )
+  ).n;
+  return confirmScreen(ix, {
+    title: `🏅 称号「${truncate(target.name, 60)}」を削除しますか？`,
+    description:
+      (holders > 0 ? `**${holders}人**が持っています。削除すると、その人たちの獲得記録も消え、名前の横の表示も外れます。\n` : '') +
+      '元に戻すことはできません。',
+    ok: id('admin', 'achdelok', String(target.id)),
+    back: id('admin', 'ach'),
+  });
+}
+
+export async function achdelok(ix, [rawId], ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  await removeAchievement(ctx.db, ix.guildId, Number(rawId));
   return ach(ix, [], ctx, '称号を削除しました');
+}
+
+/** 消す前の確認画面（管理メニュー共通）。 */
+function confirmScreen(ix, { title, description, ok, back }) {
+  return show(ix, {
+    embeds: [embed({ color: COLORS.stop, title, description })],
+    components: [
+      row(
+        button(ok, '削除する', { emoji: '🗑️', style: ButtonStyle.DANGER }),
+        button(back, 'やめる', { emoji: '↩️' }),
+      ),
+    ],
+  });
 }
 
 /* ------------------------------------------------------------------ アクション管理 */
@@ -662,7 +772,7 @@ export async function acts(ix, _args, ctx, notice = null) {
     embeds: [
       withNotice(
         embed({
-          color: 0x9b59b6,
+          color: COLORS.admin,
           title: '📋 アクション管理',
           description:
             activities.length === 0
@@ -697,7 +807,7 @@ export async function actview(ix, args, ctx, notice = null) {
     embeds: [
       withNotice(
         embed({
-          color: 0x9b59b6,
+          color: COLORS.admin,
           title: `${activity.emoji ?? '📋'} ${activity.name}`,
           description: activity.description ?? '説明なし',
           fields: [
@@ -769,7 +879,7 @@ export async function actsave2(ix, args, ctx) {
 
 async function saveActivity(ix, ctx, previousName) {
   if (!ix.isAdmin) return denied(ix, ctx);
-  const name = readText(ix, 'name');
+  const name = readText(ix, 'name', { line: true, max: 32 });
   const reward = readInt(ix, 'reward', { min: 0 });
   const cooldown = readInt(ix, 'cooldown', { min: 0, fallback: 0 });
   const daily = readInt(ix, 'daily', { min: 0, fallback: 0 });
@@ -780,21 +890,45 @@ async function saveActivity(ix, ctx, previousName) {
   if (isError(daily)) return acts(ix, [], ctx, daily.error);
 
   const previous = previousName ? await getActivity(ctx.db, ix.guildId, previousName) : null;
+  const renaming = previous && previous.name !== name;
+  if ((!previous || renaming) && (await getActivity(ctx.db, ix.guildId, name))) {
+    return acts(ix, [], ctx, `「${name}」というアクションはもうあります。別の名前にしてください。`);
+  }
+
+  // 名前を変えるときは、記録・連続記録・連日ボーナス・称号・発表もまとめて付け替える
+  if (renaming) await renameActivity(ctx.db, ix.guildId, previous.name, name);
   await upsertActivity(ctx.db, ix.guildId, {
     name,
     reward,
     cooldown_sec: cooldown * 60,
     daily_limit: daily,
-    emoji: readText(ix, 'emoji'),
+    emoji: readText(ix, 'emoji', { line: true, max: 8 }),
     description: previous?.description ?? null,
   });
-  // 名前を変えた場合は古い方を消す（報告履歴は旧名のまま残る）
-  if (previous && previous.name !== name) await removeActivity(ctx.db, ix.guildId, previous.name);
 
-  return actview(ix, [name], ctx, previous ? '更新しました' : '追加しました');
+  const note = renaming
+    ? `「${previous.name}」を「${name}」に変えました。連続記録・連日ボーナス・称号・定期発表も引き継いでいます`
+    : previous
+      ? '更新しました'
+      : '追加しました';
+  return actview(ix, [name], ctx, note);
 }
 
 export async function actdel(ix, args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const name = args.join(':');
+  if (!(await getActivity(ctx.db, ix.guildId, name))) return acts(ix, [], ctx, 'そのアクションは見つかりませんでした。');
+  return confirmScreen(ix, {
+    title: `📋 「${truncate(name, 60)}」を削除しますか？`,
+    description:
+      'メニューと報告パネルから消え、もう報告できなくなります。このアクションの連日ボーナスの設定も消えます。\n' +
+      'これまでの報告の記録とコインはそのまま残ります。',
+    ok: id('admin', 'actdelok', name),
+    back: id('admin', 'actview', name),
+  });
+}
+
+export async function actdelok(ix, args, ctx) {
   if (!ix.isAdmin) return denied(ix, ctx);
   const name = args.join(':');
   await removeActivity(ctx.db, ix.guildId, name);
@@ -820,7 +954,7 @@ export async function bal(ix, _args, ctx, notice = null) {
   return show(ix, {
     embeds: [
       withNotice(
-        embed({ color: 0x9b59b6, title: '💰 残高を調整', description: '対象のメンバーを選んでください。' }),
+        embed({ color: COLORS.admin, title: '💰 残高を調整', description: '対象のメンバーを選んでください。' }),
         notice,
       ),
     ],
@@ -841,7 +975,7 @@ export async function balview(ix, [userId], ctx, notice = null) {
     embeds: [
       withNotice(
         embed({
-          color: 0x9b59b6,
+          color: COLORS.admin,
           title: '💰 残高を調整',
           description: `対象: <@${userId}>\n現在の所持金 ${coins(balance, settings)}`,
         }),
@@ -905,7 +1039,7 @@ export async function balhist(ix, [userId], ctx) {
   return show(ix, {
     embeds: [
       embed({
-        color: 0x9b59b6,
+        color: COLORS.admin,
         title: '📜 コインの履歴',
         description:
           entries.length === 0
@@ -945,22 +1079,22 @@ export async function cfgsave(ix, _args, ctx) {
   const starting = readInt(ix, 'starting_balance', { min: 0 });
   const minBet = readInt(ix, 'min_bet', { min: 1 });
   const maxBet = readInt(ix, 'max_bet', { min: 0 });
-  for (const value of [starting, minBet, maxBet]) {
-    if (isError(value)) return open(ix, [], ctx, value.error);
-  }
+  if (isError(starting)) return prefs(ix, [], ctx, starting.error);
+  if (isError(minBet)) return prefs(ix, [], ctx, minBet.error);
+  if (isError(maxBet)) return prefs(ix, [], ctx, maxBet.error);
   if (maxBet !== null && minBet !== null && maxBet > 0 && maxBet < minBet) {
-    return open(ix, [], ctx, '最高賭け金は最低賭け金以上にしてください。');
+    return prefs(ix, [], ctx, '最高賭け金は最低賭け金以上にしてください。');
   }
 
   await updateSettings(ctx.db, ix.guildId, {
-    currency_name: readText(ix, 'currency_name'),
+    currency_name: readText(ix, 'currency_name', { line: true }),
     currency_emoji: readText(ix, 'currency_emoji'),
     starting_balance: starting,
     min_bet: minBet,
     max_bet: maxBet,
   });
   ctx.forgetSettings(ix.guildId);
-  return open(ix, [], ctx, '設定を保存しました');
+  return prefs(ix, [], ctx, '設定を保存しました');
 }
 
 
@@ -1000,7 +1134,7 @@ export async function ann(ix, _args, ctx, notice = null) {
     embeds: [
       withNotice(
         embed({
-          color: 0x3498db,
+          color: COLORS.admin,
           title: '📢 定期発表',
           description:
             list.length === 0
@@ -1022,7 +1156,7 @@ export async function annnew(ix, _args, ctx) {
   return show(ix, {
     embeds: [
       embed({
-        color: 0x3498db,
+        color: COLORS.admin,
         title: '📢 定期発表を作る（1/4）',
         description: 'まず、どのチャンネルに発表するかを選んでください。',
       }),
@@ -1066,7 +1200,7 @@ export async function gm(ix, _args, ctx, notice = null) {
     embeds: [
       withNotice(
         embed({
-          color: 0xe67e22,
+          color: COLORS.admin,
           title: '🎮 ゲームのオンオフ',
           description: `押すと切り替わります。\n\n${lines.join('\n')}`,
           footer: { text: '✅ が遊べるもの／⬜ は「🎮 あそぶ」に出ません' },
@@ -1111,7 +1245,7 @@ export async function allgames(ix, _args, ctx, notice = null) {
     embeds: [
       withNotice(
         embed({
-          color: 0x9b59b6,
+          color: COLORS.admin,
           title: '🕹️ 全ゲーム',
           description:
             'オンオフに関係なく、すべてのゲームをここから開けます。\n' +
@@ -1160,7 +1294,7 @@ export async function panel(ix, _args, ctx) {
   return show(ix, {
     embeds: [
       embed({
-        color: 0x2ecc71,
+        color: COLORS.admin,
         title: '📌 報告パネルを置く',
         description:
           'アクションのボタンを並べたメッセージを、選んだチャンネルに置きます。\n' +
@@ -1214,7 +1348,7 @@ export async function route(ix, _args, ctx, notice = null) {
     embeds: [
       withNotice(
         embed({
-          color: 0x3498db,
+          color: COLORS.admin,
           title: '🔀 報告の転送先',
           description:
             '選んだチャンネルでの報告は、**そのチャンネルには出さず**、決めた別の場所に出します。\n' +
@@ -1241,7 +1375,7 @@ export async function routefrom(ix, _args, ctx) {
   return show(ix, {
     embeds: [
       embed({
-        color: 0x3498db,
+        color: COLORS.admin,
         title: '🔀 報告の転送先（2/2）',
         description: `<#${fromChannelId}> でした報告を、**どこに出しますか**。`,
       }),
@@ -1265,7 +1399,7 @@ export async function routeto(ix, [fromChannelId], ctx) {
     await ctx.rest.createMessage(toChannelId, {
       embeds: [
         embed({
-          color: 0x3498db,
+          color: COLORS.admin,
           title: '🔀 報告の転送先になりました',
           description: `これから <#${fromChannelId}> でした報告は、ここに出ます。`,
         }),
@@ -1308,7 +1442,7 @@ export async function annch(ix, _args, ctx) {
   return show(ix, {
     embeds: [
       embed({
-        color: 0x3498db,
+        color: COLORS.admin,
         title: '📢 定期発表を作る（2/4）',
         description: `発表先: <#${channelId}>\n\n何のランキングを出しますか？`,
         fields: Object.entries(METRICS).map(([key, meta]) => ({
@@ -1358,7 +1492,7 @@ export async function annmetric(ix, [channelId], ctx) {
   return show(ix, {
     embeds: [
       embed({
-        color: 0x3498db,
+        color: COLORS.admin,
         title: '📢 定期発表を作る（3/4）',
         description:
           `発表先: <#${channelId}>\n種類: **${METRICS[metric].label}**\n\nどのくらいの頻度で発表しますか？\n` +
@@ -1413,7 +1547,7 @@ export async function annsave(ix, [channelId, metric, when], ctx) {
 
   let activityName = null;
   if (meta.needsActivity) {
-    activityName = readText(ix, 'activity');
+    activityName = readText(ix, 'activity', { line: true });
     if (meta.needsActivity === true && !activityName) {
       return ann(ix, [], ctx, 'この種類では対象のアクション名が必要です。');
     }
@@ -1449,7 +1583,7 @@ export async function annview(ix, [rawId], ctx, notice = null) {
     embeds: [
       withNotice(
         embed({
-          color: 0x3498db,
+          color: COLORS.admin,
           title: '📢 発表の設定',
           description: `発表先: <#${announcement.channel_id}>\n${describeAnnouncement(announcement)}`,
           fields: [
@@ -1468,9 +1602,104 @@ export async function annview(ix, [rawId], ctx, notice = null) {
         }),
         button(id('admin', 'anndel', String(announcement.id)), '削除する', { emoji: '🗑️', style: ButtonStyle.DANGER }),
       ),
+      row(
+        button(id('admin', 'annedit', String(announcement.id)), '時刻・人数・賞金を変える', { emoji: '✏️', style: ButtonStyle.PRIMARY }),
+        button(id('admin', 'annpeek', String(announcement.id)), 'いまの中身を見る', { emoji: '👀' }),
+        button(id('admin', 'anntry', String(announcement.id)), '試しに投稿', { emoji: '🧪' }),
+      ),
+      METRICS[announcement.metric]?.usesPeriod
+        ? row(
+            button(
+              id('admin', 'annperiod', String(announcement.id)),
+              `集計: ${PERIOD_MODES[periodModeOf(announcement)].label}（押すと切り替え）`,
+              { emoji: '🗓️' },
+            ),
+          )
+        : null,
       row(backButton('admin', '管理メニュー'), button(id('admin', 'ann'), '一覧へ', { emoji: '📢' }), homeButton()),
     ],
   });
+}
+
+export async function annedit(ix, [rawId], ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const announcement = await getAnnouncement(ctx.db, ix.guildId, Number(rawId));
+  if (!announcement) return ann(ix, [], ctx, 'その設定は見つかりませんでした。');
+  return openModal(
+    modal(id('admin', 'annupdate', String(announcement.id)), '発表を変える', [
+      textInput('hour', '発表する時刻（0〜23の数字）', { required: true, max: 2, value: String(announcement.hour) }),
+      textInput('top_n', '何位まで出すか', { required: true, max: 2, value: String(announcement.top_n) }),
+      textInput('prize', '1位への賞金（0でなし）', { max: 12, value: String(announcement.prize ?? 0) }),
+    ]),
+  );
+}
+
+export async function annupdate(ix, [rawId], ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const announcement = await getAnnouncement(ctx.db, ix.guildId, Number(rawId));
+  if (!announcement) return ann(ix, [], ctx, 'その設定は見つかりませんでした。');
+  const hour = readInt(ix, 'hour', { min: 0, max: 23 });
+  const topN = readInt(ix, 'top_n', { min: 1, max: 20 });
+  const prize = readInt(ix, 'prize', { min: 0, fallback: 0 });
+  for (const value of [hour, topN, prize]) {
+    if (isError(value)) return annview(ix, [rawId], ctx, value.error);
+  }
+  if (hour === null || topN === null) return annview(ix, [rawId], ctx, '時刻と人数を入れてください。');
+  const updated = await updateAnnouncement(ctx.db, ix.guildId, announcement.id, { hour, topN, prize: prize ?? 0 });
+  return annview(ix, [rawId], ctx, `${describeSchedule(updated)}・上位${updated.top_n}人に変えました`);
+}
+
+/** 試しの中身を作る（賞金は贈らない）。まだ誰もいなければ null。 */
+async function trialAnnouncement(ctx, announcement) {
+  const settings = await ctx.settings(announcement.guild_id);
+  return buildAnnouncement(ctx.db, announcement, { settings, calendar: ctx.calendar, trial: true });
+}
+
+/** いま発表するとどうなるかを、管理者にだけ見せる。 */
+export async function annpeek(ix, [rawId], ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const announcement = await getAnnouncement(ctx.db, ix.guildId, Number(rawId));
+  if (!announcement) return ann(ix, [], ctx, 'その設定は見つかりませんでした。');
+  const built = await trialAnnouncement(ctx, announcement);
+  if (!built) return annview(ix, [rawId], ctx, 'いまの期間には、まだ載る人がいません（このままだと発表は出ません）。');
+  return show(ix, {
+    embeds: [embed({ color: COLORS.admin, description: '👀 **いま発表すると、こうなります**（まだ投稿していません）' }), built.embed],
+    components: [row(button(id('admin', 'annview', String(announcement.id)), '設定に戻る', { emoji: '↩️' }))],
+  });
+}
+
+/**
+ * 発表先のチャンネルに、試しに投稿する（賞金は贈らない）。
+ * 投稿できるか（Bot に書き込む権限があるか）を確かめるのにも使う。
+ */
+export async function anntry(ix, [rawId], ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const announcement = await getAnnouncement(ctx.db, ix.guildId, Number(rawId));
+  if (!announcement) return ann(ix, [], ctx, 'その設定は見つかりませんでした。');
+  const built = await trialAnnouncement(ctx, announcement);
+  const body = built?.embed ?? embed({ color: 0xf1c40f, description: 'いまの期間には、まだ載る人がいません。' });
+  const header = '🧪 **試しの投稿です**（管理者が発表の見た目を確かめています）';
+  const settings = await ctx.settings(ix.guildId);
+  try {
+    // 本番と同じ形で出す（新しい見た目なら V2）。試しなので誰も鳴らさない
+    await ctx.rest.createMessage(
+      announcement.channel_id,
+      settings.modern_ui ? embedToV2(body, { header }) : { content: header, embeds: [body], allowed_mentions: { parse: [] } },
+    );
+  } catch (error) {
+    await ctx.reportError(ix.guildId, '定期発表の試し投稿', error);
+    return annview(ix, [rawId], ctx, `<#${announcement.channel_id}> に投稿できませんでした。Bot がそのチャンネルに書き込めるか確かめてください。`);
+  }
+  return annview(ix, [rawId], ctx, `<#${announcement.channel_id}> に試しの投稿をしました（賞金は贈っていません）`);
+}
+
+/** 集計期間の選び方を切り替える。 */
+export async function annperiod(ix, [rawId], ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const updated = await cyclePeriodMode(ctx.db, ix.guildId, Number(rawId));
+  if (!updated) return ann(ix, [], ctx, 'その設定は見つかりませんでした。');
+  const mode = PERIOD_MODES[periodModeOf(updated)];
+  return annview(ix, [rawId], ctx, `集計を「${mode.label}」にしました。${mode.hint}`);
 }
 
 export async function anntoggle(ix, [rawId], ctx) {
@@ -1516,7 +1745,7 @@ export async function emoji(ix, [rawPage], ctx) {
     return show(ix, {
       embeds: [
         embed({
-          color: 0xe74c3c,
+          color: COLORS.stop,
           title: '😀 絵文字の確認',
           description:
             '絵文字の一覧を取得できませんでした。\n' +
@@ -1531,7 +1760,7 @@ export async function emoji(ix, [rawPage], ctx) {
     return show(ix, {
       embeds: [
         embed({
-          color: 0x95a5a6,
+          color: COLORS.admin,
           title: '😀 絵文字の確認',
           description:
             'このアプリにはまだ絵文字が登録されていません。\n' +
@@ -1559,7 +1788,7 @@ export async function emoji(ix, [rawPage], ctx) {
   return show(ix, {
     embeds: [
       embed({
-        color: 0x9b59b6,
+        color: COLORS.admin,
         title: '😀 絵文字の確認',
         description:
           `このアプリに **${sorted.length} 個** 登録されています（${page + 1}/${pages} ページ）。\n` +
@@ -1590,11 +1819,300 @@ export async function emoji(ix, [rawPage], ctx) {
   });
 }
 
+/* ------------------------------------------------------------------ Botの設定 */
+
+const onOff = (value) => (value ? '🟢 オン' : '⚪ オフ');
+
+/**
+ * これまで設定ファイルの書き換えとデプロイが必要だったものを、ここで変えられるようにする。
+ * 通貨の名前や賭け金の上限（入力フォーム）も、ここから開ける。
+ */
+export async function prefs(ix, _args, ctx, notice = null) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const settings = await ctx.settings(ix.guildId);
+  const fileHour = clampHour(ctx.env?.DAY_START_HOUR ?? 0);
+  const hour = settings.day_start_hour ?? null;
+
+  return show(ix, {
+    embeds: [
+      withNotice(
+        embed({
+          color: COLORS.admin,
+          title: '🛠️ Botの設定',
+          description: '下のリストとボタンで、その場で変えられます（デプロイは要りません）。',
+          fields: [
+            {
+              name: '🕓 1日の区切り',
+              value: hour === null ? `${fileHour}:00（設定ファイルどおり）` : `${hour}:00`,
+              inline: true,
+            },
+            {
+              name: '🎲 卓や挑戦状を出す場所',
+              value: settings.game_channel_id ? `<#${settings.game_channel_id}>` : '押した場所',
+              inline: true,
+            },
+            {
+              name: '📣 実況を出す場所',
+              value: settings.live_channel_id ? `<#${settings.live_channel_id}>` : '遊んだ場所',
+              inline: true,
+            },
+            {
+              name: '🎙️ 実況の基準',
+              value:
+                settings.live_threshold > 0
+                  ? `${settings.currency_emoji}${settings.live_threshold.toLocaleString('ja-JP')} 以上の勝ち負け`
+                  : '実況しない（大当たりだけ）',
+              inline: true,
+            },
+            { name: '👤 1人用は自分の画面だけ', value: onOff(settings.solo_private), inline: true },
+            { name: '🧺 終わった卓を畳む', value: onOff(settings.fold_finished), inline: true },
+            { name: '✨ 新しい見た目', value: onOff(settings.modern_ui), inline: true },
+            {
+              name: 'それぞれの意味',
+              value:
+                '**新しい見た目** … 送金や予想大会の入力フォームの中で相手や選択肢を選べるようにし、ランキングの定期発表を新しい形で出します。' +
+                'Discord アプリが古いと表示できないことがあるので、オンにしたら一度試してください\n' +
+                '**1人用は自分の画面だけ** … 1人で遊ぶブラックジャックとヨットの練習を、チャンネルに出さずに進めます\n' +
+                '**終わった卓を畳む** … 決着から5分たった卓や勝負の掲示を、結果の1行に縮めます（チャンネルが流れにくくなります）\n' +
+                '**実況** … 1人で遊ぶゲーム（スロット・ハイ&ローなど）の大きな勝ち負けを、みんなに知らせます',
+            },
+          ],
+        }),
+        notice,
+      ),
+    ],
+    components: [
+      stringSelect(id('admin', 'prefhour'), '1日の区切りを選ぶ', [
+        { label: `設定ファイルどおり（${fileHour}:00）`, value: 'file', description: 'wrangler.jsonc の DAY_START_HOUR' },
+        ...Array.from({ length: 24 }, (_, value) => ({
+          label: `${value}:00 で日付が変わる`,
+          value: String(value),
+          description: value === 0 ? 'ふつうの日付どおり' : `${value}:00〜翌${(value + 23) % 24}:59 が同じ日`,
+        })),
+      ]),
+      channelSelect(id('admin', 'prefgame'), '卓や挑戦状を出すチャンネルを選ぶ'),
+      channelSelect(id('admin', 'preflive'), '実況を出すチャンネルを選ぶ'),
+      row(
+        button(id('admin', 'prefsolo'), `1人用を自分だけに：${settings.solo_private ? 'オン' : 'オフ'}`, { emoji: '👤' }),
+        button(id('admin', 'preffold'), `終わった卓を畳む：${settings.fold_finished ? 'オン' : 'オフ'}`, { emoji: '🧺' }),
+        button(id('admin', 'preflivemin'), '実況の基準', { emoji: '🎙️' }),
+        button(id('admin', 'prefmodern'), `新しい見た目：${settings.modern_ui ? 'オン' : 'オフ'}`, { emoji: '✨' }),
+      ),
+      row(
+        button(id('admin', 'cfg'), '通貨と賭け金', { emoji: '🪙' }),
+        settings.game_channel_id || settings.live_channel_id
+          ? button(id('admin', 'prefreset'), '場所の指定を外す', { emoji: '↩️' })
+          : null,
+        backButton('admin'),
+      ),
+    ],
+  });
+}
+
+export async function prefhour(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const value = ix.values[0];
+  const hour = value === 'file' ? null : clampHour(value);
+  await ctx.db.run('UPDATE guild_settings SET day_start_hour = ?2 WHERE guild_id = ?1', ix.guildId, hour);
+  ctx.forgetSettings(ix.guildId);
+  return prefs(
+    ix,
+    [],
+    ctx,
+    hour === null
+      ? '1日の区切りを設定ファイルどおりに戻しました'
+      : `1日の区切りを ${hour}:00 にしました。連続記録は途切れません（深夜0時〜区切りの間の変更は避けてください）`,
+  );
+}
+
+/** 選んだチャンネルに書けるかを、案内を1つ投稿して確かめる。 */
+async function tryPost(ctx, channelId, title, description) {
+  try {
+    await ctx.rest.createMessage(channelId, {
+      embeds: [embed({ color: COLORS.admin, title, description })],
+      allowed_mentions: { parse: [] },
+    });
+    return true;
+  } catch (error) {
+    console.error('チャンネルに投稿できませんでした:', error);
+    return false;
+  }
+}
+
+export async function prefgame(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const channelId = ix.values[0];
+  if (!(await tryPost(ctx, channelId, '🎲 ゲームの場所になりました', '卓や挑戦状は、これからここに出ます。'))) {
+    return prefs(ix, [], ctx, `<#${channelId}> に投稿できませんでした。Bot が書き込めるか確認してください。`);
+  }
+  await updateSettings(ctx.db, ix.guildId, { game_channel_id: channelId });
+  ctx.forgetSettings(ix.guildId);
+  return prefs(ix, [], ctx, `卓や挑戦状を <#${channelId}> に出すようにしました`);
+}
+
+export async function preflive(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const channelId = ix.values[0];
+  if (!(await tryPost(ctx, channelId, '📣 実況の場所になりました', '大きな勝ち負けは、これからここに出ます。'))) {
+    return prefs(ix, [], ctx, `<#${channelId}> に投稿できませんでした。Bot が書き込めるか確認してください。`);
+  }
+  await updateSettings(ctx.db, ix.guildId, { live_channel_id: channelId });
+  ctx.forgetSettings(ix.guildId);
+  return prefs(ix, [], ctx, `実況を <#${channelId}> に出すようにしました`);
+}
+
+export async function prefreset(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  await ctx.db.run('UPDATE guild_settings SET game_channel_id = NULL, live_channel_id = NULL WHERE guild_id = ?1', ix.guildId);
+  ctx.forgetSettings(ix.guildId);
+  return prefs(ix, [], ctx, '場所の指定を外しました（押した場所・遊んだ場所に出します）');
+}
+
+export async function prefmodern(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  await ctx.db.run('UPDATE guild_settings SET modern_ui = 1 - modern_ui WHERE guild_id = ?1', ix.guildId);
+  ctx.forgetSettings(ix.guildId);
+  const settings = await ctx.settings(ix.guildId);
+  return prefs(
+    ix,
+    [],
+    ctx,
+    settings.modern_ui
+      ? '新しい見た目をオンにしました。💸 送金などのフォームが開けるか、一度試してください'
+      : '新しい見た目をオフにしました（これまでの形に戻しました）',
+  );
+}
+
+export async function prefsolo(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  await ctx.db.run('UPDATE guild_settings SET solo_private = 1 - solo_private WHERE guild_id = ?1', ix.guildId);
+  ctx.forgetSettings(ix.guildId);
+  const settings = await ctx.settings(ix.guildId);
+  return prefs(ix, [], ctx, settings.solo_private ? '1人用は自分の画面だけで進めるようにしました' : '1人用もチャンネルに出すようにしました');
+}
+
+export async function preffold(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  await ctx.db.run('UPDATE guild_settings SET fold_finished = 1 - fold_finished WHERE guild_id = ?1', ix.guildId);
+  ctx.forgetSettings(ix.guildId);
+  const settings = await ctx.settings(ix.guildId);
+  return prefs(ix, [], ctx, settings.fold_finished ? '終わった卓を5分後に畳むようにしました' : '終わった卓を畳むのをやめました');
+}
+
+export async function preflivemin(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const settings = await ctx.settings(ix.guildId);
+  return openModal(
+    modal(id('admin', 'preflivesave'), '実況の基準', [
+      textInput('threshold', 'この額以上の勝ち負けを実況（0で実況しない）', {
+        value: String(settings.live_threshold ?? 0),
+        placeholder: '例: 1000',
+        max: 12,
+      }),
+    ]),
+  );
+}
+
+export async function preflivesave(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const threshold = readInt(ix, 'threshold', { min: 0, fallback: 0 });
+  if (isError(threshold)) return prefs(ix, [], ctx, threshold.error);
+  await updateSettings(ctx.db, ix.guildId, { live_threshold: threshold });
+  ctx.forgetSettings(ix.guildId);
+  return prefs(ix, [], ctx, threshold > 0 ? `${threshold.toLocaleString('ja-JP')} 以上の勝ち負けを実況するようにしました` : '実況をやめました（大当たりは出します）');
+}
+
+/* ------------------------------------------------------------------ 管理用チャンネル */
+
+/**
+ * エラーのお知らせを流す先。メンバーに見えない、管理者だけのチャンネルを選んでもらう。
+ * 最近のエラーもここで見られる（記録しているのは場所と短い説明だけ）。
+ */
+export async function log(ix, _args, ctx, notice = null) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const settings = await ctx.settings(ix.guildId);
+  const errors = await recentErrors(ctx.db, ix.guildId, 8);
+
+  const list =
+    errors.length === 0
+      ? 'いまは記録がありません。'
+      : errors
+          .map(
+            (entry) =>
+              `<t:${Math.floor(entry.last_at / 1000)}:R>　**${truncate(entry.place, 40)}**` +
+              `${entry.count > 1 ? `（${entry.count}回）` : ''}\n　${truncate(entry.message, 120)}`,
+          )
+          .join('\n');
+
+  return show(ix, {
+    embeds: [
+      withNotice(
+        embed({
+          color: COLORS.admin,
+          title: '🧰 管理用チャンネル',
+          description:
+            'Bot でエラーが起きたとき、ここで選んだチャンネルに知らせます（同じものは30分に1回まで）。\n' +
+            '**メンバーには見えない、管理者だけのチャンネル**を選んでください。\n\n' +
+            `いまの送り先: ${settings.log_channel_id ? `<#${settings.log_channel_id}>` : '未設定（どこにも知らせない）'}`,
+          fields: [{ name: '最近のエラー', value: truncate(list, 1024) }],
+          footer: { text: '記録しているのは、起きた場所と短い説明だけです（入力された文字は残しません）' },
+        }),
+        notice,
+      ),
+    ],
+    components: [
+      channelSelect(id('admin', 'logch'), '知らせる先のチャンネルを選ぶ'),
+      row(
+        settings.log_channel_id ? button(id('admin', 'logoff'), '知らせるのをやめる', { emoji: '🔕' }) : null,
+        errors.length > 0 ? button(id('admin', 'logclear'), '記録を消す', { emoji: '🧹' }) : null,
+        backButton('admin'),
+        homeButton(),
+      ),
+    ],
+  });
+}
+
+export async function logch(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  const channelId = ix.values[0];
+  // 書き込めるかをここで確かめる。書けない場所を選んでも、お知らせが消えるだけなので
+  try {
+    await ctx.rest.createMessage(channelId, {
+      embeds: [
+        embed({
+          color: COLORS.admin,
+          title: '🧰 管理用チャンネルになりました',
+          description: 'Bot でエラーが起きたとき、ここに知らせます。',
+        }),
+      ],
+      allowed_mentions: { parse: [] },
+    });
+  } catch (error) {
+    console.error('管理用チャンネルに投稿できませんでした:', error);
+    return log(ix, [], ctx, `<#${channelId}> に投稿できませんでした。Bot が書き込めるか確認してください。`);
+  }
+  await updateSettings(ctx.db, ix.guildId, { log_channel_id: channelId });
+  ctx.forgetSettings(ix.guildId);
+  return log(ix, [], ctx, `<#${channelId}> に知らせるようにしました`);
+}
+
+export async function logoff(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  await ctx.db.run('UPDATE guild_settings SET log_channel_id = NULL WHERE guild_id = ?1', ix.guildId);
+  ctx.forgetSettings(ix.guildId);
+  return log(ix, [], ctx, 'エラーのお知らせを止めました（記録は続けます）');
+}
+
+export async function logclear(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  await clearErrors(ctx.db, ix.guildId);
+  return log(ix, [], ctx, 'エラーの記録を消しました');
+}
+
 /* ------------------------------------------------------------------ 宝くじ */
 
 export async function lot(ix, _args, ctx, notice = null) {
   if (!ix.isAdmin) return denied(ix, ctx);
-  const settings = await ctx.settings(ix.guildId);
   const lottery = await getLottery(ctx.db, ix.guildId);
   const drawKey = drawKeyFor(ctx.calendar);
   const { tickets, pool } = await poolOf(ctx.db, ix.guildId, drawKey);
@@ -1603,7 +2121,7 @@ export async function lot(ix, _args, ctx, notice = null) {
     embeds: [
       withNotice(
         embed({
-          color: 0x16a085,
+          color: COLORS.admin,
           title: '🎫 宝くじの設定',
           description:
             `毎週日曜の **${LOTTERY_DRAW_HOUR}時** に自動で抽選します。\n` +
@@ -1697,6 +2215,22 @@ export async function lottoggle(ix, _args, ctx) {
 
 export const actions = {
   open,
+  ...itemActions,
+  ...toolActions,
+  prefs,
+  prefhour,
+  prefgame,
+  preflive,
+  prefreset,
+  prefsolo,
+  prefmodern,
+  preffold,
+  preflivemin,
+  preflivesave,
+  log,
+  logch,
+  logoff,
+  logclear,
   emoji,
   gm,
   gmtoggle,
@@ -1721,6 +2255,11 @@ export const actions = {
   annpick,
   annview,
   anntoggle,
+  annperiod,
+  annedit,
+  annupdate,
+  annpeek,
+  anntry,
   anndel,
   streak,
   streakbulk,
@@ -1731,14 +2270,17 @@ export const actions = {
   streaknew,
   streaksave,
   streakdel,
+  streakdelok,
   ach,
   achnew,
+  achhide,
   achtype,
   achsave,
   achbulk,
   achbulksave,
   achout,
   achdel,
+  achdelok,
   acts,
   actpick,
   actview,
@@ -1747,6 +2289,7 @@ export const actions = {
   actsave,
   actsave2,
   actdel,
+  actdelok,
   preset,
   bal,
   baluser,

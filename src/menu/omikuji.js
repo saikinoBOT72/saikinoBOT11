@@ -11,7 +11,7 @@
 import { RANK_BY_NAME, drawToday, rankHistory, readOmikuji, todaysDraw } from '../lib/omikuji.js';
 import { describeDayStart } from '../lib/calendar.js';
 import { ButtonStyle } from '../discord/constants.js';
-import { backButton, button, embed, homeButton, id, row, show, withNotice } from './common.js';
+import { backButton, button, embed, homeButton, id, row, shareButton, show, withNotice } from './common.js';
 
 /** 総合運ごとの帯の色。凶に近づくほど沈んだ色にする。 */
 const RANK_COLORS = {
@@ -92,7 +92,7 @@ async function resultScreen(ix, ctx, draw, notice) {
         notice,
       ),
     ],
-    components: [row(button(id('omi', 'rec'), 'これまでの運勢', { emoji: '📜' }), backButton('games'), homeButton())],
+    components: [row(button(id('omi', 'rec'), 'これまでの運勢', { emoji: '📜' }), shareButton(), backButton('games'), homeButton())],
   });
 }
 

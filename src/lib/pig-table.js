@@ -9,11 +9,12 @@
  * 【お金】
  * 座った時点で参加費を預かる。全員ぶんがそのまま場になり、
  * 全員が TURNS ターン終えた時点で持ち点が一番高い人が総取り。同点なら山分け。
- * 時間切れなら全員に返す。
+ * 時間切れのときは、手番のまま動かなかった人を脱落させて決着させる（始まる前なら全員に返す）。
  */
 import { deposit, withdraw } from './economy.js';
-import { TURNS, applyRoll, rollDie, shuffleSeats } from './pig.js';
-import { createTableStore } from './card-table.js';
+import { TURNS, applyRoll, shuffleSeats } from './pig.js';
+import { rollDie } from './random.js';
+import { createTableStore, keptSeat } from './card-table.js';
 
 export const MIN_PLAYERS = 2;
 export const MAX_PLAYERS = 4;
@@ -27,7 +28,7 @@ const store = createTableStore('pig_tables', {
   playTimeoutMs: PLAY_TIMEOUT_MS,
 });
 
-export const { createTable, getTable, stateOf, setMessageId, setStatus, mutate, expiredTables } = store;
+export const { createTable, getTable, stateOf, setMessageId, setStatus, mutate, close, expiredTables } = store;
 
 export function seatOf(state, userId) {
   return state.players.findIndex((player) => player.userId === userId);
@@ -65,6 +66,8 @@ export async function joinTable(db, table, userId) {
     );
     return { ok: false, reason: 'insufficient' };
   }
+  // 払っているあいだに「抜ける」「解散」が割り込んでいたら、払ったぶんを返す
+  if (!(await keptSeat(db, table, userId, { getTable, stateOf, refundReason: 'pig:refund' }))) return { ok: false, reason: 'closed' };
   return claimed;
 }
 
@@ -135,10 +138,26 @@ export function turnsLeft(player) {
   return Math.max(0, TURNS - (player.turns ?? 0));
 }
 
-/** 持ち点が一番高い人（同点なら全員）。 */
+/**
+ * 持ち点が一番高い人（同点なら全員）。
+ * 時間切れで脱落した人（out）は勝者に入れない。
+ */
 export function winnersOf(state) {
-  const best = Math.max(...state.players.map((player) => player.score));
-  return state.players.filter((player) => player.score === best);
+  const alive = state.players.filter((player) => !player.out);
+  const best = Math.max(...alive.map((player) => player.score));
+  return alive.filter((player) => player.score === best);
+}
+
+/**
+ * 時間切れ。手番のまま動かなかった人を脱落させて、いまの持ち点で決着させる。
+ * 返す state をそのまま payWinners に渡せばよい。
+ */
+export function forfeitCurrent(state) {
+  const idle = current(state);
+  return {
+    ...state,
+    players: state.players.map((player) => (player.userId === idle?.userId ? { ...player, out: true } : player)),
+  };
 }
 
 /** 場のぜんぶ。 */

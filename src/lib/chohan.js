@@ -11,6 +11,8 @@
  *   張った額 ＋ 外れた側の総額 × 自分の額 ÷ 当たった側の総額
  * 端数はコインが消えないよう、先頭の勝者に足す。
  */
+import { rollDie } from './random.js';
+
 export const CHO = 'cho';
 export const HAN = 'han';
 
@@ -20,7 +22,7 @@ export const SIDES = {
 };
 
 export function rollPair() {
-  return [1 + Math.floor(Math.random() * 6), 1 + Math.floor(Math.random() * 6)];
+  return [rollDie(), rollDie()];
 }
 
 /** 出目2つから丁か半か。 */

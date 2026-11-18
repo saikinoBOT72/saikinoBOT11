@@ -2,6 +2,20 @@ import { ADMIN_PERMISSIONS, InteractionType } from './constants.js';
 import { avatarUrl } from './builders.js';
 
 /** Discord から届いた JSON を扱いやすくする薄い包み。 */
+/**
+ * フォームで送られた部品を探す。
+ * 古い形（行の中に入力欄）と新しい形（Label の中に入力欄）のどちらでも読める。
+ */
+function formComponent(raw, customId) {
+  for (const top of raw.data?.components ?? []) {
+    const inner = top.component ? [top.component] : (top.components ?? []);
+    for (const component of inner) {
+      if (component.custom_id === customId) return component;
+    }
+  }
+  return null;
+}
+
 export class Ix {
   constructor(raw) {
     this.raw = raw;
@@ -73,11 +87,30 @@ export class Ix {
 
   /** 入力フォームの値を取り出す。 */
   field(customId) {
-    for (const row of this.raw.data?.components ?? []) {
-      for (const component of row.components ?? []) {
-        if (component.custom_id === customId) return component.value ?? '';
-      }
-    }
-    return '';
+    return formComponent(this.raw, customId)?.value ?? '';
+  }
+
+  /** フォームの中の選択リストで選ばれたもの（選ばれていなければ空）。 */
+  fieldValues(customId) {
+    return formComponent(this.raw, customId)?.values ?? [];
+  }
+
+  /** フォームの中のメンバー選択で選ばれた人の情報。 */
+  fieldUser(customId) {
+    const component = formComponent(this.raw, customId);
+    const userId = component?.values?.[0];
+    if (!userId) return null;
+    const resolved = component.resolved?.users ?? this.raw.data?.resolved?.users ?? {};
+    return { id: userId, ...(resolved[userId] ?? {}) };
+  }
+
+  /** 右クリック（長押し）メニューで選ばれた相手。 */
+  get targetId() {
+    return this.raw.data?.target_id ?? null;
+  }
+
+  get targetUser() {
+    const id = this.targetId;
+    return id ? (this.raw.data?.resolved?.users?.[id] ?? { id }) : null;
   }
 }

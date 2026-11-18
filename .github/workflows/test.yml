@@ -1,0 +1,38 @@
+# main 以外のブランチに push したときと、プルリクエストでテストだけ走らせる（デプロイはしない）。
+# Node 22 と 24 の両方で確かめる（本番のデプロイは 24 で動かす）。
+name: テスト
+
+on:
+  push:
+    branches-ignore: [main]
+  pull_request: {}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: 依存を入れる
+        run: npm ci
+
+      - name: テスト
+        run: npm test
+
+      - name: 書き方の検査
+        run: npm run lint
+
+      - name: 型の検査
+        run: npm run typecheck
