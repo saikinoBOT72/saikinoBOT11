@@ -159,7 +159,7 @@ async function cardScreen(ix, ctx, card) {
         const shown = (card.revealed & (1 << index)) !== 0;
         if (!shown) return button(id('scratch', 'dig', card.id, String(index)), '？', { style: ButtonStyle.SECONDARY });
         const lucky = done && winner !== null && cells[index] === winner;
-        return button(id('scratch', 'dig', card.id, String(index)), '​', {
+        return button(id('scratch', 'dig', card.id, String(index)), '\u200B', {
           emoji: SYMBOLS[cells[index]],
           style: lucky ? ButtonStyle.SUCCESS : ButtonStyle.PRIMARY,
           disabled: true,
