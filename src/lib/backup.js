@@ -26,6 +26,7 @@ const SETTING_RULES = {
   solo_private: { type: 'int', min: 0, max: 1 },
   fold_finished: { type: 'int', min: 0, max: 1 },
   live_threshold: { type: 'int', min: 0, max: 1_000_000_000 },
+  modern_ui: { type: 'int', min: 0, max: 1 },
 };
 
 export async function exportSettings(db, guildId, settings) {

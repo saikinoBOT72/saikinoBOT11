@@ -30,4 +30,4 @@ const registered = await response.json();
 console.log(
   `${registered.length} 件のコマンドを登録しました（${guildId ? `サーバー ${guildId}` : 'グローバル：反映に最大1時間'}）`,
 );
-for (const command of registered) console.log(` - /${command.name}`);
+for (const command of registered) console.log(command.type === 2 ? ` - （右クリック）${command.name}` : ` - /${command.name}`);

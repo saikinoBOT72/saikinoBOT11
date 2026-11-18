@@ -5,6 +5,7 @@
  * ひとつが失敗しても残りは動かしたいので、runScheduled で1件ずつ囲ってある。
  */
 import { cancelEmbed } from './menu/rps-challenge.js';
+import { embedToV2 } from './discord/components-v2.js';
 import { ANYONE } from './lib/open-challenge.js';
 import { cancelExpired } from './lib/rps.js';
 import { cancelEmbed as chinchiroCancelEmbed } from './menu/chinchiro-match.js';
@@ -378,10 +379,14 @@ export async function postDueAnnouncements(ctx) {
       const built = await buildAnnouncement(ctx.db, announcement, { settings, calendar: announcement.calendar });
       // 対象が誰もいなくても黙って消えないように、一言だけ出す。
       // 同じ時刻に複数の発表を置いたとき「片方だけ出ない」ように見えるのを防ぐ
-      await ctx.rest.createMessage(announcement.channel_id, {
-        embeds: [built ? built.embed : emptyAnnouncementEmbed(announcement)],
-        allowed_mentions: { users: built?.winners ?? [] },
-      });
+      const body = built ? built.embed : emptyAnnouncementEmbed(announcement);
+      const winners = built?.winners ?? [];
+      // 新しい見た目なら Components V2 で出す（送ったきり書き換えないので安全に使える）。
+      // 鳴らすのは賞金をもらった人だけ。順位に名前が出ただけの人は鳴らさない
+      await ctx.rest.createMessage(
+        announcement.channel_id,
+        settings.modern_ui ? embedToV2(body, { mentions: winners }) : { embeds: [body], allowed_mentions: { users: winners } },
+      );
     } catch (error) {
       console.error(`発表 #${announcement.id} に失敗:`, error);
     }

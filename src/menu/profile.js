@@ -13,6 +13,13 @@ export async function open(ix, _args, ctx, notice = null) {
   return view(ix, ctx, ix.userId, notice);
 }
 
+/** 右クリックの「プロフィールを見る」から。 */
+export async function showProfile(ix, ctx, targetId) {
+  if (!targetId) return view(ix, ctx, ix.userId);
+  if (ix.targetUser?.bot) return view(ix, ctx, ix.userId, 'Bot にはプロフィールがありません。');
+  return view(ix, ctx, targetId);
+}
+
 export async function pick(ix, _args, ctx) {
   const targetId = ix.values[0];
   if (ix.raw.data?.resolved?.users?.[targetId]?.bot) return view(ix, ctx, ix.userId, 'Bot にはプロフィールがありません。');

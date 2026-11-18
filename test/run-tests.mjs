@@ -2067,6 +2067,29 @@ await test('同じ時刻に2つ設定しても、両方とも発表される', a
   await announcements.removeAnnouncement(db, G, second.id);
 });
 
+await test('「新しい見た目」なら定期発表は V2 で出し、賞金の人だけ通知を鳴らす', async () => {
+  const cronCtx = cronContext();
+  const GV = 'g-v2-cron';
+  await eco.setBalance(db, GV, 'v2-top', 900, 'test');
+  await eco.setBalance(db, GV, 'v2-second', 100, 'test');
+  await db.run('UPDATE guild_settings SET modern_ui = 1 WHERE guild_id = ?1', GV);
+  const created = await announcements.createAnnouncement(db, GV, {
+    channelId: 'chan-v2', metric: 'balance', frequency: 'daily', hour: 0, topN: 3, prize: 50,
+  });
+  const hour = Number(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tokyo', hour: '2-digit', hour12: false })
+    .formatToParts(new Date()).find((part) => part.type === 'hour').value) % 24;
+  await db.run('UPDATE announcements SET hour = ?1 WHERE id = ?2', hour, created.id);
+
+  await cron.postDueAnnouncements(cronCtx);
+  const posted = cronCtx.sent.find((entry) => entry.channelId === 'chan-v2');
+  assert.ok(posted, '発表された');
+  assert.equal(posted.payload.flags, 1 << 15);
+  assert.equal(posted.payload.embeds, undefined);
+  assert.deepEqual(posted.payload.allowed_mentions, { users: ['v2-top'] }, '2位は鳴らさない');
+  assert.match(JSON.stringify(posted.payload.components), /v2-second/, '名前は載る');
+  await announcements.removeAnnouncement(db, GV, created.id);
+});
+
 await test('日曜19時に宝くじを抽選して発表する', async () => {
   const cronCtx = cronContext();
   cronCtx.emoji = async () => (await import(src('lib/emoji.js'))).defaultEmoji();

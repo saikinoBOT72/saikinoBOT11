@@ -82,8 +82,10 @@ async function press(customId, options = {}) {
   return response.json();
 }
 
-async function runCommand(name, options = {}) {
-  const ix = new Ix(rawInteraction({ type: 2, commandName: name, fromMessage: false, ...options }));
+async function runCommand(name, { data: extra, ...options } = {}) {
+  const raw = rawInteraction({ type: 2, commandName: name, fromMessage: false, ...options });
+  if (extra) Object.assign(raw.data, extra);
+  const ix = new Ix(raw);
   const response = await findCommand(name)(ix, ctx);
   await ctx.settle();
   return response.json();
@@ -137,8 +139,34 @@ await test('/help が使い方を出す', async () => {
 });
 
 await test('登録するコマンドはサーバー内限定', () => {
-  assert.deepEqual(COMMAND_DEFINITIONS.map((c) => c.name).sort(), ['help', 'menu']);
+  const slash = COMMAND_DEFINITIONS.filter((c) => (c.type ?? 1) === 1);
+  assert.deepEqual(slash.map((c) => c.name).sort(), ['help', 'menu']);
   for (const command of COMMAND_DEFINITIONS) assert.deepEqual(command.contexts, [0]);
+  // 右クリックの項目は説明文を付けてはいけない決まり（付けると登録が失敗する）
+  const menus = COMMAND_DEFINITIONS.filter((c) => c.type === 2);
+  assert.equal(menus.length, 2);
+  for (const command of menus) {
+    assert.equal(command.description, undefined, `${command.name} に説明文がある`);
+    assert.ok([...command.name].length <= 32);
+    assert.ok(findCommand(command.name), `${command.name} の処理がある`);
+  }
+});
+
+await test('メンバーを右クリック →「プロフィールを見る」「コインを送る」', async () => {
+  const { PROFILE_COMMAND, PAY_COMMAND } = await import(src('commands.js'));
+  const context = (name, targetId, target = {}) =>
+    runCommand(name, { data: { type: 2, target_id: targetId, resolved: { users: { [targetId]: { id: targetId, username: 'u', ...target } } } } });
+
+  const profile = await context(PROFILE_COMMAND, OTHER);
+  assert.equal(profile.type, 4);
+  assert.equal(profile.data.flags, 64, '押した人にだけ見える');
+  assert.match(firstEmbed(profile).description, new RegExp(`<@${OTHER}>`));
+
+  const payForm = await context(PAY_COMMAND, OTHER);
+  assert.equal(payForm.type, 9, '金額のフォームがすぐ開く');
+  assert.equal(payForm.data.custom_id, `m:wallet:paydo:${OTHER}`);
+  assert.match(screenText(await context(PAY_COMMAND, ME)), /自分自身には送金できません/);
+  assert.match(screenText(await context(PAY_COMMAND, 'bot-1', { bot: true })), /Botには送金できません/);
 });
 
 section('[画面遷移]');
@@ -2526,6 +2554,90 @@ await test('定期発表は時刻・人数・賞金を変えられ、中身の�
   assert.deepEqual(await db.all('SELECT user_id, balance FROM balances WHERE guild_id = ?1 ORDER BY user_id', GUILD), balances, '賞金は動かない');
   assert.equal((await annLib.getAnnouncement(db, GUILD, created.id)).last_run_date, null, '本番の発表済みにはしない');
   await annLib.removeAnnouncement(db, GUILD, created.id);
+});
+
+await test('「新しい見た目」をオンにすると、送金と予想大会のフォームで相手や決める人を選べる', async () => {
+  const toggled = await press('m:admin:prefmodern', { admin: true });
+  assert.match(screenText(toggled), /新しい見た目をオンにしました/);
+  try {
+    // 新しい形のフォームを送ったときの中身（Label の中に部品が入る）
+    const submit = async (customId, parts, options = {}) => {
+      const raw = rawInteraction({ type: 5, customId, ...options });
+      raw.data.components = parts.map((component) => ({ type: 18, id: 1, component }));
+      const response = await handleComponent(new Ix(raw), ctx);
+      await ctx.settle();
+      return response.json();
+    };
+
+    const form = await press('m:wallet:pay');
+    assert.equal(form.type, 9, 'すぐフォームが開く');
+    assert.deepEqual(form.data.components.map((c) => c.type), [18, 18, 18], 'すべて Label の形');
+    assert.equal(form.data.components[0].component.type, 5, '相手はメンバー選択');
+    assert.equal(form.data.components[1].component.label, undefined, 'Label の中の入力欄には label を付けない');
+
+    await eco.setBalance(db, GUILD, ME, 1000, 'test');
+    await eco.ensureAccount(db, GUILD, OTHER);
+    const otherBefore = await eco.getBalance(db, GUILD, OTHER);
+    const sent = await submit('m:wallet:payform', [
+      { type: 5, custom_id: 'to', values: [OTHER], resolved: { users: { [OTHER]: { id: OTHER, username: 'other' } } } },
+      { type: 4, custom_id: 'amount', value: '120' },
+      { type: 4, custom_id: 'memo', value: 'ありがとう' },
+    ]);
+    assert.match(screenText(sent), /送金しました/);
+    assert.equal(await eco.getBalance(db, GUILD, OTHER), otherBefore + 120);
+    const self = await submit('m:wallet:payform', [
+      { type: 5, custom_id: 'to', values: [ME], resolved: { users: { [ME]: { id: ME } } } },
+      { type: 4, custom_id: 'amount', value: '1' },
+    ]);
+    assert.match(screenText(self), /自分自身には送金できません/);
+
+    const pollForm = await press('m:poll:new');
+    const judge = pollForm.data.components.find((c) => c.component?.custom_id === 'judge');
+    assert.equal(judge.component.type, 3, '決める人はリストから選ぶ');
+    await submit('m:poll:create', [
+      { type: 4, custom_id: 'question', value: '新しいフォームのお題' },
+      { type: 4, custom_id: 'options', value: 'A\nB' },
+      { type: 4, custom_id: 'minutes', value: '' },
+      { type: 4, custom_id: 'stake', value: '' },
+      { type: 3, custom_id: 'judge', values: ['admin'] },
+    ]);
+    assert.equal((await db.get('SELECT judge FROM polls ORDER BY id DESC')).judge, 'admin');
+  } finally {
+    await press('m:admin:prefmodern', { admin: true });
+  }
+  assert.equal((await press('m:wallet:pay')).type, 7, 'オフに戻すと、これまでの画面');
+});
+
+await test('「新しい見た目」では定期発表を V2 で出し、名前が出ただけの人には通知を鳴らさない', async () => {
+  const { embedToV2 } = await import(src('discord/components-v2.js'));
+  const v2 = embedToV2(
+    { color: 0xf1c40f, title: '📢 ランキング', description: `🥇 <@${ME}> — 100\n🥈 <@${OTHER}> — 50`, footer: { text: '毎日9時' } },
+    { mentions: [ME] },
+  );
+  assert.equal(v2.flags, 1 << 15);
+  assert.equal(v2.embeds, undefined, 'V2 では embed を使わない');
+  assert.equal(v2.components[0].type, 17, '色つきの枠');
+  assert.equal(v2.components[0].accent_color, 0xf1c40f);
+  assert.deepEqual(v2.allowed_mentions, { users: [ME] }, '鳴らすのは賞金の人だけ');
+  assert.deepEqual(embedToV2({ description: `<@${ME}>` }).allowed_mentions, { parse: [] }, '既定では誰も鳴らさない');
+  const long = embedToV2({ description: 'あ'.repeat(5000) });
+  assert.ok(long.components[0].components[0].content.length <= 4000, '文字数の上限に収める');
+
+  await db.run('UPDATE guild_settings SET modern_ui = 1 WHERE guild_id = ?1', GUILD);
+  ctx.forgetSettings(GUILD);
+  try {
+    const created = await annLib.createAnnouncement(db, GUILD, { channelId: 'c-v2', metric: 'balance', frequency: 'daily', hour: 9, topN: 3, prize: 0 });
+    await press(`m:admin:anntry:${created.id}`, { admin: true });
+    const posted = ctx.sent.at(-1);
+    assert.equal(posted.channelId, 'c-v2');
+    assert.equal(posted.payload.flags, 1 << 15);
+    assert.deepEqual(posted.payload.allowed_mentions, { parse: [] }, '試しの投稿は誰も鳴らさない');
+    assert.match(JSON.stringify(posted.payload.components), /試しの投稿/);
+    await annLib.removeAnnouncement(db, GUILD, created.id);
+  } finally {
+    await db.run('UPDATE guild_settings SET modern_ui = 0 WHERE guild_id = ?1', GUILD);
+    ctx.forgetSettings(GUILD);
+  }
 });
 
 section('[自分のデータ]');

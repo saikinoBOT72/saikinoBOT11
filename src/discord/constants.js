@@ -22,13 +22,26 @@ export const ComponentType = {
   TEXT_INPUT: 4,
   USER_SELECT: 5,
   CHANNEL_SELECT: 8,
+  // ここから下は「新しい部品」（Components V2・新しい入力フォーム）
+  SECTION: 9,
+  TEXT_DISPLAY: 10,
+  SEPARATOR: 14,
+  CONTAINER: 17,
+  LABEL: 18,
 };
+
+/** コマンドの種類。2 はメンバーを右クリック（長押し）したときの「アプリ」メニュー。 */
+export const CommandType = { CHAT_INPUT: 1, USER: 2 };
 
 export const ButtonStyle = { PRIMARY: 1, SECONDARY: 2, SUCCESS: 3, DANGER: 4, LINK: 5 };
 
 export const TextInputStyle = { SHORT: 1, PARAGRAPH: 2 };
 
-export const MessageFlags = { EPHEMERAL: 64 };
+export const MessageFlags = {
+  EPHEMERAL: 64,
+  /** Components V2。一度付けたメッセージからは外せない（編集で embed に戻せない）。 */
+  IS_COMPONENTS_V2: 1 << 15,
+};
 
 /** サーバー管理 or 管理者 */
 export const ADMIN_PERMISSIONS = (1n << 5n) | (1n << 3n);

@@ -101,8 +101,58 @@ export function textInput(customId, label, { style = TextInputStyle.SHORT, place
   );
 }
 
-export function modal(customId, title, inputs) {
-  return { custom_id: customId, title, components: inputs };
+/**
+ * 入力フォーム。
+ * labeled: true なら、Discord が今すすめている形（Label の中に入力欄を入れる形）で作る。
+ * この形でしか置けない部品（フォームの中の選択リストなど）を使うときは必須。
+ * 古い Discord アプリでは開けないことがあるので、管理メニューの「新しい見た目」がオンのときだけ使う。
+ */
+export function modal(customId, title, inputs, { labeled = false } = {}) {
+  const components = inputs.filter(Boolean);
+  return { custom_id: customId, title, components: labeled ? components.map(toLabel) : components };
+}
+
+/** 行に入った入力欄（古い形）を Label の形に直す。もう Label ならそのまま。 */
+function toLabel(component) {
+  if (component.type === ComponentType.LABEL) return component;
+  const inner = component.components?.[0];
+  if (!inner) return component;
+  const { label, ...rest } = inner;
+  return { type: ComponentType.LABEL, label: String(label ?? '').slice(0, 45), component: rest };
+}
+
+/** フォームの中の選択リスト（Label の形でしか置けない）。 */
+export function selectField(customId, label, options, { description, placeholder, required = true } = {}) {
+  return compact({
+    type: ComponentType.LABEL,
+    label: label.slice(0, 45),
+    description: description?.slice(0, 100),
+    component: compact({
+      type: ComponentType.STRING_SELECT,
+      custom_id: customId,
+      placeholder,
+      required,
+      options: options.slice(0, 25).map((option) =>
+        compact({
+          label: option.label,
+          value: String(option.value),
+          description: option.description,
+          emoji: toEmoji(option.emoji),
+          default: option.default || undefined,
+        }),
+      ),
+    }),
+  });
+}
+
+/** フォームの中のメンバー選択。 */
+export function userField(customId, label, { description, required = true } = {}) {
+  return compact({
+    type: ComponentType.LABEL,
+    label: label.slice(0, 45),
+    description: description?.slice(0, 100),
+    component: { type: ComponentType.USER_SELECT, custom_id: customId, max_values: 1, required },
+  });
 }
 
 /** ユーザーのアイコンURL。 */

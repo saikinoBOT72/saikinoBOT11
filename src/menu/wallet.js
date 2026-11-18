@@ -3,7 +3,7 @@ import { equippedTitles, titleTag } from '../lib/achievements.js';
 import { coins } from '../lib/format.js';
 import { HISTORY_FILTERS, byDay, groupEntries, groupLine, historyPage } from '../lib/history.js';
 import { MATCH_GAMES, statsOf } from '../lib/match-results.js';
-import { modal, textInput, userSelect } from '../discord/builders.js';
+import { modal, textInput, userField, userSelect } from '../discord/builders.js';
 import { ButtonStyle } from '../discord/constants.js';
 import {
   backButton,
@@ -64,7 +64,22 @@ export async function open(ix, _args, ctx, notice = null) {
   });
 }
 
-export async function pay(ix, _args, _ctx, notice = null) {
+export async function pay(ix, _args, ctx, notice = null) {
+  // 新しい見た目なら、相手・金額・メモを1つのフォームで受け取る
+  if (!notice && (await ctx.settings(ix.guildId)).modern_ui) {
+    return openModal(
+      modal(
+        id('wallet', 'payform'),
+        '送金する',
+        [
+          userField('to', '送る相手'),
+          textInput('amount', '金額', { required: true, max: 12, placeholder: '例: 100' }),
+          textInput('memo', 'メモ（任意）', { max: 100 }),
+        ],
+        { labeled: true },
+      ),
+    );
+  }
   return show(ix, {
     embeds: [
       withNotice(embed({ color: 0xf1c40f, title: '💸 送金', description: '送りたい相手を選んでください。' }), notice),
@@ -78,13 +93,31 @@ export async function payto(ix, _args, ctx) {
   if (targetId === ix.userId) return pay(ix, [], ctx, '自分自身には送金できません。');
   const target = ix.raw.data?.resolved?.users?.[targetId];
   if (target?.bot) return pay(ix, [], ctx, 'Botには送金できません。');
+  return openModal(payModal(targetId, target));
+}
 
-  return openModal(
-    modal(id('wallet', 'paydo', targetId), `${target?.username ?? 'メンバー'} に送金`, [
-      textInput('amount', '金額', { required: true, max: 12, placeholder: '例: 100' }),
-      textInput('memo', 'メモ（任意）', { max: 100 }),
-    ]),
-  );
+function payModal(targetId, target) {
+  return modal(id('wallet', 'paydo', targetId), `${target?.global_name ?? target?.username ?? 'メンバー'} に送金`.slice(0, 45), [
+    textInput('amount', '金額', { required: true, max: 12, placeholder: '例: 100' }),
+    textInput('memo', 'メモ（任意）', { max: 100 }),
+  ]);
+}
+
+/** 右クリックの「コインを送る」から。相手は決まっているので、金額のフォームをすぐ開く。 */
+export async function payToTarget(ix, ctx, target) {
+  if (!target?.id) return pay(ix, [], ctx, '送る相手が分かりませんでした。');
+  if (target.id === ix.userId) return open(ix, [], ctx, '自分自身には送金できません。');
+  if (target.bot) return open(ix, [], ctx, 'Botには送金できません。');
+  return openModal(payModal(target.id, target));
+}
+
+/** 1つのフォームで送られた送金（新しい見た目のとき）。 */
+export async function payform(ix, _args, ctx) {
+  const target = ix.fieldUser('to');
+  if (!target) return open(ix, [], ctx, '送る相手を選んでください。');
+  if (target.id === ix.userId) return open(ix, [], ctx, '自分自身には送金できません。');
+  if (target.bot) return open(ix, [], ctx, 'Botには送金できません。');
+  return paydo(ix, [target.id], ctx);
 }
 
 export async function paydo(ix, [targetId], ctx) {
@@ -242,4 +275,4 @@ export async function stats(ix, _args, ctx) {
   });
 }
 
-export const actions = { open, pay, payto, paydo, history, rank, stats };
+export const actions = { open, pay, payto, payform, paydo, history, rank, stats };

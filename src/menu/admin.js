@@ -82,6 +82,7 @@ import { clampHour } from '../lib/calendar.js';
 import { describeVersion } from '../lib/version.js';
 import { clearErrors, recentErrors } from '../lib/error-report.js';
 import { itemActions } from './admin-items.js';
+import { embedToV2 } from '../discord/components-v2.js';
 import { setupChecklist, toolActions } from './admin-tools.js';
 
 /** 管理操作は毎回権限を確かめる。権限が無ければホームに戻す。 */
@@ -1676,12 +1677,14 @@ export async function anntry(ix, [rawId], ctx) {
   if (!announcement) return ann(ix, [], ctx, 'その設定は見つかりませんでした。');
   const built = await trialAnnouncement(ctx, announcement);
   const body = built?.embed ?? embed({ color: 0xf1c40f, description: 'いまの期間には、まだ載る人がいません。' });
+  const header = '🧪 **試しの投稿です**（管理者が発表の見た目を確かめています）';
+  const settings = await ctx.settings(ix.guildId);
   try {
-    await ctx.rest.createMessage(announcement.channel_id, {
-      content: '🧪 **試しの投稿です**（管理者が発表の見た目を確かめています）',
-      embeds: [body],
-      allowed_mentions: { parse: [] },
-    });
+    // 本番と同じ形で出す（新しい見た目なら V2）。試しなので誰も鳴らさない
+    await ctx.rest.createMessage(
+      announcement.channel_id,
+      settings.modern_ui ? embedToV2(body, { header }) : { content: header, embeds: [body], allowed_mentions: { parse: [] } },
+    );
   } catch (error) {
     await ctx.reportError(ix.guildId, '定期発表の試し投稿', error);
     return annview(ix, [rawId], ctx, `<#${announcement.channel_id}> に投稿できませんでした。Bot がそのチャンネルに書き込めるか確かめてください。`);
@@ -1862,9 +1865,12 @@ export async function prefs(ix, _args, ctx, notice = null) {
             },
             { name: '👤 1人用は自分の画面だけ', value: onOff(settings.solo_private), inline: true },
             { name: '🧺 終わった卓を畳む', value: onOff(settings.fold_finished), inline: true },
+            { name: '✨ 新しい見た目', value: onOff(settings.modern_ui), inline: true },
             {
               name: 'それぞれの意味',
               value:
+                '**新しい見た目** … 送金や予想大会の入力フォームの中で相手や選択肢を選べるようにし、ランキングの定期発表を新しい形で出します。' +
+                'Discord アプリが古いと表示できないことがあるので、オンにしたら一度試してください\n' +
                 '**1人用は自分の画面だけ** … 1人で遊ぶブラックジャックとヨットの練習を、チャンネルに出さずに進めます\n' +
                 '**終わった卓を畳む** … 決着から5分たった卓や勝負の掲示を、結果の1行に縮めます（チャンネルが流れにくくなります）\n' +
                 '**実況** … 1人で遊ぶゲーム（スロット・ハイ&ローなど）の大きな勝ち負けを、みんなに知らせます',
@@ -1889,6 +1895,7 @@ export async function prefs(ix, _args, ctx, notice = null) {
         button(id('admin', 'prefsolo'), `1人用を自分だけに：${settings.solo_private ? 'オン' : 'オフ'}`, { emoji: '👤' }),
         button(id('admin', 'preffold'), `終わった卓を畳む：${settings.fold_finished ? 'オン' : 'オフ'}`, { emoji: '🧺' }),
         button(id('admin', 'preflivemin'), '実況の基準', { emoji: '🎙️' }),
+        button(id('admin', 'prefmodern'), `新しい見た目：${settings.modern_ui ? 'オン' : 'オフ'}`, { emoji: '✨' }),
       ),
       row(
         button(id('admin', 'cfg'), '通貨と賭け金', { emoji: '🪙' }),
@@ -1958,6 +1965,21 @@ export async function prefreset(ix, _args, ctx) {
   await ctx.db.run('UPDATE guild_settings SET game_channel_id = NULL, live_channel_id = NULL WHERE guild_id = ?1', ix.guildId);
   ctx.forgetSettings(ix.guildId);
   return prefs(ix, [], ctx, '場所の指定を外しました（押した場所・遊んだ場所に出します）');
+}
+
+export async function prefmodern(ix, _args, ctx) {
+  if (!ix.isAdmin) return denied(ix, ctx);
+  await ctx.db.run('UPDATE guild_settings SET modern_ui = 1 - modern_ui WHERE guild_id = ?1', ix.guildId);
+  ctx.forgetSettings(ix.guildId);
+  const settings = await ctx.settings(ix.guildId);
+  return prefs(
+    ix,
+    [],
+    ctx,
+    settings.modern_ui
+      ? '新しい見た目をオンにしました。💸 送金などのフォームが開けるか、一度試してください'
+      : '新しい見た目をオフにしました（これまでの形に戻しました）',
+  );
 }
 
 export async function prefsolo(ix, _args, ctx) {
@@ -2201,6 +2223,7 @@ export const actions = {
   preflive,
   prefreset,
   prefsolo,
+  prefmodern,
   preffold,
   preflivemin,
   preflivesave,

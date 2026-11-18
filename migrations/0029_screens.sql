@@ -38,3 +38,7 @@ CREATE INDEX IF NOT EXISTS idx_match_loser ON match_results (guild_id, loser_id)
 ALTER TABLE shop_items ADD COLUMN taken_down INTEGER NOT NULL DEFAULT 0;
 -- 出品者の「対応待ち」一覧を引くため。
 CREATE INDEX IF NOT EXISTS idx_purchase_pending ON purchases (guild_id, seller_id, delivered_at, used_at);
+
+-- 【新しい見た目】1 なら、Discord の新しい部品を使う（入力フォームの中の選択リスト・Components V2 の発表）。
+-- 古い Discord アプリでは表示できないことがあるので、はじめはオフ。
+ALTER TABLE guild_settings ADD COLUMN modern_ui INTEGER NOT NULL DEFAULT 0;

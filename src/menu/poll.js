@@ -13,7 +13,7 @@ import { boardPayload } from './poll-board.js';
 import { cleanLine } from '../lib/text.js';
 import { gameChannelOf } from '../lib/guild-prefs.js';
 import { coins, truncate } from '../lib/format.js';
-import { linkButton, modal, textInput } from '../discord/builders.js';
+import { linkButton, modal, selectField, textInput } from '../discord/builders.js';
 import { ButtonStyle, TextInputStyle } from '../discord/constants.js';
 import {
   backButton,
@@ -86,7 +86,20 @@ export async function open(ix, _args, ctx, notice = null) {
   });
 }
 
-export function newPoll() {
+export async function newPoll(ix, _args, ctx) {
+  const modern = Boolean((await ctx.settings(ix.guildId)).modern_ui);
+  // 新しい見た目なら「正解を決める人」をリストから選べる。古い形では文字で書いてもらう
+  const judge = modern
+    ? selectField(
+        'judge',
+        '正解を決める人',
+        [
+          { label: '自分（出題者）', value: 'owner', emoji: '🙋', default: true },
+          { label: 'サーバー管理者に任せる', value: 'admin', emoji: '🛡️', description: '自分も賭けたいときに' },
+        ],
+        { description: '自分も賭けるなら、管理者に任せると公平です' },
+      )
+    : textInput('judge', '正解を決める人（空欄なら自分。任せるなら「管理者」）', { placeholder: '管理者', max: 10 });
   return openModal(
     modal(id('poll', 'create'), '予想大会のお題を立てる', [
       textInput('question', 'お題', { placeholder: '例: 今日の飲み会、Aさんは来る？', required: true, max: 100 }),
@@ -98,8 +111,8 @@ export function newPoll() {
       }),
       textInput('minutes', '締切まで何分か（空欄なら締切なし）', { placeholder: '例: 60', max: 6 }),
       textInput('stake', '参加費（空欄なら好きな額を賭けられる）', { placeholder: '例: 100', max: 12 }),
-      textInput('judge', '正解を決める人（空欄なら自分。任せるなら「管理者」）', { placeholder: '管理者', max: 10 }),
-    ]),
+      judge,
+    ], { labeled: modern }),
   );
 }
 
@@ -108,7 +121,10 @@ export async function create(ix, _args, ctx) {
   const rawOptions = readText(ix, 'options');
   const minutes = readInt(ix, 'minutes', { min: MIN_MINUTES, max: MAX_MINUTES });
   const stake = readInt(ix, 'stake', { min: 1, fallback: 0 });
-  const judge = /管理|admin/i.test(readText(ix, 'judge', { line: true, max: 10 }) ?? '') ? 'admin' : 'owner';
+  const picked = ix.fieldValues('judge')[0];
+  const judge = picked
+    ? (picked === 'admin' ? 'admin' : 'owner')
+    : /管理|admin/i.test(readText(ix, 'judge', { line: true, max: 10 }) ?? '') ? 'admin' : 'owner';
 
   if (!question) return open(ix, [], ctx, 'お題を入力してください。');
   if (isError(minutes)) return open(ix, [], ctx, minutes.error);
